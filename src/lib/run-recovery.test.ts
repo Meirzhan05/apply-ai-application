@@ -8,12 +8,19 @@ describe("stalled run recovery", () => {
     const state = initialDemoState();
     for (const [index, status] of (["drafting", "filling", "submitting"] as const).entries()) {
       const app = selectApplication(state, state.jobs[index].id, state.profile.id);
-      app.status = status; app.updatedAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+      app.status = status; app.updatedAt = new Date(Date.now() - (status === "drafting" ? 13 : 11) * 60 * 1000).toISOString();
     }
     expect(recoverStaleRuns(state)).toHaveLength(3);
     expect(state.applications.map((app) => app.status)).toEqual(["uncertain", "authorized_to_fill", "selected"]);
     expect(state.applications[0].error).toMatch(/no automatic retry/);
     expect(recoverStaleRuns(state)).toEqual([]);
+  });
+  it("lets the longer LaTeX draft finish before recovery", () => {
+    const state = initialDemoState();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "drafting"; app.updatedAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    expect(recoverStaleRuns(state)).toEqual([]);
+    expect(app.status).toBe("drafting");
   });
   it("expires a reviewed session and removes final approval", () => {
     const state = initialDemoState();

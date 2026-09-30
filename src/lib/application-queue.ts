@@ -14,7 +14,7 @@ export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
       (["final_review", "needs_user_action", "approved_to_submit"].includes(app.status) && Boolean(app.browserSessionId))));
 }
 
-export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill") {
+export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays") {
   await mutateState(userId, (state) => {
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app) throw new Error("Application not found.");
@@ -30,7 +30,7 @@ export async function queueApplicationRun(userId: string, applicationId: string,
     if (!job?.active) throw new Error("The listing has closed.");
     const conflict = explicitConflict(state.profile, job);
     if (conflict) throw new Error(conflict);
-    app.queuedRun = { id: newId(), kind, requestedAt: new Date().toISOString(), reason: "waiting" };
+    app.queuedRun = { id: newId(), kind, ...(draftMode ? { draftMode } : {}), requestedAt: new Date().toISOString(), reason: "waiting" };
     app.error = undefined;
   });
   await dispatchUserQueue(userId);
@@ -43,7 +43,7 @@ export async function dispatchUserQueue(userId: string) {
   let dispatched = 0;
   if (!isDemo()) for (const app of state.applications) {
     if (app.runDispatch && !app.runDispatch.confirmedAt && !app.runWorkerClaimedAt && ["drafting", "filling"].includes(app.status)) {
-      if (await handoff(userId, app.id, app.runDispatch.kind, app.runDispatch.token)) dispatched++;
+      if (await handoff(userId, app.id, app.runDispatch.kind, app.runDispatch.token, app.runDispatch.draftMode)) dispatched++;
     }
   }
   const pending = state.applications.filter((app) => app.queuedRun).sort((a, b) => a.queuedRun!.requestedAt.localeCompare(b.queuedRun!.requestedAt));
@@ -80,7 +80,7 @@ export async function dispatchUserQueue(userId: string) {
       transition(target, queued.kind === "fill" ? ["authorized_to_fill"] : ["selected", "draft_review"], queued.kind === "fill" ? "filling" : "drafting");
       target.runToken = queued.id;
       target.runWorkerClaimedAt = undefined;
-      target.runDispatch = { kind: queued.kind, token: queued.id };
+      target.runDispatch = { kind: queued.kind, token: queued.id, ...(queued.draftMode ? { draftMode: queued.draftMode } : {}) };
       target.runs ??= [];
       target.runs.push({ token: queued.id, kind: queued.kind, projectedUsd: projected, requestedAt: queued.requestedAt });
       target.queuedRun = undefined;
@@ -88,10 +88,10 @@ export async function dispatchUserQueue(userId: string) {
       return true;
     });
     if (!claimed) continue;
-    const payload: RunPayload = { userId, applicationId: pendingApp.id, runToken: queued.id };
+    const payload: RunPayload = { userId, applicationId: pendingApp.id, runToken: queued.id, ...(queued.draftMode ? { draftMode: queued.draftMode } : {}) };
     try {
       if (isDemo()) await (queued.kind === "fill" ? runFill : runDraft)(payload);
-      else { if (!(await handoff(userId, pendingApp.id, queued.kind, queued.id))) continue; }
+      else { if (!(await handoff(userId, pendingApp.id, queued.kind, queued.id, queued.draftMode))) continue; }
       dispatched++;
     } catch (error) {
       await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.runToken === queued.id) target.error = error instanceof Error ? error.message : "Run dispatch failed."; });
@@ -101,9 +101,9 @@ export async function dispatchUserQueue(userId: string) {
   return { dispatched };
 }
 
-async function handoff(userId: string, applicationId: string, kind: "draft" | "fill", token: string): Promise<boolean> {
+async function handoff(userId: string, applicationId: string, kind: "draft" | "fill", token: string, draftMode?: "resume" | "essays"): Promise<boolean> {
   try {
-    await tasks.trigger(kind === "fill" ? "fill-application-form" : "draft-application-packet", { userId, applicationId, runToken: token }, { idempotencyKey: token });
+    await tasks.trigger(kind === "fill" ? "fill-application-form" : "draft-application-packet", { userId, applicationId, runToken: token, ...(draftMode ? { draftMode } : {}) }, { idempotencyKey: token });
     await mutateState(userId, (state) => {
       const app = state.applications.find((item) => item.id === applicationId);
       if (app?.runDispatch?.token === token) { app.runDispatch.confirmedAt = new Date().toISOString(); app.error = undefined; }

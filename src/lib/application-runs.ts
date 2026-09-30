@@ -6,7 +6,7 @@ import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { sendActionNeeded } from "@/lib/email";
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 
-export type RunPayload = { userId: string; applicationId: string; runToken?: string };
+export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
 
 async function claimRun(userId: string, applicationId: string, runToken: string | undefined, status: "drafting" | "filling") {
   return mutateState(userId, (state) => {
@@ -18,7 +18,7 @@ async function claimRun(userId: string, applicationId: string, runToken: string 
   });
 }
 
-export async function runDraft({ userId, applicationId, runToken }: RunPayload) {
+export async function runDraft({ userId, applicationId, runToken, draftMode }: RunPayload) {
   if (!(await claimRun(userId, applicationId, runToken, "drafting"))) return { skipped: true };
   const state = await loadState(userId);
   const app = state.applications.find((item) => item.id === applicationId);
@@ -27,7 +27,7 @@ export async function runDraft({ userId, applicationId, runToken }: RunPayload) 
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     assertJobEligible(state.profile, job);
-    const packet = await draftPacket(state.profile, job, app.packet);
+    const packet = await draftPacket(state.profile, job, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) });
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;

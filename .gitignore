@@ -13,3 +13,5 @@ coverage/
 .vercel
 
 supabase/.temp/
+
+.next-latex-preview/

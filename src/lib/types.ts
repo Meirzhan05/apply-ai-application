@@ -96,6 +96,36 @@ export interface ResumeLine {
   factIds: string[];
 }
 
+export interface ResumeField { text: string; factIds: string[] }
+export interface ResumeBullet extends ResumeField { relevance: number }
+export interface ResumeEntry {
+  heading: ResumeField;
+  subheading: ResumeField;
+  dates: ResumeField;
+  location: ResumeField;
+  bullets: ResumeBullet[];
+}
+export interface ResumeDocument {
+  version: 1;
+  templateVersion: "classic-1";
+  education: ResumeEntry[];
+  experience: ResumeEntry[];
+  projects: ResumeEntry[];
+  skills: ResumeField[];
+  links: ResumeField[];
+  omitted: Array<ResumeField & { reason: "relevance" | "page-length" }>;
+  layout: "standard" | "compact";
+  model: string;
+  contentHash: string;
+  evidenceHash: string;
+}
+export interface ResumeArtifact {
+  inputHash: string;
+  pageCount: 1;
+  compiler: "tectonic-0.17.0";
+  source: { storageKey: string; sha256: string; size: number };
+}
+
 export interface ScreeningAnswer {
   question: string;
   answer: string;
@@ -120,13 +150,16 @@ export interface PacketFile {
   sha256: string;
   size: number;
   factIds: string[];
+  storageKey?: string;
 }
 
 export interface ApplicationPacket {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   version: number;
   summary: string;
   resumeLines: ResumeLine[];
+  resumeDocument?: ResumeDocument;
+  resumeArtifact?: ResumeArtifact;
   answers: ScreeningAnswer[];
   coverLetter?: string;
   coverLetterFactIds?: string[];
@@ -196,15 +229,17 @@ export interface Application {
   submissionStartedAt?: string;
   submissionWorkerClaimedAt?: string;
   submissionAttemptedAt?: string;
+  manualSubmissionReport?: { reportedAt: string; source: "owner"; outcome: "unconfirmed"; siteMessage: string };
   queuedRun?: {
     id: string;
     kind: "draft" | "fill";
+    draftMode?: "resume" | "essays";
     requestedAt: string;
     reason: "waiting" | "budget" | "active_run";
   };
   runToken?: string;
   runWorkerClaimedAt?: string;
-  runDispatch?: { kind: "draft" | "fill"; token: string; confirmedAt?: string };
+  runDispatch?: { kind: "draft" | "fill"; draftMode?: "resume" | "essays"; token: string; confirmedAt?: string };
   runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;

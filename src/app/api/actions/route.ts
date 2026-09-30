@@ -200,7 +200,7 @@ async function perform(
       activity(state, "Job selected", findJob(state, app).title);
     });
   if (action === "draft") {
-    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft");
+    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode));
     return;
   }
   if (action === "editPacket")
@@ -222,7 +222,7 @@ async function perform(
         .parse(payload.answers);
       const packet = await withPacketFiles(state.profile, {
         ...app.packet,
-        schemaVersion: 1 as const,
+        schemaVersion: app.packet.schemaVersion,
         answers: applyHumanAnswerEdits(app.packet.answers, answers),
         profileHash: packetProfileHash(state.profile),
         version: app.packet.version + 1,
@@ -273,7 +273,7 @@ async function perform(
       target.needsCoverLetter = false;
       setPacket(current, target, await withPacketFiles(current.profile, {
         ...target.packet,
-        schemaVersion: 1,
+        schemaVersion: target.packet.schemaVersion,
         coverLetter: letter.text,
         coverLetterFactIds: letter.factIds,
         coverLetterContext: { title: findJob(current, target).title, company: findJob(current, target).company },

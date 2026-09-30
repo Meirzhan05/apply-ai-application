@@ -2,9 +2,10 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
-import { withPacketFiles } from "@/lib/packet-files";
+import { validateResumeArtifact, withPacketFiles } from "@/lib/packet-files";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
 import { validateAiEssay } from "@/lib/answer-policy";
+import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
 import { answerOwner } from "@/lib/answer-responsibility";
 import type {
   ApplicationPacket,
@@ -48,12 +49,15 @@ export async function draftPacket(
   profile: Profile,
   job: Job,
   previous?: ApplicationPacket,
+  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
   if (facts.length === 0)
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
     );
+  const resumeDocument = options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline) : undefined;
+  if (options?.preserveResume && previous) validatePacket(profile, previous);
   let selected = facts.slice(0, 4);
   let answers: ScreeningAnswer[] = [
     {
@@ -63,9 +67,9 @@ export async function draftPacket(
       requiresUserInput: true,
     },
   ];
-  let model = "verified-facts-template";
+  let model = resumeDocument?.model ?? "verified-facts-template";
 
-  if (process.env.OPENAI_API_KEY && !previous) {
+  if (!options && process.env.OPENAI_API_KEY && !previous) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
     try {
       const response = await client.responses.parse({
@@ -124,12 +128,17 @@ export async function draftPacket(
     answers = previous.answers.map((answer) => answerOwner(answer.question) === "ai" || answer.factIds.every((id) => facts.some((f) => f.id === id)) ? answer :
       { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "human" });
   }
-  answers = await draftEssayAnswers(profile, job, answers);
+  if (options?.regenerateEssays) answers = answers.map((answer) => answerOwner(answer.question) === "ai" ? { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "ai" } : answer);
+  const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&
+    (!previous.coverLetterContext || previous.coverLetter === `Dear Hiring Team,\n\nI am applying for the ${previous.coverLetterContext.title} role at ${previous.coverLetterContext.company}.\n\n${previous.coverLetterFactIds.map((id) => facts.find((fact) => fact.id === id)!.text).join("\n")}\n\nThank you for considering my application.\n\nSincerely,\n${profile.name}`);
+  answers = await draftEssayAnswers(profile, job, answers, options?.deadline);
   return withPacketFiles(profile, {
-    schemaVersion: 1,
+    schemaVersion: resumeDocument ? 2 : 1,
+    ...(resumeDocument ? { resumeDocument } : {}),
+    ...(options?.preserveResume && previous?.resumeArtifact ? { resumeArtifact: previous.resumeArtifact, files: previous.files } : {}),
     version: (previous?.version ?? 0) + 1,
     summary: `Application for ${job.title} at ${job.company}`,
-    resumeLines: previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
+    resumeLines: resumeDocument ? resumeFields(resumeDocument).map(({ text, factIds }) => ({ text, factIds })) : previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
       text: fact.text,
       factIds: [fact.id],
     })),
@@ -137,8 +146,8 @@ export async function draftPacket(
     createdAt: new Date().toISOString(),
     model: answers.find((answer) => answer.aiDraft)?.aiDraft?.model ?? model,
     profileHash: packetProfileHash(profile),
-    ...(previous?.coverLetter ? { coverLetter: previous.coverLetter, coverLetterFactIds: previous.coverLetterFactIds, coverLetterContext: previous.coverLetterContext } : {}),
-  });
+    ...(previousCoverValid ? { coverLetter: previous!.coverLetter, coverLetterFactIds: previous!.coverLetterFactIds, coverLetterContext: previous!.coverLetterContext } : {}),
+  }, options?.deadline);
 }
 
 export function coverLetterFromFacts(
@@ -158,14 +167,14 @@ export function validatePacket(
   profile: Profile,
   packet: ApplicationPacket,
 ): void {
-  if (packet.schemaVersion !== undefined && packet.schemaVersion !== 1) throw new Error("Unsupported application packet schema version. Prepare a new packet.");
+  if (packet.schemaVersion !== undefined && packet.schemaVersion !== 1 && packet.schemaVersion !== 2) throw new Error("Unsupported application packet schema version. Prepare a new packet.");
   if (!Number.isInteger(packet.version) || packet.version < 1) throw new Error("Invalid application packet revision.");
-  if (packet.schemaVersion === 1 && !packet.files) throw new Error("Prepare the application files before packet review.");
+  if (packet.schemaVersion !== undefined && !packet.files) throw new Error("Prepare the application files before packet review.");
   if (packet.files) {
     const kinds = packet.coverLetter ? ["resume", "cover-letter"] : ["resume"];
     if (packet.files.length !== kinds.length || kinds.some((kind) => packet.files!.filter((file) => file.kind === kind).length !== 1)) throw new Error("The application file manifest is incomplete.");
     for (const file of packet.files) {
-      const ids = [...new Set(file.kind === "resume" ? packet.resumeLines.flatMap((line) => line.factIds) : packet.coverLetterFactIds ?? [])];
+      const ids = [...new Set(file.kind === "resume" ? (packet.schemaVersion === 2 && packet.resumeDocument ? resumeFactIds(packet.resumeDocument) : packet.resumeLines.flatMap((line) => line.factIds)) : packet.coverLetterFactIds ?? [])];
       if (!/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isInteger(file.size) || file.size < 1 || file.mimeType !== "application/pdf" ||
         file.filename !== (file.kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf") || hashJson(file.factIds) !== hashJson(ids)) throw new Error("The application file manifest does not match its verified facts.");
     }
@@ -175,7 +184,11 @@ export function validatePacket(
   const verifiedIds = new Set(verified.map((fact) => fact.id));
   if (!packet.resumeLines.length)
     throw new Error("The resume needs at least one verified fact.");
-  for (const line of packet.resumeLines) {
+  if (packet.schemaVersion === 2) {
+    validateResumeArtifact(profile, packet);
+    if (hashJson(packet.resumeLines) !== hashJson(resumeFields(packet.resumeDocument!).map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The resume preview differs from the reviewed document.");
+  }
+  for (const line of packet.schemaVersion === 2 ? [] : packet.resumeLines) {
     if (
       !line.factIds.length ||
       !line.factIds.every((id) => verifiedIds.has(id))

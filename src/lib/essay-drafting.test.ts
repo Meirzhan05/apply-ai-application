@@ -55,7 +55,7 @@ describe("AI essay generation", () => {
     expect(result).toEqual({ question, answer: "", factIds: [], author: "ai", requiresUserInput: true });
   });
 
-  it("regenerates actual questions, preserves human answers and the resume, and resets confirmation", async () => {
+  it("preserves valid confirmed essays, human answers and the legacy resume on rebuild", async () => {
     const state = initialDemoState();
     successfulResponses();
     const oldEssay = confirmAiEssay(state.profile, await draftAiEssay(state.profile, state.jobs[0], question));
@@ -67,9 +67,9 @@ describe("AI essay generation", () => {
     expect(result.resumeLines).toEqual(previous.resumeLines);
     expect(result.answers[0]).toBe(human);
     expect(result.answers[1].question).toBe(question);
-    expect(result.answers[1].confirmedAt).toBeUndefined();
-    expect(result.answers[1].requiresUserInput).toBe(true);
-    expect(parse).toHaveBeenCalledTimes(4);
+    expect(result.answers[1]).toBe(oldEssay);
+    expect(result.answers[1].requiresUserInput).toBe(false);
+    expect(parse).toHaveBeenCalledTimes(2);
     expect(await draftEssayAnswers(state.profile, state.jobs[0], [human])).toEqual([human]);
   });
 });

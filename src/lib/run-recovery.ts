@@ -10,7 +10,7 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
       closed.push(structuredClone(app));
       transition(app, ["submitting"], "uncertain");
       app.error = "The submit worker stopped before confirmation. Check the employer site; no automatic retry will occur.";
-    } else if (["drafting", "filling"].includes(app.status) && idle > 10 * 60 * 1000) {
+    } else if (["drafting", "filling"].includes(app.status) && idle > (app.status === "drafting" ? 12 : 10) * 60 * 1000) {
       closed.push(structuredClone(app));
       const previous = app.status;
       transition(app, ["drafting", "filling"], previous === "drafting" ? (app.packet ? "draft_review" : "selected") : "authorized_to_fill");

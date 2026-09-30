@@ -39,6 +39,9 @@ interface InspectedField {
   valid: boolean;
   identifier: string;
   fileHashes: string[];
+  optionLabel: string;
+  autocomplete: boolean;
+  stableIdentifier: boolean;
 }
 
 const BrowserMapping = z.object({
@@ -80,7 +83,7 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           | HTMLTextAreaElement
           | HTMLSelectElement;
         const id = input.id;
-        const label =
+        const optionLabel =
           (id
             ? document.querySelector(`label[for="${CSS.escape(id)}"]`)
                 ?.textContent
@@ -90,6 +93,17 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           input.getAttribute("placeholder") ||
           input.name ||
           `Field ${index + 1}`;
+        const fieldset = input.closest("fieldset");
+        const kind = input.tagName.toLowerCase() === "input"
+          ? (input as HTMLInputElement).type || "text" : input.tagName.toLowerCase();
+        const grouped = ["radio", "checkbox"].includes(kind) || input.getAttribute("aria-autocomplete") === "list";
+        const heading = grouped ? fieldset?.querySelector("legend, .ashby-application-form-question-title") : null;
+        const label = heading?.textContent || optionLabel;
+        const groupRequired = Boolean(heading && Array.from(heading.classList).some((name) => /^_required_/.test(name))) || fieldset?.getAttribute("aria-required") === "true";
+        const required = input.required || input.getAttribute("aria-required") === "true" || groupRequired;
+        const groupChecked = kind === "radio" && Boolean(fieldset
+          ? Array.from(fieldset.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((radio) => radio.name === input.name && radio.checked)
+          : Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]')).some((radio) => radio.name === input.name && radio.checked));
         const style = window.getComputedStyle(input);
         if (
           style.display === "none" ||
@@ -103,16 +117,16 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           index,
           label: ((input as HTMLInputElement).type === "file"
             ? [label, input.id, input.name].filter(Boolean).join(" ")
-            : label).trim().replace(/\s+/g, " ").slice(0, 180),
-          kind:
-            input.tagName.toLowerCase() === "input"
-              ? (input as HTMLInputElement).type || "text"
-              : input.tagName.toLowerCase(),
-          required: input.required || input.getAttribute("aria-required") === "true",
+            : label).trim().replace(/\s+/g, " ").slice(0, 2000),
+          optionLabel: optionLabel.trim().replace(/\s+/g, " "),
+          autocomplete: input.getAttribute("role") === "combobox" || input.getAttribute("aria-autocomplete") === "list",
+          kind,
+          required,
           checked: (input as HTMLInputElement).checked || false,
           valid: input.validity.valid && input.getAttribute("aria-invalid") !== "true" &&
-            !(input.getAttribute("aria-required") === "true" && !input.value.trim()),
+            !(required && (kind === "radio" ? !groupChecked : kind === "checkbox" ? !(input as HTMLInputElement).checked : !input.value.trim())),
           identifier: input.name || input.id || String(index),
+          stableIdentifier: Boolean(input.name || input.id),
           fileHashes: await Promise.all(Array.from((input as HTMLInputElement).files ?? []).map(async (file) => {
             const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
             return `${file.name}:${file.size}:${Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("")}`;
@@ -128,6 +142,33 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
       })))
       .filter((field): field is NonNullable<typeof field> => Boolean(field)),
 );
+}
+
+async function waitForForm(page: Page): Promise<void> {
+  // DOMContentLoaded precedes hydration on hosted ATS pages. A hidden resume
+  // parser or an Apply shortcut is not evidence that the application is ready.
+  await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLInputElement>("input, textarea, select")).some((input) =>
+    !["hidden", "file", "submit", "button"].includes(input.type) && input.getClientRects().length > 0 && getComputedStyle(input).visibility !== "hidden"),
+  undefined, { timeout: 12000 }).catch(() => undefined);
+  let previous = "";
+  let stableSince = Date.now();
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const structure = await page.locator("input, textarea, select").evaluateAll((elements) => elements
+      .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden")
+      .map((element) => `${element.tagName}:${element.id}:${element.getAttribute("name")}:${element.getAttribute("type")}`).join("|"));
+    if (structure !== previous) { previous = structure; stableSince = Date.now(); }
+    else if (Date.now() - stableSince >= 500) break;
+    await page.waitForTimeout(100);
+  }
+}
+
+async function currentFieldLocator(page: Page, field: InspectedField) {
+  // Uploads and conditional questions can insert controls and shift indexes.
+  // Recheck the observed question before writing to its current position.
+  const current = (await inspectFields(page)).filter((candidate) => (!field.stableIdentifier || candidate.identifier === field.identifier) &&
+    candidate.kind === field.kind && candidate.label === field.label && candidate.optionLabel === field.optionLabel);
+  return current.length === 1 ? page.locator("input, textarea, select").nth(current[0].index) : undefined;
 }
 
 const finalButtonName = /^(submit application|submit|apply now|send application|apply)$/i;
@@ -230,7 +271,12 @@ function deterministicKey(
   field: InspectedField,
   application: Application,
 ): string | undefined {
-  const label = field.label.toLowerCase();
+  const label = field.label.toLowerCase().trim().replace(/\s+/g, " ");
+  const answerIndex = application.packet?.answers.findIndex(
+    (answer) => answer.question.toLowerCase().trim().replace(/\s+/g, " ") === label,
+  );
+  if (answerIndex !== undefined && answerIndex >= 0) return `answer_${answerIndex}`;
+  if (/first.*last.*name|full.?name|your name|candidate name/.test(label)) return "full_name";
   if (/first.?name|given.?name/.test(label)) return "first_name";
   if (/last.?name|family.?name|surname/.test(label)) return "last_name";
   if (/full.?name|your name|candidate name/.test(label)) return "full_name";
@@ -245,11 +291,23 @@ function deterministicKey(
   if (/veteran/.test(label)) return "saved_veteran";
   if (/cover\s*letter/.test(label) && field.kind !== "file")
     return "cover_letter";
-  const answerIndex = application.packet?.answers.findIndex(
-    (answer) => answer.question.toLowerCase() === label,
-  );
-  if (answerIndex !== undefined && answerIndex >= 0)
-    return `answer_${answerIndex}`;
+  return undefined;
+}
+
+function sensitiveQuestion(label: string): boolean {
+  return /authoriz|sponsor|visa|citizenship|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
+}
+
+function matchingOption(label: string, value: string, options: string[]): string | undefined {
+  const normalize = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
+  const exact = options.filter((option) => normalize(option) === normalize(value));
+  if (exact.length === 1) return exact[0];
+  // Match an explicitly chosen city to the ATS's city + "office" label only.
+  // Never turn an explanation of work authorization into a Yes/No answer.
+  if (/office/.test(label) && !sensitiveQuestion(label)) {
+    const city = options.filter((option) => normalize(option).replace(/ office$/, "") === normalize(value));
+    if (city.length === 1) return city[0];
+  }
   return undefined;
 }
 
@@ -258,11 +316,13 @@ async function aiMappings(
   values: Record<string, string>,
   application: Application,
 ): Promise<Map<number, string>> {
-  if (!process.env.OPENAI_API_KEY) return new Map();
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  fields = fields.filter((field) => !deterministicKey(field, application) && !sensitiveQuestion(field.label) && !["radio", "checkbox", "file", "password", "submit", "button"].includes(field.kind));
+  if (!fields.length || !process.env.OPENAI_API_KEY) return new Map();
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 0 });
   try {
     const response = await client.responses.parse({
       model: "gpt-6-astra",
+      store: false,
       input: [
         {
           role: "system",
@@ -314,7 +374,7 @@ async function snapshot(
       value:
         field.kind === "file"
           ? field.value.split(/[\\/]/).pop() || ""
-          : field.value,
+          : ["radio", "checkbox"].includes(field.kind) ? field.optionLabel : field.value,
       kind: field.kind,
       required: field.required,
       checked: ["checkbox", "radio"].includes(field.kind) ? field.checked : undefined,
@@ -452,6 +512,7 @@ export async function prepareBrowser(
       throw new Error(
         "The application redirected to a site that is not enabled for automation.",
       );
+    await waitForForm(page);
     const fields = await inspectFields(page);
     if (new URL(page.url()).origin !== new URL(job.applyUrl).origin) {
       const form = await snapshot(page, application);
@@ -460,12 +521,13 @@ export async function prepareBrowser(
       if (connectUrl) await browser.close();
       return { form, sessionId, connectUrl, liveUrl, needsAction: true, needsCoverLetter: false };
     }
-    if (fields.length > 40) {
+    const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
+    if (questionCount > 40 || fields.length > 200) {
       const form = await snapshot(page, application);
       form.readyToSubmit = false;
       form.blockers = [...new Set([
         ...form.blockers ?? [],
-        "This form has more than 40 fields. Complete it through browser takeover, then refresh the review.",
+        "This form has more than 40 fields or exceeds the control limit. Complete it through browser takeover, then refresh the review.",
       ])];
       // Disconnect from a remote session without releasing it. The applicant
       // needs the same open page for takeover and a fresh final review.
@@ -477,6 +539,8 @@ export async function prepareBrowser(
     const ai = await aiMappings(fields, values, application);
     let needsAction = false;
     let needsCoverLetter = false;
+    const handledRadioGroups = new Set<string>();
+    const fillBlockers: string[] = [];
     for (const field of fields) {
       if (new URL(page.url()).origin !== new URL(job.applyUrl).origin || !canAutomate(page.url())) throw new Error("The form changed destination during filling. Review its application link before starting again.");
       if (
@@ -489,10 +553,9 @@ export async function prepareBrowser(
         continue;
       }
       if (field.kind === "file" && /resume|cv|curriculum/i.test(field.label)) {
-        await page
-          .locator("input, textarea, select")
-          .nth(field.index)
-          .setInputFiles({
+        const attachment = await currentFieldLocator(page, field);
+        if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        await attachment.setInputFiles({
             name: resume.filename,
             mimeType: resume.mimeType,
             buffer: resume.bytes,
@@ -505,10 +568,9 @@ export async function prepareBrowser(
         /cover\s*letter/i.test(field.label) &&
         application.packet.coverLetter
       ) {
-        await page
-          .locator("input, textarea, select")
-          .nth(field.index)
-          .setInputFiles({
+        const attachment = await currentFieldLocator(page, field);
+        if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        await attachment.setInputFiles({
             name: coverLetter!.filename,
             mimeType: coverLetter!.mimeType,
             buffer: coverLetter!.bytes,
@@ -517,7 +579,7 @@ export async function prepareBrowser(
         continue;
       }
       if (
-        ["checkbox", "radio", "password", "file", "submit", "button"].includes(
+        ["checkbox", "password", "file", "submit", "button"].includes(
           field.kind,
         )
       ) {
@@ -526,17 +588,36 @@ export async function prepareBrowser(
       }
       const key = deterministicKey(field, application) ?? ai.get(field.index);
       const value = key ? values[key] : undefined;
+      if (field.kind === "radio") {
+        if (handledRadioGroups.has(field.identifier)) continue;
+        handledRadioGroups.add(field.identifier);
+        const group = fields.filter((candidate) => candidate.kind === "radio" && candidate.identifier === field.identifier);
+        const option = value ? matchingOption(field.label, value, group.map((candidate) => candidate.optionLabel)) : undefined;
+        const chosen = group.find((candidate) => candidate.optionLabel === option);
+        if (chosen) {
+          const choice = await currentFieldLocator(page, chosen);
+          if (choice) await choice.check();
+          else fillBlockers.push(`The form changed while filling: ${field.label}`);
+        }
+        else if (value) fillBlockers.push(`Choose an exact option for: ${field.label}`);
+        continue;
+      }
       if (!value) {
         if (field.required && !field.value) needsAction = true;
         continue;
       }
-      const locator = page.locator("input, textarea, select").nth(field.index);
+      const locator = await currentFieldLocator(page, field);
+      if (!locator) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
       if (field.kind === "select") {
-        const option = field.options.find(
-          (candidate) => candidate.toLowerCase() === value.toLowerCase(),
-        );
+        const option = matchingOption(field.label, value, field.options);
         if (option) await locator.selectOption({ label: option });
         else if (field.required) needsAction = true;
+      } else if (field.autocomplete) {
+        await locator.fill(value);
+        const options = page.getByRole("option", { name: value, exact: true });
+        try { await options.first().waitFor({ state: "visible", timeout: 3000 }); } catch { /* Unknown widgets require takeover. */ }
+        if (await options.count() === 1 && await options.first().isVisible()) await options.first().click();
+        else fillBlockers.push(`Select and confirm the option for: ${field.label}`);
       } else await locator.fill(value);
     }
     if (!canAutomate(page.url()))
@@ -544,6 +625,7 @@ export async function prepareBrowser(
         "The form navigated to a site that is not enabled for automation.",
       );
     const form = await snapshot(page, application);
+    if (fillBlockers.length) { form.blockers = [...new Set([...(form.blockers ?? []), ...fillBlockers])]; form.readyToSubmit = false; }
     needsAction ||= form.readyToSubmit === false;
     if (connectUrl) await browser.close();
     return {

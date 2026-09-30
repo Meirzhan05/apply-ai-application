@@ -66,3 +66,5 @@ npm run test:supabase
 ```
 
 The controlled flow passed both approvals, PDF upload, one submit click, and confirmation. Production cloud drafting, remote filling and live-viewer takeover, polling, and two-account isolation also passed. A protected cloud receiver verified one submit, saved confirmation proof, and duplicate-task rejection. Run `npm run test:submit` with production environment variables to repeat that synthetic test. The remote test cancels without submitting. The full plan remains incomplete: a real owner-approved application, labeled Jev evaluation, broader employer and human-takeover tests, feed rights, and invoice reconciliation remain release gates. Email stays restricted to the test inbox until the owner chooses to expand it.
+
+Resume drafting now supports a classic one-page LaTeX layout with grounded AI rephrasing, structured sections, private immutable PDF/source files, and explicit resume rebuilding. See [LaTeX resume setup and verification](docs/LATEX-RESUMES.md).

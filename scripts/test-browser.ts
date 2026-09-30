@@ -6,6 +6,8 @@ import { draftPacket } from "../src/lib/drafting";
 import { prepareBrowser, refreshBrowserSnapshot, submitBrowser, cancelBrowser } from "../src/lib/browser-runner";
 import { approveFill, approveSubmit, selectApplication, setFormSnapshot, setPacket } from "../src/lib/workflow";
 import type { Application } from "../src/lib/types";
+import { hashJson } from "../src/lib/crypto";
+import { essayContentHash, essayEvidenceHash } from "../src/lib/answer-policy";
 
 async function main() {
 process.env.DEMO_MODE = "true";
@@ -44,6 +46,10 @@ const server = createServer((request, response) => {
     return;
   }
   response.setHeader("Content-Type", "text/html");
+  if (scenario === "delayed-form") {
+    response.end(`<html><body><input type="file" style="display:none"><script>setTimeout(() => { document.body.insertAdjacentHTML('beforeend', '<form><label>First name<input required></label><label>Email<input type="email" required></label><label>Resume<input type="file" required></label><button>Submit application</button></form>'); }, 900);</script></body></html>`);
+    return;
+  }
   if (scenario === "posting-page") {
     response.end('<html><body><h1>Public job posting</h1><button type="button">Apply</button></body></html>');
     return;
@@ -52,7 +58,9 @@ const server = createServer((request, response) => {
     response.end("<html><body>Synthetic challenge frame</body></html>");
     return;
   }
-  const extra = scenario === "complex" ? Array.from({ length: 41 }, (_, i) => `<label>Optional question ${i}<input name="optional-${i}"></label>`).join("")
+  const group = (question: string, name: string, options: string[], required = true) => `<fieldset><label class="ashby-application-form-question-title ${required ? "_required_fixture" : ""}">${question}</label>${options.map((option, index) => `<input type="radio" name="${name}" id="${name}-${index}"><label for="${name}-${index}">${option}</label>`).join("")}</fieldset>`;
+  const extra = scenario.startsWith("grouped") ? `<label>Preferred First & Last Name<input name="preferred" required></label><label>Why are you excited to join us?<textarea required></textarea></label>${group("Which office would you prefer?", "office", ["San Francisco office", "New York office", "No preference"])}${group("Are you legally authorized to work in the United States?", "authorization", ["Yes", "No"])}${group("Will you now or in the future require visa sponsorship?", "sponsorship", ["Yes", "No"])}${group("How did you hear about this opportunity?", "source", Array.from({length:35}, (_, i) => `Source ${i}`))}<label><input type="checkbox" name="newsletter">Subscribe to newsletter</label><fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" placeholder="Start typing..."><ul role="listbox" hidden><li role="option">${initialDemoState().profile.school}</li></ul></fieldset><script>document.querySelector('[name=resume]').addEventListener('change', () => {const hidden=document.createElement('input'); hidden.type='hidden'; document.querySelector('form').prepend(hidden)}); const school=document.querySelector('[role=combobox]'); school.addEventListener('input', () => {document.querySelector('[role=listbox]').hidden=false}); document.querySelector('[role=option]').addEventListener('click', () => {school.dataset.selected='true'; document.querySelector('[role=listbox]').hidden=true});</script>`
+    : scenario === "complex" ? Array.from({ length: 41 }, (_, i) => `<label>Optional question ${i}<input name="optional-${i}"></label>`).join("")
     : scenario === "unknown" ? '<label>Do you hold a secret clearance?<input name="clearance" required></label>'
     : scenario === "login" ? '<label>Password<input type="password"></label>'
     : scenario === "captcha" ? '<div data-sitekey="fixture">CAPTCHA takeover fixture</div>'
@@ -99,7 +107,20 @@ async function fill(scenario: string, onSession?: Parameters<typeof prepareBrows
   const app = selectApplication(state, job.id, state.profile.id);
   liveApps.push(app);
   const packet = await draftPacket(state.profile, job);
-  packet.answers = packet.answers.map((answer) => ({ ...answer, answer: state.profile.facts[0].text, factIds: [state.profile.facts[0].id], requiresUserInput: false, userProvided: true }));
+  packet.answers = [];
+  if (scenario.startsWith("grouped")) {
+    const fact = state.profile.facts[0];
+    const essay = { question: "Why are you excited to join us?", answer: fact.text, factIds: [fact.id], author: "ai" as const, requiresUserInput: false, confirmedAt: new Date().toISOString(), aiDraft: { version: 1 as const, model: "synthetic-test-fixture", sentences: [{text:fact.text, kind:"fact" as const, factIds:[fact.id]}], evidenceHash:essayEvidenceHash(state.profile,[fact.id]), contentHash:"", generatedAt:new Date().toISOString() } };
+    essay.aiDraft.contentHash = essayContentHash(essay);
+    packet.answers = [essay, ...[
+      ["Which office would you prefer?", "San Francisco"],
+      ["Are you legally authorized to work in the United States?", "Yes"],
+      ["Will you now or in the future require visa sponsorship?", scenario === "grouped-ambiguous" ? "Not now. I can do OPT" : "No"],
+      ["How did you hear about this opportunity?", "Source 17"],
+    ].map(([question, answer]) => ({question, answer, factIds:[], author:"human" as const, userProvided:true, requiresUserInput:false}))];
+    // The answers are part of the approval fingerprint, not a human rewrite of an AI essay.
+    assert.notEqual(hashJson(packet.answers), hashJson([]));
+  }
   setPacket(state, app, packet);
   approveFill(app, state.profile.id, app.packetHash!, job.applyUrl);
   app.status = "filling";
@@ -119,6 +140,39 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("delayed hydration fills approved details after the real form appears", async () => {
+    const {state, app, result} = await fill("delayed-form");
+    assert.equal(result.needsAction, false);
+    assert.equal(result.form.fields.find((field) => field.label === "Email")?.value, state.profile.email);
+    assert.ok(result.form.attachments.length);
+    assert.equal(submissions.get("delayed-form"), undefined);
+    await cancelBrowser(app);
+  });
+  for (const scenario of ["grouped", "grouped-ambiguous"]) await test(`${scenario}: fills approved essays and choices after upload shifts indexes, with more than 40 native controls`, async () => {
+    const {state, app, result} = await fill(scenario);
+    const page = pageFor(app);
+    assert.ok(result.form.fields.length > 40);
+    assert.equal(result.form.fields.find((field) => field.label === "Preferred First & Last Name")?.value, state.profile.name);
+    assert.equal(await page.locator("textarea").inputValue(), app.packet!.answers[0].answer);
+    assert.equal(await page.locator("#authorization-0").isChecked(), true);
+    assert.equal(await page.locator("#office-0").isChecked(), true);
+    assert.equal(await page.locator("#source-17").isChecked(), true);
+    assert.equal(await page.locator("[name=newsletter]").isChecked(), false);
+    assert.equal(await page.locator("[role=combobox]").getAttribute("data-selected"), "true");
+    assert.equal(result.form.readyToSubmit, scenario === "grouped");
+    assert.equal(await page.locator("#sponsorship-1").isChecked(), scenario === "grouped");
+    if (scenario === "grouped-ambiguous") {
+      assert.equal(await page.locator("#sponsorship-0").isChecked(), false);
+      assert.ok(result.form.blockers?.some((blocker) => /Choose an exact option.*sponsorship/.test(blocker)));
+    } else {
+      setFormSnapshot(app, result.form);
+      approveSubmit(app, state.profile.id, app.form!.hash);
+      await page.locator("#authorization-0").uncheck().catch(async () => page.locator("#authorization-0").evaluate((element) => { (element as HTMLInputElement).checked = false; }));
+      await assert.rejects(() => submitBrowser(app), /FORM_CHANGED/);
+    }
+    assert.equal(submissions.get(scenario), undefined);
+    await cancelBrowser(app);
+  });
   await test("cancellation before filling releases the newly created browser", async () => {
     let sessionId: string | undefined;
     await assert.rejects(() => fill("cancel-before-fill", async (session) => {

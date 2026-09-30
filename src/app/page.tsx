@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { ResumeReview } from "@/app/resume-review";
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
@@ -706,6 +707,9 @@ export default function Dashboard() {
                             <h3>Application packet</h3>
                             <span>Version {activeApp.packet.version}</span>
                           </div>
+                          {activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
+                            <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
+                          ) : <>
                           <p className="muted">
                             Each resume line comes from a confirmed profile
                             fact.
@@ -736,6 +740,7 @@ export default function Dashboard() {
                           >
                             Open tailored resume PDF ↗
                           </a>
+                          </>}
                           {activeApp.packet.coverLetter && (
                             <div className="cover-letter">
                               <h4>Cover letter</h4>
@@ -812,7 +817,9 @@ export default function Dashboard() {
                                 Save my answers
                               </button>
                               <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
-                                onClick={() => act("draft", { applicationId: activeApp.id })}>Write essays with AI</button>
+                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
+                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
                               <p className="target-url">
                                 Approved destination:{" "}
                                 <a
