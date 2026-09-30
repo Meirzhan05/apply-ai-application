@@ -1,0 +1,53 @@
+import { createHash } from "node:crypto";
+import { verifyControlledTestGrant } from "@/lib/controlled-tests";
+import { loadState, mutateState } from "@/lib/repository";
+import { hasSubmissionApproval } from "@/lib/workflow";
+import { sameOrigin } from "@/lib/request-security";
+
+export const runtime = "nodejs";
+
+async function authorized(token: string) {
+  const grant = verifyControlledTestGrant(token);
+  if (!grant) return null;
+  const state = await loadState(grant.userId);
+  const app = state.applications.find((item) => item.id === grant.applicationId && item.userId === grant.userId);
+  // Only server-created synthetic fixtures can use this receiver. It cannot
+  // turn an ordinary user's application into a production demo submission.
+  if (!app?.controlledTest || app.controlledTest.expiresAt !== grant.expiresAt || !/^cloud-submit-[a-f0-9-]+@example\.com$/i.test(state.profile.email)) return null;
+  return { grant, state, app };
+}
+
+const html = (body: string) => new Response(`<!doctype html><html><body style="max-width:700px;margin:40px auto;font-family:Arial;padding:24px">${body}</body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "same-origin", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'" } });
+
+export async function GET(request: Request) {
+  const token = new URL(request.url).searchParams.get("token") || "";
+  if (!await authorized(token)) return new Response("Not found", { status: 404 });
+  // Token characters are restricted to base64url and a separator by signing.
+  return html(`<p>Controlled cloud test · no employer receives this application</p><h1>Synthetic test application</h1><form action="/api/internal/controlled-form?token=${token}" method="post" enctype="multipart/form-data" style="display:grid;gap:18px"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" accept=".pdf" required></label><button type="submit">Submit application</button></form>`);
+}
+
+export async function POST(request: Request) {
+  if (!sameOrigin(request)) return new Response("Cross-origin request rejected", { status: 403 });
+  const context = await authorized(new URL(request.url).searchParams.get("token") || "");
+  if (!context || !hasSubmissionApproval(context.app) || context.app.status !== "submitting" || !context.app.submissionWorkerClaimedAt) return new Response("Approved test run required", { status: 403 });
+  const size = Number(request.headers.get("content-length") || "0");
+  if (size > 2_000_000) return new Response("Test file too large", { status: 413 });
+  const data = await request.formData();
+  const resume = data.get("resume");
+  if (!(resume instanceof File) || !resume.size || resume.size > 1_000_000) return new Response("Test resume required", { status: 400 });
+  const bytes = Buffer.from(await resume.arrayBuffer());
+  const fileHash = `${resume.name}:${resume.size}:${createHash("sha256").update(bytes).digest("hex")}`;
+  if (!context.app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes?.includes(fileHash)) return new Response("The reviewed attachment changed", { status: 409 });
+  for (const identifier of ["firstName", "lastName", "email"]) {
+    const reviewed = context.app.form.fields.find((field) => field.identifier === identifier);
+    if (!reviewed?.value || reviewed.value !== String(data.get(identifier) || "")) return new Response("The reviewed fields changed", { status: 409 });
+  }
+  const accepted = await mutateState(context.grant.userId, (state) => {
+    const app = state.applications.find((item) => item.id === context.grant.applicationId);
+    if (!app?.controlledTest || app.controlledTest.submissions !== 0 || !hasSubmissionApproval(app) || app.status !== "submitting") return false;
+    app.controlledTest.submissions = 1;
+    return true;
+  });
+  if (!accepted) return new Response("Test submission already handled", { status: 409 });
+  return html("<p>Controlled cloud test confirmation</p><h1>Application received</h1><p>The synthetic application was received once. No employer was contacted.</p>");
+}

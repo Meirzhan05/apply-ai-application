@@ -1,0 +1,94 @@
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #edf4ef;
+  padding: 25px;
+}
+.auth-card {
+  width: min(100%, 430px);
+  padding: 38px;
+  background: #fffefa;
+  border: 1px solid #dce8dd;
+  border-radius: 9px;
+  box-shadow: 0 18px 70px #193a2b16;
+}
+.auth-card .brand {
+  display: inline-block;
+  text-decoration: none;
+  margin-bottom: 45px;
+}
+.auth-card h1 {
+  font-size: 32px;
+  letter-spacing: -1px;
+  margin: 0 0 8px;
+}
+.auth-card > p:not(.eyebrow) {
+  color: #60706b;
+  line-height: 1.5;
+}
+.auth-card form {
+  margin: 30px 0 0;
+}
+.auth-card label {
+  display: block;
+  font-weight: 700;
+  font-size: 12px;
+}
+.auth-card input {
+  display: block;
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #bacdc2;
+  border-radius: 5px;
+  margin: 8px 0 16px;
+}
+.auth-card .dark-button {
+  width: 100%;
+}
+.form-shot {
+  height: auto;
+}
+.signout {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 8px 0 0;
+  color: #52796a;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.modal select {
+  display: block;
+  width: 100%;
+  border: 1px solid #cbd8cf;
+  border-radius: 5px;
+  padding: 11px;
+  margin-top: 7px;
+  background: #fff;
+}
+.target-url {
+  font-size: 11px;
+  color: #60776b;
+  overflow-wrap: anywhere;
+}
+.target-url a {
+  color: #155b4a;
+}
+.cover-letter {
+  border: 1px solid #e5e9e4;
+  padding: 18px;
+  margin: 16px 0;
+  background: #fdfefa;
+}
+.cover-letter h4 {
+  margin: 0 0 12px;
+}
+.cover-letter pre {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #344b43;
+  margin: 0;
+}

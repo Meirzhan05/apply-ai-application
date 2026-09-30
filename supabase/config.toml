@@ -1,0 +1,5 @@
+project_id = "gpuszomxgvudaqrczfxs"
+
+[auth]
+site_url = "https://apply-ai-chi.vercel.app"
+additional_redirect_urls = ["https://apply-ai-chi.vercel.app/auth/callback", "http://localhost:3000/auth/callback", "http://localhost:3001/auth/callback"]

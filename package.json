@@ -1,0 +1,64 @@
+{
+  "name": "apply-ai",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval:jev": "node --env-file=.env --import tsx scripts/evaluate-jev.ts",
+    "test:browser": "node --env-file=.env --import tsx scripts/test-browser.ts",
+    "test:supabase": "node --env-file=.env --import tsx scripts/test-supabase.ts",
+    "test:worker": "node --env-file=.env --import tsx scripts/test-worker.ts",
+    "test:remote": "node --env-file=.env --import tsx scripts/test-remote-fill.ts",
+    "test:submit": "node --env-file=.env --import tsx scripts/test-cloud-submit.ts",
+    "test:catalog": "node --env-file=.env --import tsx scripts/test-catalog.ts",
+    "test:imports": "node --env-file=.env --import tsx scripts/test-imports.ts",
+    "test:resume-intake": "node --env-file=.env --import tsx scripts/test-resume-intake.ts",
+    "test:import-refresh": "node --env-file=.env --import tsx scripts/test-import-refresh.ts",
+    "test:digest-delivery": "node --env-file=.env --import tsx scripts/test-digest-delivery.ts",
+    "test:match-queue": "node --env-file=.env --import tsx scripts/test-match-queue.ts",
+    "test:match-owner-removed": "node --env-file=.env --import tsx scripts/test-match-owner-removed.ts",
+    "test:dashboard": "node --env-file=.env --import tsx scripts/test-dashboard.ts",
+    "test:answer-review": "node --env-file=.env --import tsx scripts/test-answer-review.ts"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "2.21.0",
+    "@napi-rs/canvas": "0.1.80",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@supabase/ssr": "0.7.0",
+    "@supabase/supabase-js": "2.117.2",
+    "@trigger.dev/sdk": "4.6.4",
+    "lucide-react": "0.468.0",
+    "mammoth": "1.11.0",
+    "next": "16.3.7",
+    "openai": "7.25.0",
+    "pdf-lib": "1.17.1",
+    "pdf-parse": "2.4.5",
+    "playwright-core": "1.55.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "^4.6.4",
+    "@types/node": "22.18.6",
+    "@types/react": "19.2.9",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.36.0",
+    "eslint-config-next": "16.3.7",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "ws": "8.21.0",
+    "deepmerge-ts": "8.0.0"
+  }
+}

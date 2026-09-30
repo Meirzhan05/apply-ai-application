@@ -1,0 +1,235 @@
+export type MatchCategory = "strong" | "possible" | "uncertain" | "excluded";
+export type JobSource = "demo" | "greenhouse" | "lever" | "ashby" | "imported";
+export type ApplicationStatus =
+  | "selected"
+  | "drafting"
+  | "draft_review"
+  | "authorized_to_fill"
+  | "filling"
+  | "final_review"
+  | "approved_to_submit"
+  | "submitting"
+  | "submitted"
+  | "needs_user_action"
+  | "uncertain"
+  | "cancelled";
+
+export interface VerifiedFact {
+  id: string;
+  text: string;
+  verified: boolean;
+  source: "resume" | "user";
+}
+
+export interface Profile {
+  id: string;
+  name: string;
+  email: string;
+  school: string;
+  phone: string;
+  graduationYear: string;
+  headline: string;
+  skills: string[];
+  preferredTitles: string[];
+  preferredLocations: string[];
+  remoteOnly: boolean;
+  strictLocations?: boolean;
+  timeZone?: string;
+  workAuthorization: string;
+  facts: VerifiedFact[];
+  sensitiveAnswers: Record<string, string>;
+  resumeFileName?: string;
+  resumeText?: string;
+  demo: boolean;
+  updatedAt: string;
+}
+
+export interface Job {
+  id: string;
+  source: JobSource;
+  sourceId: string;
+  sourceLabel: string;
+  company: string;
+  title: string;
+  location: string;
+  remote: boolean | null;
+  employmentType: string;
+  salary?: string;
+  description: string;
+  requirements: string[];
+  url: string;
+  applyUrl: string;
+  postedAt?: string;
+  deadline?: string;
+  active: boolean;
+  discoveredAt: string;
+  lastCheckedAt?: string;
+  importUrl?: string;
+  importCheck?: {
+    status: "verified" | "closed" | "unavailable" | "manual";
+    checkedAt: string;
+    message?: string;
+  };
+}
+
+export interface MatchAssessment {
+  version: 1;
+  category: MatchCategory;
+  score: number;
+  evidence: string[];
+  gaps: string[];
+  uncertainty: string[];
+  evaluatedAt: string;
+  model: string;
+}
+
+export interface JobFeedback {
+  jobId: string;
+  kind: "saved" | "dismissed";
+  reason?: string;
+  updatedAt: string;
+  jobSnapshot?: Pick<Job, "title" | "requirements" | "location">;
+}
+
+export interface ResumeLine {
+  text: string;
+  factIds: string[];
+}
+
+export interface ScreeningAnswer {
+  question: string;
+  answer: string;
+  factIds: string[];
+  requiresUserInput: boolean;
+  userProvided?: boolean;
+  author?: "ai" | "human";
+  confirmedAt?: string;
+  aiDraft?: {
+    version: 1;
+    model: string;
+    contentHash: string;
+    evidenceHash: string;
+    sentences: Array<{ text: string; kind: "fact" | "perspective"; factIds: string[] }>;
+  };
+}
+
+export interface PacketFile {
+  kind: "resume" | "cover-letter";
+  filename: string;
+  mimeType: "application/pdf";
+  sha256: string;
+  size: number;
+  factIds: string[];
+}
+
+export interface ApplicationPacket {
+  schemaVersion: 1;
+  version: number;
+  summary: string;
+  resumeLines: ResumeLine[];
+  answers: ScreeningAnswer[];
+  coverLetter?: string;
+  coverLetterFactIds?: string[];
+  coverLetterContext?: { title: string; company: string };
+  createdAt: string;
+  model: string;
+  profileHash?: string;
+  files?: PacketFile[]; // Absent only in the legacy, implicitly versioned format.
+}
+
+export interface FormFieldSnapshot {
+  label: string;
+  value: string;
+  kind: string;
+  required?: boolean;
+  checked?: boolean;
+  options?: string[];
+  fileHashes?: string[];
+  identifier?: string;
+}
+
+export interface FormSnapshot {
+  version: 1;
+  url: string;
+  fields: FormFieldSnapshot[];
+  attachments: string[];
+  screenshotPath?: string;
+  capturedAt: string;
+  hash: string;
+  readyToSubmit?: boolean;
+  blockers?: string[];
+  submitControl?: { label: string; identifier: string; action?: string; method?: string; encoding?: string };
+}
+
+export interface Approval {
+  version: 1;
+  id: string;
+  kind: "fill" | "submit";
+  userId: string;
+  applicationId: string;
+  targetUrl: string;
+  reviewHash: string;
+  createdAt: string;
+}
+
+export interface Application {
+  id: string;
+  userId: string;
+  jobId: string;
+  jobSnapshot?: Job;
+  status: ApplicationStatus;
+  packet?: ApplicationPacket;
+  packetHash?: string;
+  form?: FormSnapshot;
+  approvals: Approval[];
+  browserSessionId?: string;
+  browserSessionCreatedAt?: string;
+  browserConnectUrl?: string;
+  browserLiveUrl?: string;
+  needsCoverLetter?: boolean;
+  confirmation?: string;
+  submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string };
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt?: string;
+  submissionStartedAt?: string;
+  submissionWorkerClaimedAt?: string;
+  submissionAttemptedAt?: string;
+  queuedRun?: {
+    id: string;
+    kind: "draft" | "fill";
+    requestedAt: string;
+    reason: "waiting" | "budget" | "active_run";
+  };
+  runToken?: string;
+  runWorkerClaimedAt?: string;
+  runDispatch?: { kind: "draft" | "fill"; token: string; confirmedAt?: string };
+  runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
+  timeSavedMinutes?: number;
+  transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
+  controlledTest?: { expiresAt: number; submissions: number };
+}
+
+export interface ActivityEvent {
+  id: string;
+  at: string;
+  label: string;
+  detail: string;
+}
+
+export interface AppState {
+  profile: Profile;
+  jobs: Job[];
+  importedJobs: Job[];
+  feedback: JobFeedback[];
+  matchCache: Record<string, MatchAssessment>;
+  applications: Application[];
+  activity: ActivityEvent[];
+  lastRefreshAt?: string;
+  lastDigestAt?: string;
+  estimatedSpendUsd: number;
+  budgetMonth?: string;
+  budgetReservations?: Record<string, number>;
+  matchLabels?: Array<{ jobId: string; label: "strong" | "possible" | "uncertain"; profile: Profile; job: Job; labeledAt: string }>;
+}

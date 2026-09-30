@@ -1,0 +1,8 @@
+.env*
+.data/
+.trigger/
+.next*/
+node_modules/
+scripts/
+docs/
+supabase/
