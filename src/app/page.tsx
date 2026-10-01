@@ -164,6 +164,10 @@ export default function Dashboard() {
       app.status,
     ),
   );
+  const discoveryEvents = (data?.discovery?.events ?? [])
+    .filter((event) => event.kind === "arrived" || event.kind === "matched" || event.kind === "queued")
+    .slice(-3)
+    .reverse();
 
   if (!data)
     return (
@@ -322,6 +326,39 @@ export default function Dashboard() {
                 </div>
                 <button className="text-button" onClick={() => setSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
+              {data.discovery && (
+                <section className="discovery-pulse" aria-label="Discovery freshness">
+                  <div className="discovery-pulse-head">
+                    <div>
+                      <strong>Public opportunity monitor</strong>
+                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for the first public catalog check."}</p>
+                    </div>
+                    <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>
+                  </div>
+                  <div className="discovery-sources">
+                    {data.discovery.sources.map((source) => (
+                      <span key={source.source} className={source.status === "available" ? "available" : "unavailable"}>
+                        <i aria-hidden="true" />
+                        {source.source.replace(/:/g, " · ").replace(/[-_]/g, " ")}
+                        {source.status === "unavailable" ? " unavailable" : " checked"}
+                      </span>
+                    ))}
+                  </div>
+                  {data.discovery.pendingMatches ? <p className="discovery-backlog">{data.discovery.pendingMatches} eligible roles waiting for the next serialized matching pass.</p> : null}
+                  {discoveryEvents.length ? (
+                    <ul className="discovery-events">
+                      {discoveryEvents.map((event) => (
+                        <li key={event.id}>
+                          <span>{event.kind === "arrived" ? "New listing" : event.kind === "matched" ? "Match assessed" : "Application queued"}</span>
+                          <small>{event.delayMs != null ? `${formatDelay(event.delayMs)} after discovery` : relative(event.at)}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="discovery-empty">New arrivals and matching delays will appear here.</p>
+                  )}
+                </section>
+              )}
               {(incompleteFacts > 0 || !data.profile.resumeFileName) && (
                 <div className="review-banner">
                   <div className="banner-icon">
@@ -1637,6 +1674,12 @@ function relative(input: string) {
     Math.floor((Date.now() - new Date(input).getTime()) / 86400000),
   );
   return days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
+function formatDelay(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
 }
 function statusLabel(status: Application["status"]) {
   return {

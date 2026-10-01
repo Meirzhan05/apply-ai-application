@@ -37,8 +37,10 @@ export function explicitConflict(profile: Profile, job: Job): string | null {
   return null;
 }
 
-function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
+export function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
   const uncertainty: string[] = [];
+  if (!["authorized to work in the us", "requires sponsorship"].includes(profile.workAuthorization.trim().toLowerCase()))
+    uncertainty.push("Work authorization has not been confirmed.");
   if (job.importCheck && ["manual", "unavailable"].includes(job.importCheck.status))
     uncertainty.push(job.importCheck.message || "The imported posting needs verification.");
   if (profile.workAuthorization.trim().toLowerCase() === "requires sponsorship" &&
@@ -123,8 +125,6 @@ export function assessMatchLocally(
       : [];
   // A visa/student status or a free-form note does not answer employment
   // authorization or sponsorship. Only explicit search answers resolve this.
-  if (!["authorized to work in the us", "requires sponsorship"].includes(profile.workAuthorization.trim().toLowerCase()))
-    uncertainty.push("Work authorization has not been confirmed.");
   const hardRuleUncertainty = requiredRuleUncertainty(profile, job);
   uncertainty.push(...hardRuleUncertainty);
   const category =

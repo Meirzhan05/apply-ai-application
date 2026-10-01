@@ -26,8 +26,9 @@ describe("catalog closure and posting aliases", () => {
     const update = vi.fn(() => ({ eq }));
     vi.mocked(adminSupabase).mockReturnValue({ from: () => ({ update }) } as unknown as ReturnType<typeof adminSupabase>);
     const result = await refreshCatalog();
-    expect(result).toMatchObject({ sources: 1, jobs: 1, closed: 1 });
+    expect(result).toMatchObject({ sources: 1, jobs: 1, closed: 1, sourceStatus: [expect.objectContaining({ source: "greenhouse:acme", status: "available" }), expect.objectContaining({ source: "lever:other", status: "unavailable" })] });
     expect(result.errors[0]).toContain("429");
+    expect(result.arrivals).toHaveLength(0);
     expect(saveCatalog).toHaveBeenCalledWith([first, alias]);
     expect(eq).toHaveBeenCalledExactlyOnceWith("id", stale.id);
   });
