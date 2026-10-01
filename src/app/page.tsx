@@ -654,7 +654,8 @@ export default function Dashboard() {
                   <strong>{blockers.length} blocker{blockers.length === 1 ? "" : "s"} need your attention</strong>
                   <div className="blocker-list">
                     {blockers.map(({ blocker, app }) => {
-                      const jobTitle = jobs.find((job) => job.id === app.jobId)?.title ?? "Application";
+                      const job = jobs.find((item) => item.id === app.jobId);
+                      const jobTitle = job?.title ?? "Application";
                       const question = blocker.context?.observedQuestion;
                       const draft = blockerAnswers[blocker.id] ?? "";
                       const canAnswer = Boolean(question) && !blocker.reviewOnly && blocker.reason === "missing_answer";
@@ -667,7 +668,7 @@ export default function Dashboard() {
                           <span>{blocker.message}</span>
                           {question && <small>Observed {question.kind} control “{question.label}”{question.options.length ? ` · options: ${question.options.join(", ")}` : ""}</small>}
                         </div>
-                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small><button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
+                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small>{job?.url && <a className="text-button" href={job.url} target="_blank" rel="noreferrer">Open employer posting</a>}<button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
                           {question!.options.length ? <select aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))}>
                             <option value="">Choose an answer</option>
                             {question!.options.map((option) => <option key={option} value={option}>{option}</option>)}
