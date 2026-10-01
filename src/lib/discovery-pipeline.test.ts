@@ -127,10 +127,13 @@ vi.mock("@/lib/budget", () => ({
 }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-synthetic"), source: "synthetic-resume" }) }));
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("openai", () => ({ default: class { responses = { parse: async (input: { text?: { format?: { name?: string } } }) => {
+vi.mock("openai", () => ({ default: class { responses = { parse: async (input: { text?: { format?: { name?: string } }; input?: Array<{ content: string }> }) => {
   const name = input.text?.format?.name;
   if (name === "structured_resume") return { output_parsed: { education: [], experience: [{ heading: { text: "Synthetic project", factIds: ["fact-python"] }, subheading: { text: "Analyst", factIds: ["fact-python"] }, dates: { text: "", factIds: [] }, location: { text: "", factIds: [] }, bullets: [{ text: "Built a Python project to analyze survey data", factIds: ["fact-python"], relevance: 90 }] }], projects: [], skills: [{ text: "Python", factIds: ["fact-python"] }], links: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
-  if (name === "resume_grounding") return { output_parsed: { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
+  if (name === "resume_grounding_audit") {
+    const request = JSON.parse(input.input?.[1]?.content ?? "{}") as { claims: Array<{ claimId: string; factIds: string[] }> };
+    return { output_parsed: { findings: request.claims.map((claim) => ({ claimId: claim.claimId, outcome: "supported", reason: "The confirmed synthetic profile fact supports this résumé claim.", evidenceFactIds: claim.factIds, requiredInformation: null })) }, usage: { input_tokens: 10, output_tokens: 10 } };
+  }
   if (name === "application_draft") return { output_parsed: { selectedFactIds: ["fact-python"], answers: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
   return { output_parsed: { category: "strong", score: 95, evidence: [{ jobQuote: "Product Analyst", factIds: ["fact-python"] }], gaps: [], uncertainty: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
 } }; } }));
