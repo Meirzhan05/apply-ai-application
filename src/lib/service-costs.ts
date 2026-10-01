@@ -37,6 +37,8 @@ export interface CostEvidence {
   category: "model" | "browser";
   component: "model" | "browser" | "proxy";
   amountUsd: number | null;
+  measurement?: "measured" | "estimated";
+  rateVersion?: string;
   reconciledUsd: number | null;
   unknown: boolean;
   status: string;
@@ -172,21 +174,21 @@ export async function readServiceCosts(period?: string): Promise<ServiceCostReco
 }
 
 function modelEvidence(record: ModelUsageRecord): CostEvidence {
-  return { id: record.id, ownerId: record.userId, provider: record.provider, period: record.startedAt.slice(0, 7), category: "model", component: "model", amountUsd: record.estimatedUsd, reconciledUsd: null, unknown: record.estimatedUsd === null, status: record.status, applicationId: record.applicationId, backgroundJobId: record.backgroundJobId, runId: record.runId };
+  return { id: record.id, ownerId: record.userId, provider: record.provider, period: record.startedAt.slice(0, 7), category: "model", component: "model", amountUsd: record.estimatedUsd, measurement: record.estimatedUsd === null ? undefined : "estimated", rateVersion: record.rate?.version, reconciledUsd: null, unknown: record.estimatedUsd === null, status: record.status, applicationId: record.applicationId, backgroundJobId: record.backgroundJobId, runId: record.runId };
 }
-function browserEvidence(record: BrowserUsageRecord, amountUsd: number | null, unknown = amountUsd === null, period = record.occurredAt.slice(0, 7)): CostEvidence {
-  return { id: `browser:${record.provider}:${record.sessionId}:browser`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "browser", amountUsd, reconciledUsd: null, unknown, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
+function browserEvidence(record: BrowserUsageRecord, amountUsd: number | null, unknown = amountUsd === null, period = record.occurredAt.slice(0, 7), measurement?: "measured" | "estimated"): CostEvidence {
+  return { id: `browser:${record.provider}:${record.sessionId}:browser`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "browser", amountUsd, measurement, rateVersion: record.report?.rate?.version, reconciledUsd: null, unknown, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
 }
 function proxyEvidence(record: BrowserUsageRecord, amountUsd: number | null, period = record.occurredAt.slice(0, 7)): CostEvidence {
-  return { id: `browser:${record.provider}:${record.sessionId}:proxy`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "proxy", amountUsd, reconciledUsd: null, unknown: amountUsd === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
+  return { id: `browser:${record.provider}:${record.sessionId}:proxy`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "proxy", amountUsd, measurement: amountUsd === null ? undefined : "measured", rateVersion: record.report?.rate?.version, reconciledUsd: null, unknown: amountUsd === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
 }
 function nullSessionEvidence(record: BrowserUsageRecord, period = record.occurredAt.slice(0, 7)): CostEvidence {
   const amount = record.report?.browserCostUsd ?? null;
-  return { id: `browser:event:${record.id}`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "browser", amountUsd: amount, reconciledUsd: null, unknown: amount === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
+  return { id: `browser:event:${record.id}`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "browser", amountUsd: amount, measurement: amount === null ? undefined : "measured", rateVersion: record.report?.rate?.version, reconciledUsd: null, unknown: amount === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
 }
 function nullSessionProxyEvidence(record: BrowserUsageRecord, period = record.occurredAt.slice(0, 7)): CostEvidence {
   const amount = record.report?.proxyCostUsd ?? null;
-  return { id: `browser:event:${record.id}:proxy`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "proxy", amountUsd: amount, reconciledUsd: null, unknown: amount === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
+  return { id: `browser:event:${record.id}:proxy`, ownerId: record.userId, provider: record.provider, period, category: "browser", component: "proxy", amountUsd: amount, measurement: amount === null ? undefined : "measured", rateVersion: record.report?.rate?.version, reconciledUsd: null, unknown: amount === null, status: record.event, applicationId: record.applicationId, backgroundJobId: record.jobId, runId: record.runId };
 }
 function periodMatches(value: string | undefined, period: string | undefined): boolean { return !period || Boolean(value && value.slice(0, 7) === period); }
 function modelMeasurementScore(record: ModelUsageRecord): number {
@@ -269,7 +271,7 @@ export async function costReport(ownerId: string, options: { service?: boolean; 
     const durationMinutes = Number.isFinite(start) && Number.isFinite(finish) && finish >= start ? Math.max(1, Math.ceil((finish - start) / 60_000)) : null;
     const estimatedBrowser = browserCost === undefined && durationMinutes !== null && report.rate ? durationMinutes * report.rate.browserUsdPerMinute : null;
     const amount = browserCost === undefined && estimatedBrowser === null ? null : (browserCost ?? estimatedBrowser ?? 0);
-    addUniqueEvidence(evidence, browserEvidence(record, amount, browserCost === undefined, browserCanonicalPeriod(sessionRecords)));
+    addUniqueEvidence(evidence, browserEvidence(record, amount, browserCost === undefined && estimatedBrowser === null, browserCanonicalPeriod(sessionRecords), browserCost !== undefined ? "measured" : estimatedBrowser !== null ? "estimated" : undefined));
     addUniqueEvidence(evidence, proxyEvidence(record, proxyCost ?? null, browserCanonicalPeriod(sessionRecords)));
   }
   const relevantLines = service ? lines : lines.filter((line) => line.allocations.some((allocation) => allocation.userId === ownerId));

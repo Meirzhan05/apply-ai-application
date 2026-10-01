@@ -23,5 +23,7 @@ it("keeps archived submitted materials behind the configured operator boundary",
   expect(response.status).toBe(200);
   expect(await response.text()).toBe("archived-packet");
   mocks.user.mockResolvedValue("owner-a");
+  expect((await GET(new Request("http://localhost/api/pilot/evidence/owner-a/app-a/resume"), { params: Promise.resolve({ ownerId: "owner-a", applicationId: "app-a", kind: "resume" }) })).status).toBe(200);
+  mocks.user.mockResolvedValue("other-owner");
   expect((await GET(new Request("http://localhost/api/pilot/evidence/owner-a/app-a/resume"), { params: Promise.resolve({ ownerId: "owner-a", applicationId: "app-a", kind: "resume" }) })).status).toBe(404);
 });

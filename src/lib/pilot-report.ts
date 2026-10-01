@@ -1,5 +1,5 @@
 import { hashJson, newId } from "@/lib/crypto";
-import { allPilotAttempts, pilotAttemptExcluded, pilotAttemptHasIntervention, PILOT_GATE_VERSION } from "@/lib/pilot";
+import { allPilotAttempts, pilotAttemptExcluded, pilotAttemptHasIntervention, pilotEvidenceDigest, PILOT_GATE_VERSION } from "@/lib/pilot";
 import type { AppState, PilotActor, PilotAttempt, PilotCohort, PilotGateStatus, PilotReportSnapshot } from "@/lib/types";
 import { costReport } from "@/lib/service-costs";
 
@@ -9,7 +9,7 @@ function confirmed(attempt: PilotAttempt): boolean {
 
 function reviewed(attempt: PilotAttempt): boolean {
   const review = attempt.reviews.at(-1);
-  return Boolean(review && review.suitability === "pass" && review.factualAccuracy === "pass");
+  return Boolean(review && review.evidenceDigest === pilotEvidenceDigest(attempt) && review.suitability === "pass" && ["pass", "not-applicable"].includes(review.factualAccuracy));
 }
 
 function safeCell(value: unknown): string {
@@ -19,7 +19,7 @@ function safeCell(value: unknown): string {
 
 export function pilotReportStatus(reasons: string[]): PilotGateStatus {
   if (reasons.includes("fewer-than-20-real-initiated")) return "insufficient-real-evidence";
-  if (reasons.some((reason) => reason === "cohorts-missing" || reason === "unattended-rate-below-80-percent")) return "failed";
+  if (reasons.some((reason) => reason === "cohorts-missing" || reason === "unattended-rate-below-80-percent" || reason === "confirmed-attempt-review-failed")) return "failed";
   if (reasons.includes("confirmed-attempt-review-incomplete")) return "review-incomplete";
   return "passed";
 }
@@ -30,14 +30,28 @@ export function buildPilotReportSnapshot(
   options: { ownerId?: string; cutoffAt?: string; stateOwnerIds?: string[] } = {},
 ): PilotReportSnapshot {
   const cutoffAt = options.cutoffAt ?? new Date().toISOString();
-  const attempts = allPilotAttempts(state)
+  const allAttempts = allPilotAttempts(state);
+  const permanentlyExcluded = new Set(allAttempts.filter((attempt) => attempt.origin === "controlled" || attempt.events.some((event) => event.kind === "controlled-excluded")).map((attempt) => attempt.id));
+  const attempts = allAttempts
     .filter((attempt) => !options.ownerId || attempt.ownerId === options.ownerId)
     .filter((attempt) => attempt.initiatedAt <= cutoffAt)
-    .map((attempt) => structuredClone(attempt))
+    .map((attempt) => {
+      const snapshot = structuredClone(attempt);
+      const exclusionEvents = snapshot.events.filter((event) => event.kind === "controlled-excluded");
+      if (exclusionEvents.length) snapshot.controlledExclusion = { eventIds: exclusionEvents.map((event) => event.id), latestAt: exclusionEvents.at(-1)!.at, afterCutoff: exclusionEvents.some((event) => event.at > cutoffAt) };
+      snapshot.events = snapshot.events.filter((event) => event.at <= cutoffAt);
+      snapshot.reviews = snapshot.reviews.filter((review) => review.createdAt <= cutoffAt);
+      const submissionEvent = snapshot.events.find((event) => event.kind === "submission-attempted");
+      if (!submissionEvent) {
+        snapshot.submissionProfileSnapshot = undefined;
+        snapshot.submissionEvidenceHash = undefined;
+      }
+      return { ...snapshot, currentEvidenceDigest: pilotEvidenceDigest(snapshot) };
+    })
     .sort((left, right) => left.initiatedAt.localeCompare(right.initiatedAt) || left.id.localeCompare(right.id));
-  const real = attempts.filter((attempt) => attempt.origin === "real" && !pilotAttemptExcluded(attempt));
-  const controlled = attempts.filter((attempt) => pilotAttemptExcluded(attempt));
-  const unknown = attempts.filter((attempt) => attempt.origin === "unknown" && !pilotAttemptExcluded(attempt));
+  const real = attempts.filter((attempt) => attempt.origin === "real" && !permanentlyExcluded.has(attempt.id) && !pilotAttemptExcluded(attempt));
+  const controlled = attempts.filter((attempt) => permanentlyExcluded.has(attempt.id) || pilotAttemptExcluded(attempt));
+  const unknown = attempts.filter((attempt) => attempt.origin === "unknown" && !permanentlyExcluded.has(attempt.id) && !pilotAttemptExcluded(attempt));
   const confirmedReal = real.filter(confirmed);
   const unattendedConfirmed = confirmedReal.filter((attempt) => !pilotAttemptHasIntervention(attempt));
   const cohorts: Record<PilotCohort, { initiated: number; confirmed: number }> = {
@@ -54,6 +68,7 @@ export function buildPilotReportSnapshot(
   if (!cohorts.internship.initiated || !cohorts["new-grad"].initiated) reasons.push("cohorts-missing");
   if (real.length && unattendedConfirmed.length / real.length < 0.8) reasons.push("unattended-rate-below-80-percent");
   if (confirmedReal.some((attempt) => !reviewed(attempt))) reasons.push("confirmed-attempt-review-incomplete");
+  if (confirmedReal.some((attempt) => { const review = attempt.reviews.at(-1); return review?.suitability === "fail" || review?.factualAccuracy === "fail"; })) reasons.push("confirmed-attempt-review-failed");
   const status = pilotReportStatus(reasons);
   return {
     version: 1,
@@ -74,22 +89,35 @@ export function buildPilotReportSnapshot(
       unknownCosts: real.filter((attempt) => attempt.costEvidence?.status !== "measured").length,
     },
     cohorts,
-    sourceManifest: { stateOwnerIds: options.stateOwnerIds ?? (options.ownerId ? [options.ownerId] : createdBy.userId ? [createdBy.userId] : []), stateReadAt: new Date().toISOString(), stateRows: (options.stateOwnerIds ?? (options.ownerId ? [options.ownerId] : createdBy.userId ? [createdBy.userId] : [])).map((ownerId) => ({ ownerId, readAt: new Date().toISOString() })) },
+  sourceManifest: { stateOwnerIds: options.stateOwnerIds ?? (options.ownerId ? [options.ownerId] : createdBy.userId ? [createdBy.userId] : []), stateReadAt: new Date().toISOString(), complete: true, stateRows: (options.stateOwnerIds ?? (options.ownerId ? [options.ownerId] : createdBy.userId ? [createdBy.userId] : [])).map((ownerId) => ({ ownerId, readAt: new Date().toISOString(), eventPrefixes: [] })), controlledExclusions: attempts.flatMap((attempt) => attempt.controlledExclusion ? [{ attemptId: attempt.id, eventIds: attempt.controlledExclusion.eventIds, latestAt: attempt.controlledExclusion.latestAt }] : []) },
     attempts,
   };
 }
 
 /** Adds provider ledger references without changing the immutable denominator. */
 export async function attachPilotCostEvidence(report: PilotReportSnapshot, options: { ownerId?: string; service?: boolean; period?: string } = {}): Promise<PilotReportSnapshot> {
-  const costs = await costReport(options.ownerId ?? report.createdBy.userId ?? "", { service: options.service, period: options.period });
+  let costs;
+  try {
+    costs = await costReport(options.ownerId ?? report.createdBy.userId ?? "", { service: options.service, period: options.period });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 240) : "Cost evidence could not be loaded.";
+    return {
+      ...report,
+      totals: { ...report.totals, unknownCosts: report.attempts.length },
+      sourceManifest: { ...report.sourceManifest, cost: { scope: options.service ? "service" : "owner", period: options.period, evidenceIds: [], unknownComponents: 1, complete: false, error: message, capturedAt: new Date().toISOString() } },
+      attempts: report.attempts.map((attempt) => ({ ...attempt, costEvidence: { ...attempt.costEvidence, status: "unknown", measuredUsd: undefined, estimatedUsd: undefined, reconciledUsd: undefined, evidenceIds: [], capturedAt: new Date().toISOString() } })),
+    };
+  }
   const attempts = report.attempts.map((attempt) => {
     const evidence = costs.evidence.filter((item) => item.applicationId === attempt.applicationId);
     const known = evidence.filter((item) => item.amountUsd !== null);
-    const status: "unknown" | "incomplete" | "measured" = evidence.length === 0 || evidence.some((item) => item.unknown) ? (evidence.length ? "incomplete" : "unknown") : "measured";
+    const measured = known.filter((item) => item.measurement === "measured");
+    const estimated = known.filter((item) => item.measurement === "estimated");
+    const status: "unknown" | "incomplete" | "estimated" | "measured" = evidence.length === 0 || evidence.some((item) => item.unknown) ? (evidence.length ? "incomplete" : "unknown") : estimated.length ? "estimated" : "measured";
     const reconciled = known.filter((item) => item.reconciledUsd !== null);
-    return { ...attempt, costEvidence: { ...attempt.costEvidence, status, measuredUsd: known.length ? known.reduce((sum, item) => sum + (item.amountUsd ?? 0), 0) : undefined, reconciledUsd: reconciled.length ? reconciled.reduce((sum, item) => sum + (item.reconciledUsd ?? 0), 0) : undefined, evidenceIds: evidence.map((item) => item.id).slice(0, 100), capturedAt: new Date().toISOString() } };
+    return { ...attempt, costEvidence: { ...attempt.costEvidence, status, estimatedUsd: estimated.length ? estimated.reduce((sum, item) => sum + (item.amountUsd ?? 0), 0) : undefined, measuredUsd: measured.length ? measured.reduce((sum, item) => sum + (item.amountUsd ?? 0), 0) : undefined, reconciledUsd: reconciled.length ? reconciled.reduce((sum, item) => sum + (item.reconciledUsd ?? 0), 0) : undefined, evidenceIds: evidence.map((item) => item.id), estimatedEvidenceIds: estimated.map((item) => item.id), measuredEvidenceIds: measured.map((item) => item.id), reconciledEvidenceIds: reconciled.map((item) => item.id), rateVersions: [...new Set(evidence.map((item) => item.rateVersion).filter((item): item is string => Boolean(item)))], capturedAt: new Date().toISOString() } };
   });
-  return { ...report, attempts, sourceManifest: { ...report.sourceManifest, cost: { scope: costs.scope, period: costs.period, evidenceIds: costs.evidence.map((item) => item.id).slice(0, 500), unknownComponents: costs.unknownComponents, capturedAt: new Date().toISOString() } } };
+  return { ...report, attempts, totals: { ...report.totals, unknownCosts: attempts.filter((attempt) => attempt.costEvidence.status !== "measured").length }, sourceManifest: { ...report.sourceManifest, cost: { scope: costs.scope, period: costs.period, evidenceIds: costs.evidence.map((item) => item.id), unknownComponents: costs.unknownComponents, complete: costs.unknownComponents === 0, capturedAt: new Date().toISOString() } } };
 }
 
 export function pilotReportCsv(report: PilotReportSnapshot): string {
@@ -120,7 +148,7 @@ export function pilotReportDigest(report: PilotReportSnapshot): string {
 }
 
 export function pilotReportIdentity(report: PilotReportSnapshot): string {
-  return hashJson({ gateVersion: report.gateVersion, cutoffAt: report.cutoffAt, stateOwnerIds: report.sourceManifest.stateOwnerIds, stateRows: report.sourceManifest.stateRows.map((row) => ({ ownerId: row.ownerId, revision: row.revision })), cost: report.sourceManifest.cost ? { scope: report.sourceManifest.cost.scope, period: report.sourceManifest.cost.period, evidenceIds: report.sourceManifest.cost.evidenceIds, unknownComponents: report.sourceManifest.cost.unknownComponents } : undefined, attempts: report.attempts.map((attempt) => ({ id: attempt.id, applicationId: attempt.applicationId, events: attempt.events, reviews: attempt.reviews, costEvidence: { ...attempt.costEvidence, capturedAt: undefined } })) });
+  return hashJson({ gateVersion: report.gateVersion, cutoffAt: report.cutoffAt, stateOwnerIds: report.sourceManifest.stateOwnerIds, complete: report.sourceManifest.complete, stateRows: report.sourceManifest.stateRows.map((row) => ({ ownerId: row.ownerId, revision: row.revision, eventPrefixes: row.eventPrefixes })), controlledExclusions: report.sourceManifest.controlledExclusions, cost: report.sourceManifest.cost ? { scope: report.sourceManifest.cost.scope, period: report.sourceManifest.cost.period, evidenceIds: report.sourceManifest.cost.evidenceIds, unknownComponents: report.sourceManifest.cost.unknownComponents } : undefined, attempts: report.attempts.map((attempt) => ({ id: attempt.id, applicationId: attempt.applicationId, events: attempt.events, reviews: attempt.reviews, controlledExclusion: attempt.controlledExclusion, costEvidence: { ...attempt.costEvidence, capturedAt: undefined } })) });
 }
 
 export function ownerPilotReport(report: PilotReportSnapshot, ownerId: string): PilotReportSnapshot {

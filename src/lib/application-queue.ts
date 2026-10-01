@@ -10,6 +10,7 @@ import { explicitConflict } from "@/lib/matching";
 import { runDraft, runFill, type RunPayload } from "@/lib/application-runs";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { AppState } from "@/lib/types";
+import type { PilotMutationContext } from "@/lib/pilot";
 
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
@@ -17,7 +18,7 @@ export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
       (["final_review", "needs_user_action", "approved_to_submit", "awaiting_verification", "uncertain"].includes(app.status) && Boolean(app.browserSessionId))));
 }
 
-export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays") {
+export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays", context?: PilotMutationContext) {
   await mutateState(userId, (state) => {
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app) throw new Error("Application not found.");
@@ -36,7 +37,7 @@ export async function queueApplicationRun(userId: string, applicationId: string,
     if (conflict) throw new Error(conflict);
     app.queuedRun = { id: newId(), kind, ...(draftMode ? { draftMode } : {}), requestedAt: new Date().toISOString(), reason: "waiting" };
     app.error = undefined;
-  });
+  }, context);
   await dispatchUserQueue(userId);
 }
 

@@ -1259,16 +1259,7 @@ export async function submitBrowser(application: Application, options?: { profil
   } finally {
     if ((clicked && !keepSession) || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (clicked && !keepSession) {
-      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      try { await cancelBrowser(application, { strict: true }); }
-      catch (error) {
-        if (application.browserSessionId) application.browserReleasePending = {
-          sessionId: application.browserSessionId,
-          requestedAt: new Date().toISOString(),
-          attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
-          lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
-        };
-      }
+      await finalizeBrowserRelease(application);
     }
   }
 }
@@ -1292,17 +1283,22 @@ export async function checkBrowserSubmission(application: Application): Promise<
   } finally {
     if (finished || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (finished) {
-      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      try { await cancelBrowser(application, { strict: true }); }
-      catch (error) {
-        if (application.browserSessionId) application.browserReleasePending = {
-          sessionId: application.browserSessionId,
-          requestedAt: new Date().toISOString(),
-          attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
-          lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
-        };
-      }
+      await finalizeBrowserRelease(application);
     }
+  }
+}
+
+async function finalizeBrowserRelease(application: Application): Promise<void> {
+  if (!application.browserSessionId) return;
+  try {
+    await cancelBrowser(application, { strict: true });
+  } catch (error) {
+    application.browserReleasePending = {
+      sessionId: application.browserSessionId,
+      requestedAt: new Date().toISOString(),
+      attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
+      lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
+    };
   }
 }
 

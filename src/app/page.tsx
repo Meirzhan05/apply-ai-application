@@ -233,7 +233,7 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
-        <a href="/usage" style={{ padding: "16px 24px", color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a>
+        <div style={{ display: "flex", gap: 18, padding: "16px 24px" }}><a href="/usage" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a><a href="/pilot" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>Autonomy pilot</a></div>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />

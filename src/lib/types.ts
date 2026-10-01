@@ -605,11 +605,16 @@ export interface PilotEvent {
 
 export interface PilotCostEvidence {
   version: 1;
-  status: "unknown" | "incomplete" | "measured";
+  status: "unknown" | "incomplete" | "estimated" | "measured";
   projectedUsd: number;
+  estimatedUsd?: number;
   measuredUsd?: number;
   reconciledUsd?: number;
   evidenceIds: string[];
+  estimatedEvidenceIds?: string[];
+  measuredEvidenceIds?: string[];
+  reconciledEvidenceIds?: string[];
+  rateVersions?: string[];
   capturedAt?: string;
 }
 
@@ -649,6 +654,13 @@ export interface PilotAttempt {
   costEvidence: PilotCostEvidence;
   events: PilotEvent[];
   reviews: PilotReview[];
+  /** Immutable profile/facts snapshot captured with the durable pre-click marker. */
+  submissionProfileSnapshot?: PilotProfileSnapshot;
+  submissionEvidenceHash?: string;
+  /** Report-only provenance for a late controlled exclusion. */
+  controlledExclusion?: { eventIds: string[]; latestAt: string; afterCutoff: boolean };
+  /** Derived only on report snapshots so an operator can submit a current review. */
+  currentEvidenceDigest?: string;
 }
 
 export interface PilotState {
@@ -682,12 +694,16 @@ export interface PilotReportSnapshot {
   sourceManifest: {
     stateOwnerIds: string[];
     stateReadAt: string;
-    stateRows: Array<{ ownerId: string; revision?: number; readAt: string }>;
+    complete: boolean;
+    stateRows: Array<{ ownerId: string; revision?: number; readAt: string; eventPrefixes: Array<{ attemptId: string; eventIds: string[]; reviewIds: string[] }> }>;
+    controlledExclusions: Array<{ attemptId: string; eventIds: string[]; latestAt: string }>;
     cost?: {
       scope: "owner" | "service";
       period?: string;
       evidenceIds: string[];
       unknownComponents: number;
+      complete: boolean;
+      error?: string;
       capturedAt: string;
     };
   };
