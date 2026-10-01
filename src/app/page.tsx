@@ -156,6 +156,8 @@ export default function Dashboard() {
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
+  const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
+  const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
@@ -642,10 +644,10 @@ export default function Dashboard() {
         )}
         {section === "applications" && (
           <main className="wide-panel">
-            {!applications.some((app) => app.autonomousAuthorization) && <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>}
+            {!hasAutomaticApplications && <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>}
             <h1>Your applications</h1>
             <p className="subheading">
-              {applications.some((app) => app.autonomousAuthorization) ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
+              {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">
@@ -737,7 +739,7 @@ export default function Dashboard() {
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
-                    {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && !activeApp.autonomousAuthorization && (
+                    {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && (!activeApp.importedOutcome || activeApp.importedOutcome.kind === "reachable") && !activeApp.autonomousAuthorization && (
                       <div className="step-card" aria-label="Imported employer compatibility">
                         <h3>Check the employer posting first</h3>
                         <p>{activeApp.importedCompatibility?.status === "reachable"
@@ -747,7 +749,7 @@ export default function Dashboard() {
                         {activeApp.importedCompatibility?.blocker && <p className="muted">{activeApp.importedCompatibility.blocker}</p>}
                       </div>
                     )}
-                    {!activeApp.autonomousAuthorization && <div className="progress">
+                    {!activeAppIsAutomatic && <div className="progress">
                       {[
                         "Selected",
                         "Packet",
@@ -778,7 +780,7 @@ export default function Dashboard() {
                       </div>
                     )}
                     {activeApp.status === "drafting" && <p role="status">Preparing your packet from confirmed facts…</p>}
-                    {!activeApp.autonomousAuthorization && activeApp.status === "selected" && !activeApp.queuedRun && (
+                    {!activeAppIsAutomatic && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Prepare your application packet</h3>
                         <p>
@@ -799,7 +801,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
-                    {!activeApp.autonomousAuthorization && activeApp.packet &&
+                    {!activeAppIsAutomatic && activeApp.packet &&
                       [
                         "draft_review",
                         "authorized_to_fill",
@@ -960,7 +962,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    {!activeApp.autonomousAuthorization && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
+                    {!activeAppIsAutomatic && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
                         <p>
@@ -1004,7 +1006,7 @@ export default function Dashboard() {
                         form…
                       </div>
                     )}
-                    {!activeApp.autonomousAuthorization && activeApp.status === "needs_user_action" && (
+                    {!activeAppIsAutomatic && activeApp.status === "needs_user_action" && (
                       <>
                       {activeApp.browserSessionId && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
@@ -1053,7 +1055,7 @@ export default function Dashboard() {
                       </div>
                       </>
                     )}
-                    {!activeApp.autonomousAuthorization && activeApp.form &&
+                    {!activeAppIsAutomatic && activeApp.form &&
                       [
                         "final_review",
                         "approved_to_submit",
@@ -1154,7 +1156,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    {activeApp.status === "submitted" && (
+                    {activeApp.status === "submitted" && !activeAppIsAutomatic && (
                       <div className="success-note">
                         <Check size={20} />
                         <div>
@@ -1165,7 +1167,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
-                    {activeApp.status === "uncertain" && (
+                    {activeApp.status === "uncertain" && !activeAppIsAutomatic && (
                       <div className="warning-note">
                         <CircleHelp size={20} />
                         <div>
@@ -1209,7 +1211,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
-                    {activeApp.error && activeApp.status !== "uncertain" && (
+                    {activeApp.error && activeApp.status !== "uncertain" && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
                     {![
