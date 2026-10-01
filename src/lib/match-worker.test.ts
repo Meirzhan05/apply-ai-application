@@ -83,12 +83,12 @@ describe("matching worker account and profile lifecycle", () => {
     vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-secret");
     state.profile.id = "11111111-1111-4111-8111-111111111111";
     state.profile.workAuthorization = "Authorized to work in the US";
-    const fixtureJob = { ...state.jobs[0], id: "controlled-fixture-job", url: "https://controlled.example.test/fixture", applyUrl: "https://controlled.example.test/fixture" };
+    const fixtureJob = { ...state.jobs[0], id: "controlled-fixture-job", url: "https://apply.example/api/internal/controlled-form", applyUrl: "https://apply.example/api/internal/controlled-form" };
     const realJob = { ...state.jobs[1], id: "real-catalog-job", sourceId: "real-catalog-job", url: "https://employer.example/jobs/real", applyUrl: "https://employer.example/jobs/real" };
     state.jobs = [fixtureJob, realJob];
     const application = selectApplication(state, fixtureJob.id, state.profile.id);
     const issued = issueControlledTestGrant(state.profile.id, application.id);
-    fixtureJob.url = fixtureJob.applyUrl = `https://controlled.example.test/fixture?token=${issued.token}`;
+    fixtureJob.url = fixtureJob.applyUrl = `https://apply.example/api/internal/controlled-form?token=${issued.token}`;
     application.jobSnapshot = structuredClone(fixtureJob);
     application.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0 };
     mocks.assess.mockImplementation(async (_profile: unknown, job: { id: string }) => ({ version: 1, category: "uncertain", score: 0, evidence: [], gaps: [], uncertainty: [job.id], model: "fixture", evaluatedAt: "2026-10-01T12:00:00.000Z" }));

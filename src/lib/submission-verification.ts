@@ -44,6 +44,7 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
         target.submittedAt = new Date().toISOString();
         target.confirmation = result.evidence;
         target.submissionVerification = undefined;
+        if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: "confirmed", at: new Date().toISOString(), evidence: result.evidence, synthetic: Boolean(target.controlledTest) };
       } else if (result?.verification) {
         target.confirmation = result.evidence;
         target.updatedAt = new Date().toISOString();
@@ -52,6 +53,7 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
         transition(target, ["awaiting_verification", "uncertain"], "uncertain");
         target.confirmation = result?.evidence || (expired ? "The verification browser expired before confirmation. Check the employer receipt before taking further action." : "Verification was stopped before confirmation. Check the employer receipt before taking further action.");
         target.submissionVerification = undefined;
+        if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: "uncertain", at: new Date().toISOString(), evidence: target.confirmation, synthetic: Boolean(target.controlledTest) };
       }
       if (released) target.browserSessionId = target.browserLiveUrl = target.browserConnectUrl = undefined;
       else {

@@ -2,7 +2,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
-const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
   return { ...fs, writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
@@ -17,10 +17,10 @@ vi.mock("node:fs/promises", async (original) => {
 
 vi.mock("@trigger.dev/sdk", () => ({ task: (config: unknown) => config, tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => { fixture.pending.push({ task, payload }); if (fixture.triggerFailure === task) throw new Error("Accepted handoff timed out"); return { id: "dispatch" }; } } }));
 vi.mock("@/lib/repository", () => ({ isDemo: () => false, currentUserId: async () => fixture.state!.profile.id, loadState: async () => { const snapshot = structuredClone(fixture.state); await fixture.afterLoad?.(fixture.state!); return snapshot; }, mutateState: async (_user: string, change: (state: AppState) => unknown) => { const pending = fixture.queue.then(async () => { const result = await change(fixture.state!); fixture.saved.push(structuredClone(fixture.state!)); return result; }); fixture.queue = pending.then(() => undefined, () => undefined); return pending; } }));
-vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => fixture.budget, reserveQueuedBudget: async (_user: string, app: string, queued: string, projected: number) => fixture.budget ? { queuedId: queued, reservationId: `queued:${queued}`, month: "2026-10", ownerId: "owner", applicationId: app, projectedUsd: projected } : null, releaseQueuedBudget: async () => true, markQueuedBudgetClaimed: async () => true, markQueuedBudgetTerminal: async () => true }));
+vi.mock("@/lib/budget", () => ({ serviceBudgetMonth: () => "2026-10", browserBudgetReservationId: (applicationId: string, attemptId: string) => `browser:${applicationId}:${attemptId}`, releaseBrowserBudget: async () => true, reserveServiceBudget: async () => fixture.budget, reserveBrowserBudget: async () => fixture.budget, reserveQueuedBudget: async (_user: string, app: string, queued: string, projected: number) => fixture.budget ? { queuedId: queued, reservationId: `queued:${queued}`, month: "2026-10", ownerId: "owner", applicationId: app, projectedUsd: projected } : null, releaseQueuedBudget: async () => true, markQueuedBudgetClaimed: async () => true, markQueuedBudgetTerminal: async () => true }));
 vi.mock("openai", () => ({ default: class { responses = { parse: fixture.parse }; } }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-controlled"), source: "controlled compiler" }) }));
-vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
+vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, preflightBrowser: fixture.preflight, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
 import { initialDemoState } from "@/lib/demo-data";
 import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
@@ -38,6 +38,7 @@ beforeEach(() => {
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
   saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
   fixture.parse.mockImplementation(async (input) => ({ id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed: input.text.format.name === "structured_resume" ? source.document : { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }));
+  fixture.preflight.mockReset();
   fixture.prepare.mockImplementation(async (app, job, _profile, onSession, onAction) => { await onSession({ sessionId: "session", provider: "browser-use" }); await onAction("Known fields filled"); const file = app.packet.files[0]; return { sessionId: "session", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: { version: 1, url: job.applyUrl, fields: [{ label: "Resume", value: file.filename, identifier: "resume", kind: "file", required: true, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }], attachments: [file.filename], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: job.applyUrl, method: "post" } } }; });
   fixture.submit.mockImplementation(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => { const baseline = { version: 1 as const, kind: "captcha" as const, sessionId: app.browserSessionId!, targetUrl: app.form!.url, attemptedAt: new Date().toISOString(), beforeHash: "baseline", beforeHadConfirmation: false }; expect(await options.beforeAttempt(baseline)).toBe(true); expect(fixture.state!.applications[0].submissionAttemptedAt).toBe(baseline.attemptedAt); return { confirmed: true, evidence: "Application received", receipt: { version: 1, url: app.form!.url, text: "Application received", capturedAt: new Date().toISOString() } }; });
 });
@@ -685,4 +686,37 @@ it("renders a factual-only receiver and accepts the exact known fields once", as
   expect((await receiver.POST(new Request(url, { method: "POST", headers: { Origin: "https://apply.example" }, body: body("Chips") }))).status).toBe(200);
   expect((await receiver.POST(new Request(url, { method: "POST", headers: { Origin: "https://apply.example" }, body: body("Chips") }))).status).toBe(409);
   expect(state.applications[0].controlledTest!.submissions).toBe(1);
+});
+it("runs the imported posting check and queues the same application when the public action is reachable", async () => {
+  const state = fixture.state!;
+  const job = {
+    ...state.jobs[0],
+    id: "imported-route-job",
+    source: "imported" as const,
+    sourceId: "route-import",
+    sourceLabel: "Imported link",
+    url: "https://employer.example/jobs/1",
+    applyUrl: "https://employer.example/jobs/1/apply",
+    importUrl: "https://employer.example/jobs/1",
+    importCheck: { status: "manual" as const, checkedAt: new Date().toISOString() },
+  };
+  state.jobs = [job];
+  fixture.preflight.mockImplementation(async (_application: Application, _job: unknown, onSession: (session: { sessionId: string; provider: "browser-use" }) => Promise<boolean>) => {
+    expect(await onSession({ sessionId: "route-preflight", provider: "browser-use" })).toBe(true);
+    return {
+      form: { version: 1 as const, url: job.applyUrl, fields: [{ label: "Email", value: "", identifier: "email", kind: "email", required: true, valid: false }], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: false, blockers: ["Correct or complete the field: Email"], submitControl: { label: "Submit", identifier: "submit", action: `${job.applyUrl}/submit`, method: "post" } },
+      contextHash: "route-context",
+      postingContext: { title: job.title, company: job.company, text: `${job.title} at ${job.company}` },
+      postingEvidence: { postingUrl: job.url, postingIdentityHash: "route-posting-identity", title: job.title, company: job.company, markers: [job.title, job.company], identityHash: "route-identity" },
+      sessionId: "route-preflight",
+      provider: "browser-use" as const,
+    };
+  });
+  const response = await action("preflightImportedPosting", { jobId: job.id });
+  expect(response.status).toBe(200);
+  const app = state.applications.find((item) => item.jobId === job.id)!;
+  expect(app.importedCompatibility?.status).toBe("reachable");
+  expect(app.autonomousAuthorization).toBeDefined();
+  expect(app.status).toBe("drafting");
+  expect(fixture.pending.some((item) => item.task === "draft-application-packet" && item.payload.applicationId === app.id)).toBe(true);
 });

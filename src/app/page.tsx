@@ -1,5 +1,5 @@
 "use client";
-import { AutonomousApplicationStatus, autonomousOutcome } from "@/components/autonomous-application-status";
+import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
@@ -446,6 +446,7 @@ export default function Dashboard() {
                       (app) =>
                         app.jobId === job.id && app.status !== "cancelled",
                     );
+                    const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
                     return (
                       <article className="job-row" key={job.id}>
                         <div className="company-block">
@@ -558,7 +559,7 @@ export default function Dashboard() {
                                 Boolean(busy) || match?.category === "excluded"
                               }
                               onClick={async () => {
-                                const next = await act(data.automation.enabled ? "startAutonomous" : "select", {
+                                const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
                                   jobId: job.id,
                                 });
                                 if (next) {
@@ -572,7 +573,7 @@ export default function Dashboard() {
                                 }
                               }}
                             >
-                              {data.automation.enabled ? "Apply automatically" : "Prepare application"}
+                              {data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
                             </button>
                           )}
                           <a
@@ -658,6 +659,7 @@ export default function Dashboard() {
                       const draft = blockerAnswers[blocker.id] ?? "";
                       const canAnswer = Boolean(question) && !blocker.reviewOnly && blocker.reason === "missing_answer";
                       const handoff = ["login", "verification", "unfamiliar_control"].includes(blocker.reason);
+                      const canRecheckImported = !blocker.reviewOnly && blocker.reason !== "resource_hold" && importedPreflightRecheckAvailable(app);
                       return <div className="blocker-row" key={blocker.id}>
                         <div className="blocker-copy">
                           <strong>{jobTitle}</strong>
@@ -665,7 +667,7 @@ export default function Dashboard() {
                           <span>{blocker.message}</span>
                           {question && <small>Observed {question.kind} control “{question.label}”{question.options.length ? ` · options: ${question.options.join(", ")}` : ""}</small>}
                         </div>
-                        {!blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
+                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small><button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
                           {question!.options.length ? <select aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))}>
                             <option value="">Choose an answer</option>
                             {question!.options.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -699,7 +701,7 @@ export default function Dashboard() {
                         <span>
                           <strong>{job?.title ?? "Application"}</strong>
                           <small>
-                            {job?.company} · {app.autonomousAuthorization ? autonomousOutcome(app) : statusLabel(app.status)}
+                            {job?.company} · {app.autonomousAuthorization || app.importedOutcome ? autonomousOutcome(app) : statusLabel(app.status)}
                           </small>
                         </span>
                         <ArrowRight size={16} />
@@ -730,10 +732,20 @@ export default function Dashboard() {
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
                       </div>
-                      <span className="status-pill">
-                        {activeApp.autonomousAuthorization ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
+                    <span className="status-pill">
+                        {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
+                    {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && !activeApp.autonomousAuthorization && (
+                      <div className="step-card" aria-label="Imported employer compatibility">
+                        <h3>Check the employer posting first</h3>
+                        <p>{activeApp.importedCompatibility?.status === "reachable"
+                          ? "The posting and supported form were checked. We’re ready to continue with your saved profile and chosen materials."
+                          : "We’ll check the public posting and supported form without filling or submitting anything. If everything still matches, we’ll continue with your saved profile and chosen materials."}</p>
+                        {activeApp.importedCompatibility?.status === "reachable" ? <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("startAutonomous", { jobId: appJob.id })}>{busy === "startAutonomous" ? "Starting…" : "Continue automatically"}</button> : <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("preflightImportedPosting", { jobId: appJob.id })}>{busy === "preflightImportedPosting" ? "Checking…" : "Verify and apply automatically"}</button>}
+                        {activeApp.importedCompatibility?.blocker && <p className="muted">{activeApp.importedCompatibility.blocker}</p>}
+                      </div>
+                    )}
                     {!activeApp.autonomousAuthorization && <div className="progress">
                       {[
                         "Selected",
@@ -757,7 +769,7 @@ export default function Dashboard() {
                         </span>
                       ))}
                     </div>}
-                    {activeApp.autonomousAuthorization && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
+                    {(activeApp.autonomousAuthorization || activeApp.importedOutcome) && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
                     {activeApp.queuedRun && (
                       <div className="step-card" role="status">
                         <h3>Application run queued</h3>
@@ -1651,7 +1663,7 @@ export default function Dashboard() {
             <h2 id="import-heading">Import a job link</h2>
             <p>
               Paste a Greenhouse, Lever, or Ashby job link to retrieve its details.
-              For other sites, add the title and company and verify the posting yourself.
+              For other sites, add the title and company. We’ll check the public posting and supported form before automatic application.
             </p>
             {(["url", "company", "title", "location"] as const).map((key) => (
               <label key={key}>

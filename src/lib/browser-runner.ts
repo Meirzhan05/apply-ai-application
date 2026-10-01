@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isIP } from "node:net";
 import { hashJson } from "@/lib/crypto";
+import { canonicalJobUrl } from "@/lib/sources";
 import { createRemoteBrowser, releaseRemoteBrowser, type RemoteBrowserSession } from "@/lib/browser-provider";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -49,6 +50,15 @@ async function browserUsageEvent(application: Application, event: Parameters<typ
 async function disconnectBrowser(application: Application, browser: Browser, sessionId = application.browserSessionId) {
   await browser.close().catch(() => undefined);
   await browserUsageEvent(application, "disconnected", sessionId).catch(() => undefined);
+}
+
+async function releaseStrictSession(sessionId: string, provider: RemoteBrowserSession["provider"] | undefined) {
+  const report = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+  if (!report || report.status !== "stopped") throw new Error("The browser provider did not confirm the session stopped.");
+}
+
+function annotatePreflightError(error: unknown, sessionId: string, provider: RemoteBrowserSession["provider"] | undefined, releaseConfirmed: boolean): void {
+  if (error instanceof Error) Object.assign(error, { browserSessionId: sessionId, browserProvider: provider, browserReleaseConfirmed: releaseConfirmed });
 }
 
 interface InspectedField {
@@ -567,6 +577,147 @@ async function snapshot(
   };
 }
 
+export async function preflightBrowser(
+  application: Application,
+  job: Job,
+  onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
+): Promise<{
+  form: Omit<FormSnapshot, "hash">;
+  contextHash: string;
+  postingContext: { title?: string; company?: string; location?: string; text: string };
+  postingEvidence: { postingUrl: string; postingIdentityHash: string; title?: string; company?: string; markers: string[]; identityHash: string };
+  sessionId: string;
+  provider?: RemoteBrowserSession["provider"];
+  expiresAt?: string;
+}> {
+  if (!canAutomate(job.url) || !canAutomate(job.applyUrl)) throw new Error("This site requires a manual application handoff.");
+  let runtime: Runtime;
+  let sessionId: string;
+  let provider: RemoteBrowserSession["provider"] | undefined;
+  let expiresAt: string | undefined;
+  let remote = false;
+  if (!isDemo()) {
+    const session = await createRemoteBrowser(job.applyUrl);
+    sessionId = session.sessionId;
+    provider = session.provider;
+    expiresAt = session.expiresAt;
+    remote = true;
+    application.browserSessionId = sessionId;
+    application.browserProvider = provider;
+    try {
+      if (onSession && !(await onSession({ sessionId, provider, expiresAt }))) throw new Error("The browser preflight was cancelled before observation.");
+    } catch (error) {
+      try {
+        const released = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!released || released.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        application.browserSessionId = undefined;
+        application.browserProvider = undefined;
+        annotatePreflightError(error, sessionId, provider, true);
+      } catch (releaseError) {
+        annotatePreflightError(releaseError, sessionId, provider, false);
+        throw releaseError;
+      }
+      throw error;
+    }
+    try {
+      const browser = await chromium.connectOverCDP(session.connectUrl);
+      const context = browser.contexts()[0];
+      const page = context.pages()[0] ?? await context.newPage();
+      runtime = { browser, page };
+      await restrictNavigation(page, job.url);
+    } catch (error) {
+      try {
+        const released = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!released || released.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        application.browserSessionId = undefined;
+        application.browserProvider = undefined;
+        annotatePreflightError(error, sessionId, provider, true);
+      } catch (releaseError) {
+        annotatePreflightError(releaseError, sessionId, provider, false);
+        throw releaseError;
+      }
+      throw error;
+    }
+  } else {
+    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
+    const page = await browser.newPage();
+    sessionId = `local-preflight-${application.id}`;
+    runtime = { browser, page };
+    localBrowsers.set(sessionId, runtime);
+  }
+  application.browserSessionId = sessionId;
+  application.browserProvider = provider;
+  let bodyError: unknown;
+  try {
+    if (!remote && onSession && !(await onSession({ sessionId, provider, expiresAt })))
+      throw new Error("The browser preflight was cancelled before observation.");
+    if (remote) await browserUsageEvent(application, "connected", sessionId);
+    await runtime.page.goto(job.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    if (!canAutomate(runtime.page.url())) throw new Error("The posting redirected to a site that is not enabled for automation.");
+    const postingUrl = canonicalJobUrl(runtime.page.url());
+    const postingTitle = (await runtime.page.locator("h1, h2").first().innerText().catch(() => "") || await runtime.page.title().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingCompany = (await runtime.page.locator('[data-company], [class*="company" i], meta[property="og:site_name"]').first().getAttribute("content").catch(() => null) || await runtime.page.locator('[data-company], [class*="company" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingText = (await runtime.page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 4000);
+    const location = (await runtime.page.locator('[data-location], [class*="location" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingMarkers = [postingTitle, postingCompany, postingText].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+    const postingIdentityHash = hashJson({ postingUrl, title: postingTitle, company: postingCompany });
+    await waitForForm(runtime.page);
+    const initial = new URL(runtime.page.url());
+    const initialFields = await inspectFields(runtime.page);
+    if (!initialFields.length) {
+      const shortcut = runtime.page.locator("a[href]").filter({ hasText: /apply|application/i }).first();
+      const href = await shortcut.getAttribute("href").catch(() => null);
+      if (href) {
+        const target = new URL(href, runtime.page.url());
+        if (target.origin !== initial.origin) throw new Error("The posting's application link leaves the verified employer site.");
+        await runtime.page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await waitForForm(runtime.page);
+      }
+    }
+    const form = await snapshot(runtime.page, application);
+    const visibleText = await runtime.page.locator("body").innerText().catch(() => "");
+    const pageTitle = (await runtime.page.title().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240);
+    const heading = (await runtime.page.locator("h1, h2").first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240);
+    const company = (await runtime.page.locator('[data-company], [class*="company" i], meta[property="og:site_name"]').first().getAttribute("content").catch(() => null) ||
+      await runtime.page.locator('[data-company], [class*="company" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const markers = [pageTitle, heading, company, visibleText.replace(/\s+/g, " ").trim().slice(0, 1600)].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).slice(0, 4);
+    const postingEvidence = { postingUrl, postingIdentityHash, title: postingTitle || heading || pageTitle || undefined, company: postingCompany || company, markers: [...new Set([...postingMarkers, ...markers])].slice(0, 6), identityHash: hashJson(markers) };
+    const postingContext = { title: postingEvidence.title, company: postingEvidence.company, location, text: postingText };
+    const contextHash = hashJson({
+      posting: canonicalJobUrl(job.url),
+      observedUrl: runtime.page.url(),
+      title: pageTitle,
+      text: visibleText.replace(/\s+/g, " ").trim().slice(0, 4000),
+    });
+    return { form, contextHash, postingContext, postingEvidence, sessionId, provider, expiresAt };
+  } catch (error) {
+    bodyError = error;
+    throw error;
+  } finally {
+    let released = !remote;
+    try {
+      if (remote) {
+        await disconnectBrowser(application, runtime!.browser, sessionId);
+        const report = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!report || report.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        released = true;
+      } else {
+        await runtime!.browser.close().catch(() => undefined);
+        localBrowsers.delete(sessionId);
+      }
+    } catch (releaseError) {
+      annotatePreflightError(releaseError, sessionId, provider, false);
+      if (bodyError) annotatePreflightError(bodyError, sessionId, provider, false);
+      throw releaseError;
+    }
+    if (bodyError) annotatePreflightError(bodyError, sessionId, provider, released);
+    if (released) {
+      application.browserSessionId = undefined;
+      application.browserProvider = undefined;
+    }
+  }
+}
+
 async function restrictNavigation(page: Page, targetUrl: string) {
   const origin = new URL(targetUrl).origin;
   await page.context().route("**/*", async (route) => {
@@ -622,7 +773,8 @@ export async function prepareBrowser(
   const resume = await reviewedPacketFile(profile, application.packet, "resume");
   let coverLetter = application.packet.coverLetter
     ? await reviewedPacketFile(profile, application.packet, "cover-letter") : undefined;
-  if (!canAutomate(job.applyUrl))
+  const browserTargetUrl = application.autonomousAuthorization?.expectedFormUrl || job.applyUrl;
+  if (!canAutomate(browserTargetUrl))
     throw new Error("This site requires a manual application handoff.");
   const action = async (label: string) => {
     if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
@@ -637,20 +789,51 @@ export async function prepareBrowser(
   let expiresAt: string | undefined;
   let captchaSolving = application.browserCaptchaSolving;
   if (!isDemo()) {
-    const session = await createRemoteBrowser(job.applyUrl);
+    const session = await createRemoteBrowser(browserTargetUrl);
     sessionId = session.sessionId;
     provider = session.provider;
     expiresAt = session.expiresAt;
     captchaSolving = session.captchaSolving;
     connectUrl = session.connectUrl;
     liveUrl = session.liveUrl;
+    application.browserSessionId = sessionId;
+    application.browserProvider = provider;
+    application.browserSessionExpiresAt = expiresAt;
+    application.browserConnectUrl = connectUrl;
+    application.browserLiveUrl = liveUrl;
+    try {
+      if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving })))
+        throw new Error("The browser run was cancelled before filling.");
+    } catch (error) {
+      try {
+        await releaseStrictSession(sessionId, provider);
+        application.browserSessionId = application.browserConnectUrl = application.browserLiveUrl = undefined;
+        application.browserProvider = undefined;
+      } catch (releaseError) {
+        application.browserSessionId = sessionId;
+        application.browserProvider = provider;
+        throw releaseError;
+      }
+      throw error;
+    }
     try {
       const browser = await chromium.connectOverCDP(connectUrl);
       const context = browser.contexts()[0];
       const page = context.pages()[0] ?? (await context.newPage());
       runtime = { browser, page };
-      await restrictNavigation(page, job.applyUrl);
-    } catch (error) { await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider }); throw error; }
+      await restrictNavigation(page, browserTargetUrl);
+    } catch (error) {
+      try {
+        await releaseStrictSession(sessionId, provider);
+        application.browserSessionId = application.browserConnectUrl = application.browserLiveUrl = undefined;
+        application.browserProvider = undefined;
+      } catch (releaseError) {
+        application.browserSessionId = sessionId;
+        application.browserProvider = provider;
+        throw releaseError;
+      }
+      throw error;
+    }
   } else {
     const browser = await chromium.launch({
       headless: true,
@@ -666,14 +849,13 @@ export async function prepareBrowser(
   application.browserCaptchaSolving = captchaSolving;
   try {
     application.browserSessionId = sessionId;
-    application.browserProvider = provider;
-    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
+    if (!connectUrl && onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
     // The provider connection is billable lifecycle state. Record it only
     // after the owner/application/session reference has been persisted by the
     // session callback; any ledger failure stays inside this cleanup boundary.
     await browserUsageEvent(application, "connected", sessionId);
     await action("Opening the employer form");
-    await page.goto(job.applyUrl, {
+    await page.goto(browserTargetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 20000,
     });

@@ -111,11 +111,11 @@ describe("discovery policy and telemetry", () => {
     const state = initialDemoState();
     state.profile.id = "11111111-1111-4111-8111-111111111111";
     state.profile.workAuthorization = "Authorized to work in the US";
-    const fixtureJob = { ...state.jobs[0], id: "controlled-fixture-job", url: "https://controlled.example.test/fixture", applyUrl: "https://controlled.example.test/fixture" };
+    const fixtureJob = { ...state.jobs[0], id: "controlled-fixture-job", url: "https://apply.example/api/internal/controlled-form", applyUrl: "https://apply.example/api/internal/controlled-form" };
     state.jobs = [fixtureJob, { ...state.jobs[0], id: "real-catalog-job", sourceId: "real-catalog-job", url: "https://employer.example/jobs/real", applyUrl: "https://employer.example/jobs/real" }];
     const fixtureApplication = selectApplication(state, fixtureJob.id, state.profile.id);
     const issued = issueControlledTestGrant(state.profile.id, fixtureApplication.id);
-    fixtureJob.url = fixtureJob.applyUrl = `https://controlled.example.test/fixture?token=${issued.token}`;
+    fixtureJob.url = fixtureJob.applyUrl = `https://apply.example/api/internal/controlled-form?token=${issued.token}`;
     fixtureApplication.jobSnapshot = structuredClone(fixtureJob);
     fixtureApplication.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0 };
     state.matchCache = { [`real-catalog-job:fixture`]: { version: 1, category: "strong", score: 99, evidence: ["confirmed"], gaps: [], uncertainty: [], evaluatedAt: "2026-10-01T12:00:00.000Z", model: "fixture" } };
