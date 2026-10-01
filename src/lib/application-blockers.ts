@@ -205,7 +205,7 @@ export async function resumeBlockedApplication(userId: string, applicationId: st
     application.queuedRun = { id: newId(), kind: "draft", requestedAt: now(), reason: "waiting" };
     state.activity.unshift({ id: newId(), at: now(), label: "Blocker resolved", detail: `Resuming ${application.jobSnapshot?.title ?? "application"} with current settings.` });
     return true;
-  });
+  }, { actor: { kind: "owner", userId }, action: "resumeBlocked" });
   if (!accepted) return;
   const { dispatchUserQueue } = await import("@/lib/application-queue");
   await dispatchUserQueue(userId);

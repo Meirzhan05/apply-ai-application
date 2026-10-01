@@ -34,6 +34,7 @@ Users upload a resume, confirm profile facts and search preferences, review matc
 - Unlimited initiated applications per user per day for now, one active browser run per user, and a global monthly service-spend ceiling of $500.
 - Applications require distinct approval to fill a form and approval to submit its final state.
 - A controlled demo precedes a free invited beta for 50–100 users.
+- Invited pilot participation is an explicit, versioned opt-in after onboarding. It measures initiated applications and their evidence without enabling automation, public signup, billing, or a daily application cap.
 - TypeSafe Jev is evaluated in parallel before taking over matching decisions.
 
 ## Evidence on Hand
@@ -46,3 +47,4 @@ The approved product and agent plan in this conversation. Service credentials ar
 - Treat unknown information as uncertain instead of inventing it.
 - Give users clear control over consequential actions and recovery from blocked forms.
 - Make current status and the next required action visible.
+- Keep controlled validation, unknown outcomes, and real employer evidence visibly distinct in pilot reports; incomplete evidence remains unknown rather than zero or a passing claim.

@@ -56,6 +56,7 @@ import {
   transition,
 } from "@/lib/workflow";
 import type { AppState, Application, Job, Profile } from "@/lib/types";
+import { enrollPilot, withdrawPilot } from "@/lib/pilot";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -105,6 +106,20 @@ async function perform(
   action: string,
   payload: Record<string, unknown>,
 ) {
+  const ownerContext = { actor: { kind: "owner" as const, userId }, action };
+  if (action === "enrollPilot") {
+    return mutateState(userId, (state) => {
+      const input = z.object({ consentVersion: z.string().max(80), confirmed: z.literal(true) }).parse(payload);
+      const episode = enrollPilot(state, userId, input);
+      activity(state, "Pilot enrollment saved", `Participation episode ${episode.id} is active. Automation settings were not changed.`);
+    }, ownerContext);
+  }
+  if (action === "withdrawPilot") {
+    return mutateState(userId, (state) => {
+      withdrawPilot(state, userId);
+      activity(state, "Pilot participation withdrawn", "Future pilot initiations are paused; existing evidence is retained.");
+    }, ownerContext);
+  }
   if (action === "onboarding") {
     return mutateState(userId, (state) => {
       const questionnaire = z
@@ -132,7 +147,7 @@ async function perform(
       state.profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(state, "Onboarding saved", "Your questionnaire and confirmed facts were saved.");
-    });
+    }, ownerContext);
   }
   if (action === "activateAutomation" || action === "activate") {
     return mutateState(userId, (state) => {
@@ -299,7 +314,7 @@ async function perform(
       activity(state, "Link imported", job.title);
     });
   }
-  if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200));
+  if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200), ownerContext);
   if (action === "preflightImportedPosting") {
     const jobId = text(payload.jobId, 200);
     const result = await runImportedPreflight(userId, jobId);
@@ -310,7 +325,7 @@ async function perform(
     return mutateState(userId, (state) => {
       const app = selectApplication(state, text(payload.jobId, 200), userId);
       activity(state, "Job selected", findJob(state, app).title);
-    });
+    }, ownerContext);
   if (action === "draft") {
     await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode));
     return;
@@ -537,7 +552,7 @@ async function perform(
         "Application cancelled",
         findJob(current, target).title,
       );
-    });
+    }, ownerContext);
     let released = true;
     const releaseApp = { ...app, browserSessionId: app.browserSessionId ?? app.browserReleasePending?.sessionId };
     try { await cancelBrowser(releaseApp, { strict: true }); }
@@ -552,7 +567,7 @@ async function perform(
         target.browserReleasePending = { sessionId: releaseApp.browserSessionId, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the browser release." };
         recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The cancelled application will remain held until this session is stopped.", { sessionId: releaseApp.browserSessionId });
       }
-    });
+    }, ownerContext);
     return;
   }
   if (action === "reviewManualFailure") {
