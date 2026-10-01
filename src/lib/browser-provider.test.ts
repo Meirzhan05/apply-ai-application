@@ -6,16 +6,22 @@ import { applicationBrowserProvider, configuredBrowserProvider, createRemoteBrow
 const id = "d1be2c6e-a564-40c9-b139-b111d8b161fe";
 const session = { id, status: "active", cdpUrl: "https://test.cdp.browser-use.com", liveUrl: "https://live.browser-use.com/session/test", timeoutAt: "2026-10-01T01:00:00Z" };
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
-function setup() { vi.stubEnv("BROWSER_USE_API_KEY", "secret-test-key"); vi.stubEnv("BROWSER_PROVIDER", "browser-use"); }
+function setup() { vi.stubEnv("BROWSER_USE_API_KEY", "secret-test-key"); vi.stubEnv("BROWSER_PROVIDER", "browser-use"); vi.stubEnv("BROWSER_USE_SOLVE_CAPTCHAS", ""); }
 describe("Browser Use Cloud session lifecycle", () => {
-  it("creates a bounded isolated browser, uses proxies, and leaves CAPTCHA handling to the owner", async () => {
+  it("creates a bounded isolated browser with provider CAPTCHA handling enabled", async () => {
     setup(); const fetch = vi.fn().mockResolvedValue(Response.json(session)); vi.stubGlobal("fetch", fetch);
-    expect(await createRemoteBrowser("https://employer.example/apply")).toMatchObject({ provider: "browser-use", sessionId: id, expiresAt: session.timeoutAt });
+    expect(await createRemoteBrowser("https://employer.example/apply")).toMatchObject({ provider: "browser-use", sessionId: id, expiresAt: session.timeoutAt, captchaSolving: true });
     const [url, request] = fetch.mock.calls[0];
     expect(url).toBe("https://api.browser-use.com/api/v4/browsers");
     expect(request.headers["X-Browser-Use-API-Key"]).toBe("secret-test-key");
-    expect(JSON.parse(request.body)).toEqual({ timeout: 30, proxyCountryCode: "us", solveCaptchas: false, enableRecording: false, allowResizing: false });
+    expect(JSON.parse(request.body)).toEqual({ timeout: 30, proxyCountryCode: "us", solveCaptchas: true, enableRecording: false, allowResizing: false });
     expect(JSON.parse(request.body).profileId).toBeUndefined();
+  });
+  it("supports explicitly disabling solving for a newly created session", async () => {
+    setup(); vi.stubEnv("BROWSER_USE_SOLVE_CAPTCHAS", "false");
+    const fetch = vi.fn().mockResolvedValue(Response.json(session)); vi.stubGlobal("fetch", fetch);
+    expect(await createRemoteBrowser("https://employer.example/apply")).toMatchObject({ captchaSolving: false });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).solveCaptchas).toBe(false);
   });
   it("explicitly stops Browser Use sessions even when Browserbase keys also exist", async () => {
     setup(); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key"); const fetch = vi.fn().mockResolvedValue(Response.json({ ...session, status: "stopped" })); vi.stubGlobal("fetch", fetch);

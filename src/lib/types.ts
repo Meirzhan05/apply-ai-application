@@ -247,6 +247,7 @@ export interface Application {
   browserSessionId?: string;
   browserProvider?: BrowserProvider;
   browserSessionExpiresAt?: string;
+  browserCaptchaSolving?: boolean;
   browserActions?: Array<{ at: string; label: string }>;
   browserQuestionDrafts?: { formHash: string; sessionId: string; packetHash: string; answers: Record<string, ScreeningAnswer> };
   browserAnswerApprovals?: BrowserAnswerApproval[];

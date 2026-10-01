@@ -450,6 +450,12 @@ async function snapshot(
   page: Page,
   application: Application,
 ): Promise<Omit<FormSnapshot, "hash">> {
+  // Give the provider time to handle an interactive challenge before asking
+  // the applicant. Read only: no challenge clicks, token writes or refreshes.
+  if (application.browserCaptchaSolving && await visibleCaptchaChallenge(page)) {
+    const deadline = Date.now() + 20000;
+    while (await visibleCaptchaChallenge(page) && Date.now() < deadline) await page.waitForTimeout(500);
+  }
   const fields = await inspectFields(page);
   const visible: FormFieldSnapshot[] = fields
     .filter((field) => !["password", "hidden"].includes(field.kind))
@@ -550,6 +556,7 @@ export async function prepareBrowser(
   form: Omit<FormSnapshot, "hash">;
   provider?: RemoteBrowserSession["provider"];
   expiresAt?: string;
+  captchaSolving?: boolean;
   sessionId: string;
   connectUrl?: string;
   liveUrl?: string;
@@ -573,11 +580,13 @@ export async function prepareBrowser(
   let liveUrl: string | undefined;
   let provider: RemoteBrowserSession["provider"] | undefined;
   let expiresAt: string | undefined;
+  let captchaSolving = application.browserCaptchaSolving;
   if (!isDemo()) {
     const session = await createRemoteBrowser(job.applyUrl);
     sessionId = session.sessionId;
     provider = session.provider;
     expiresAt = session.expiresAt;
+    captchaSolving = session.captchaSolving;
     connectUrl = session.connectUrl;
     liveUrl = session.liveUrl;
     try {
@@ -599,11 +608,12 @@ export async function prepareBrowser(
   }
 
   const { browser, page } = runtime;
+  application.browserCaptchaSolving = captchaSolving;
   const action = async (label: string) => {
     if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
   };
   try {
-    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt }))) throw new Error("The browser run was cancelled before filling.");
+    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
     await action("Opening the employer form");
     await page.goto(job.applyUrl, {
       waitUntil: "domcontentloaded",
@@ -621,7 +631,7 @@ export async function prepareBrowser(
       form.readyToSubmit = false;
       form.blockers = ["The posting redirected to a different site. Review the destination and import its application link before allowing an automatic fill."];
       if (connectUrl) await browser.close();
-      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, needsAction: true, needsCoverLetter: false };
+      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true, needsCoverLetter: false };
     }
     const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
     if (questionCount > 40 || fields.length > 200) {
@@ -634,7 +644,7 @@ export async function prepareBrowser(
       // Disconnect from a remote session without releasing it. The applicant
       // needs the same open page for takeover and a fresh final review.
       if (connectUrl) await browser.close();
-      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, needsAction: true,
+      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true,
         needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
     }
     const values = allowedValues(profile, application);
@@ -737,6 +747,7 @@ export async function prepareBrowser(
       form,
       provider,
       expiresAt,
+      captchaSolving,
       sessionId,
       connectUrl,
       liveUrl,
@@ -898,7 +909,7 @@ async function observeSubmission(page: Page, application: Application, baseline:
     body = await submissionText(page);
     challenge = await visibleCaptchaChallenge(page);
     confirmed = !challenge && !baseline.beforeHadConfirmation && hashJson(body) !== baseline.beforeHash && confirmationPattern.test(body);
-    if (confirmed || challenge || Date.now() >= deadline) break;
+    if (confirmed || (challenge && !application.browserCaptchaSolving) || Date.now() >= deadline) break;
     await page.waitForTimeout(500);
   } while (true);
   let screenshotPath: string | undefined;
@@ -947,7 +958,7 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     // A timeout can follow a dispatched click. Observe; never click again.
     await button.click({ timeout: 10000 }).catch(() => undefined);
     await page.waitForLoadState("domcontentloaded", { timeout: 12000 }).catch(() => undefined);
-    const result = await observeSubmission(page, application, baseline, 20000);
+    const result = await observeSubmission(page, application, baseline, application.browserCaptchaSolving ? 30000 : 20000);
     keepSession = Boolean(result.verification);
     return result;
   } catch (error) {

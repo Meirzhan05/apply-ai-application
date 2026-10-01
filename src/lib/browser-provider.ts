@@ -11,6 +11,7 @@ const CloudBrowser = z.object({
 export type RemoteBrowserSession = {
   provider: BrowserProvider; sessionId: string; connectUrl: string;
   liveUrl?: string; expiresAt?: string;
+  captchaSolving?: boolean;
 };
 
 export function configuredBrowserProvider(): BrowserProvider {
@@ -55,8 +56,9 @@ function sessionPath(sessionId: string) {
 export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrowserSession> {
   const provider = configuredBrowserProvider();
   if (provider === "browser-use") {
+    const captchaSolving = process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false";
     const session = await browserUseRequest("POST", "", {
-      timeout: 30, proxyCountryCode: "us", solveCaptchas: false,
+      timeout: 30, proxyCountryCode: "us", solveCaptchas: captchaSolving,
       enableRecording: false, allowResizing: false,
     });
     try {
@@ -65,7 +67,7 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
       if (!["wss:", "https:"].includes(connection.protocol) || !connection.hostname.endsWith(".browser-use.com") ||
         viewer.protocol !== "https:" || viewer.hostname !== "live.browser-use.com" || session.status !== "active")
         throw new Error("Browser Use Cloud returned an invalid session connection.");
-      return { provider, sessionId: session.id, connectUrl: connection.href, liveUrl: viewer.href, expiresAt: session.timeoutAt };
+      return { provider, sessionId: session.id, connectUrl: connection.href, liveUrl: viewer.href, expiresAt: session.timeoutAt, captchaSolving };
     } catch (error) {
       await releaseRemoteBrowser({ browserSessionId: session.id, browserProvider: provider }).catch(() => undefined);
       throw error;

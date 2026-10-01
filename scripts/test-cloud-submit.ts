@@ -64,6 +64,7 @@ async function main() {
     assert.equal(app!.approvals[0].version, 1);
     reviewedSessionId = app!.browserSessionId!;
     assert.ok(reviewedSessionId);
+    if (app!.browserProvider === "browser-use") assert.equal(app!.browserCaptchaSolving, process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false", "The worker must persist the newly allocated browser's CAPTCHA mode");
     await mutateState(userId, (state) => {
       const target = state.applications.find((item) => item.id === applicationId)!;
       approveSubmit(target, userId, target.form!.hash);

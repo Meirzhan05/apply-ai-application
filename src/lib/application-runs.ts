@@ -69,6 +69,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       target.browserSessionId = opened.sessionId;
       target.browserProvider = opened.provider;
       target.browserSessionExpiresAt = opened.expiresAt;
+      target.browserCaptchaSolving = opened.captchaSolving;
       target.browserActions = [];
       target.browserConnectUrl = opened.connectUrl;
       target.browserLiveUrl = opened.liveUrl;
@@ -88,6 +89,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       target.browserSessionId = result.sessionId;
       target.browserProvider = result.provider;
       target.browserSessionExpiresAt = result.expiresAt;
+      target.browserCaptchaSolving = result.captchaSolving;
       target.browserSessionCreatedAt = app.runWorkerClaimedAt || app.updatedAt;
       target.browserConnectUrl = result.connectUrl;
       target.browserLiveUrl = result.liveUrl;

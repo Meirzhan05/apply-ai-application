@@ -44,7 +44,8 @@ const server = createServer((request, response) => {
     request.on("end", () => {
       response.setHeader("Content-Type", "text/html");
       if (scenario === "slow-confirmation") setTimeout(() => response.end("<h1>Application received</h1>"), 12000);
-      else if (scenario === "post-submit-captcha") response.end('<h1>Verify your application</h1><iframe src="/hcaptcha-enclave.html#frame=challenge" title="hCaptcha security challenge" style="width:320px;height:300px"></iframe><button type="button" onclick="document.body.innerHTML=\'<h1>Application received</h1>\'">Complete synthetic verification</button>');
+      else if (scenario === "post-submit-captcha" || scenario === "provider-captcha-timeout") response.end('<h1>Verify your application</h1><iframe src="/hcaptcha-enclave.html#frame=challenge" title="hCaptcha security challenge" style="width:320px;height:300px"></iframe><button type="button" onclick="document.body.innerHTML=\'<h1>Application received</h1>\'">Complete synthetic verification</button>');
+      else if (scenario === "provider-captcha-submit") response.end('<h1>Verifying application</h1><iframe src="/hcaptcha-enclave.html#frame=challenge" title="hCaptcha security challenge" style="width:320px;height:300px"></iframe><script>setTimeout(()=>document.body.innerHTML="<h1>Application received</h1>", 1500)</script>');
       else if (scenario === "long-confirmation") response.end(`<select>${Array.from({length:4000}, (_, i) => `<option>University ${i}</option>`).join("")}</select><p>${"Long response context ".repeat(200)}</p><h1>Application received</h1>`);
       else response.end(scenario === "uncertain" ? "<h1>Processing request</h1>" : "<h1>Application received</h1>");
     });
@@ -82,6 +83,7 @@ const server = createServer((request, response) => {
     school.addEventListener('input',()=>show(school.value));school.addEventListener('keydown',event=>{if(event.key==='ArrowDown')show(school.value)});
     </script>`;
   const extra = scenario.startsWith("education-") ? education : scenario.startsWith("grouped") ? `<label>Preferred First & Last Name<input name="preferred" required></label><label>Why are you excited to join us?<textarea required></textarea></label>${group("Which office would you prefer?", "office", ["San Francisco office", "New York office", "No preference"])}${group("Are you legally authorized to work in the United States?", "authorization", ["Yes", "No"])}${group("Will you now or in the future require visa sponsorship?", "sponsorship", ["Yes", "No"])}${group("How did you hear about this opportunity?", "source", Array.from({length:35}, (_, i) => `Source ${i}`))}<label><input type="checkbox" name="newsletter">Subscribe to newsletter</label><fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" placeholder="Start typing..."><ul role="listbox" hidden><li role="option">${initialDemoState().profile.school}</li></ul></fieldset><script>document.querySelector('[name=resume]').addEventListener('change', () => {const hidden=document.createElement('input'); hidden.type='hidden'; document.querySelector('form').prepend(hidden)}); const school=document.querySelector('[role=combobox]'); school.addEventListener('input', () => {document.querySelector('[role=listbox]').hidden=false}); document.querySelector('[role=option]').addEventListener('click', () => {school.dataset.selected='true'; document.querySelector('[role=listbox]').hidden=true});</script>`
+    : scenario === "provider-captcha-review" ? '<iframe id="syntheticChallenge" src="/hcaptcha-enclave.html#frame=challenge" title="hCaptcha security challenge" style="width:320px;height:300px"></iframe><script>setTimeout(()=>document.querySelector("#syntheticChallenge").remove(), 1500)</script>'
     : scenario === "complex" ? Array.from({ length: 41 }, (_, i) => `<label>Optional question ${i}<input name="optional-${i}"></label>`).join("")
     : scenario === "questions" ? `${group("Will you now or in the future require visa sponsorship?", "questionSponsor", ["Yes", "No"])}<label>Favorite snack<select name="snack" required><option value="">Choose</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label><label>Optional nickname<input name="nickname"></label>`
     : scenario === "unknown" ? '<label>Do you hold a secret clearance?<input name="clearance" required></label>'
@@ -131,6 +133,7 @@ async function fill(scenario: string, onSession?: Parameters<typeof prepareBrows
   const job = { ...state.jobs[0], applyUrl: `${base}/apply?scenario=${scenario}`, url: `${base}/apply?scenario=${scenario}` };
   state.jobs[0] = job;
   const app = selectApplication(state, job.id, state.profile.id);
+  if (scenario.startsWith("provider-captcha")) app.browserCaptchaSolving = true;
   liveApps.push(app);
   const packet = await draftPacket(state.profile, job);
   packet.answers = [];
@@ -166,6 +169,39 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("provider-captcha waits for background handling before final review without submitting", async () => {
+    const { app, result } = await fill("provider-captcha-review");
+    assert.equal(result.form.readyToSubmit, true);
+    assert.equal(result.form.blockers?.some(blocker => /CAPTCHA/.test(blocker)), false);
+    assert.equal(submissions.get("provider-captcha-review"), undefined);
+    await cancelBrowser(app);
+  });
+  await test("provider-captcha waits after one approved Submit and confirms automatically", async () => {
+    const { state, app, result } = await fill("provider-captcha-submit");
+    setFormSnapshot(app, result.form);
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+    assert.equal(submissions.get("provider-captcha-submit"), undefined);
+    approveSubmit(app, state.profile.id, app.form!.hash);
+    const outcome = await submitBrowser(app);
+    assert.equal(outcome.confirmed, true);
+    assert.equal(outcome.verification, undefined);
+    assert.match(outcome.receipt!.text, /Application received/);
+    assert.equal(submissions.get("provider-captcha-submit"), 1);
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+  });
+  await test("provider-captcha timeout retains the same attempt for human fallback", async () => {
+    const { state, app, result } = await fill("provider-captcha-timeout");
+    app.browserCaptchaSolving = true;
+    setFormSnapshot(app, result.form); approveSubmit(app, state.profile.id, app.form!.hash);
+    const started = Date.now(); const outcome = await submitBrowser(app);
+    assert.equal(outcome.confirmed, false);
+    assert.ok(outcome.verification);
+    assert.ok(Date.now() - started >= 29000, "An unresolved challenge must get the bounded provider window");
+    assert.equal(pageFor(app).isClosed(), false);
+    assert.equal(submissions.get("provider-captcha-timeout"), 1);
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+    await cancelBrowser(app);
+  });
   await test("post-submit-captcha keeps the approved attempt open for human verification", async () => {
     const { state, app, result } = await fill("post-submit-captcha");
     setFormSnapshot(app, result.form);
