@@ -149,6 +149,32 @@ export interface ResumeEntry {
   location: ResumeField;
   bullets: ResumeBullet[];
 }
+export type ResumeClaimOutcome = "supported" | "unsupported" | "uncertain" | "contradiction";
+export interface ResumeGroundingFinding {
+  claimId: string;
+  affectedText: string;
+  outcome: ResumeClaimOutcome;
+  reason: string;
+  evidenceFactIds: string[];
+  requiredInformation?: string;
+}
+export interface ResumeGroundingSnapshot {
+  version: 1;
+  writerAttempts: number;
+  checkerAttempts: number;
+  repairAttempts: number;
+  findings: ResumeGroundingFinding[];
+}
+export interface ResumeDraftDiagnostics {
+  version: 1;
+  outcome: "grounded" | "needs_information" | "technical_failure";
+  writerAttempts: number;
+  checkerAttempts: number;
+  repairAttempts: number;
+  findings: ResumeGroundingFinding[];
+  requiredInformation: string[];
+  technicalFailure?: "provider" | "malformed_response" | "deadline" | "renderer" | "other";
+}
 export interface ResumeDocument {
   version: 1;
   templateVersion: "classic-1";
@@ -160,6 +186,7 @@ export interface ResumeDocument {
   omitted: Array<ResumeField & { reason: "relevance" | "page-length" }>;
   layout: "standard" | "compact";
   model: string;
+  grounding?: ResumeGroundingSnapshot;
   contentHash: string;
   evidenceHash: string;
 }
@@ -452,6 +479,7 @@ export interface Application {
   confirmation?: string;
   submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string };
   error?: string;
+  resumeDraftDiagnostics?: ResumeDraftDiagnostics;
   blockers?: ApplicationBlocker[];
   /** Separate from packet answers and essay authorization. */
   autonomousHumanAnswers?: AutonomousHumanAnswer[];

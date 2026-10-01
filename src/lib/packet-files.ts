@@ -1,4 +1,5 @@
 import { hashJson } from "@/lib/crypto";
+import { ResumeDraftError } from "@/lib/resume-document";
 import { readOriginalResume, validateOriginalResume } from "@/lib/original-resume";
 import { coverLetterPdf, resumePdf } from "@/lib/resume-pdf";
 import { fitResume } from "@/lib/latex-compiler";
@@ -43,7 +44,15 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
       // Only the saved artifact is used on answer/essay/cover-letter revisions.
       await readArtifact(profile.id, resumeFile.storageKey!, resumeFile.sha256, resumeFile.size);
     } else {
-      const fitted = await fitResume(profile, packet.resumeDocument, deadline);
+      let fitted: Awaited<ReturnType<typeof fitResume>>;
+      try { fitted = await fitResume(profile, packet.resumeDocument, deadline); }
+      catch (error) {
+        const grounding = packet.resumeDocument.grounding;
+        const message = error instanceof Error && /^(?:compiler unavailable|Resume compilation timed out|Resume compilation is temporarily unavailable|The resume contains|The resume cannot fit|LaTeX compilation failed)/i.test(error.message)
+          ? error.message : "The resume file could not be prepared. Retry the draft; your last valid packet is preserved.";
+        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", writerAttempts: grounding?.writerAttempts ?? 0, checkerAttempts: grounding?.checkerAttempts ?? 0,
+          repairAttempts: grounding?.repairAttempts ?? 0, findings: [], requiredInformation: [], technicalFailure: "renderer" }, message);
+      }
       validateResumeDocument(profile, fitted.document);
       const inputHash = resumeInputHash(profile, fitted.document);
       const pdf = await saveArtifact(profile.id, inputHash, fitted.pdf, "pdf");

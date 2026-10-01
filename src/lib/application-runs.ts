@@ -5,6 +5,7 @@ import { queueAutonomousSubmission, saveAutonomousSubmission } from "@/lib/auton
 import { hashJson, newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
 import { draftPacket, validatePacket, withGroundedCoverLetter } from "@/lib/drafting";
+import { ResumeDraftError } from "@/lib/resume-document";
 import { assertJobEligible } from "@/lib/application-policy";
 import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { sendActionNeeded } from "@/lib/email";
@@ -60,6 +61,7 @@ async function claimRun(userId: string, applicationId: string, runToken: string 
     if (!app || app.status !== status || app.runToken !== runToken || app.runWorkerClaimedAt) return false;
     app.runWorkerClaimedAt = new Date().toISOString();
     app.updatedAt = app.runWorkerClaimedAt;
+    if (status === "drafting") app.resumeDraftDiagnostics = undefined;
     return true;
   });
 }
@@ -84,6 +86,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "draft");
       validatePacket(current.profile, packet);
       setPacket(current, target, packet);
+      target.resumeDraftDiagnostics = undefined;
       if (target.autonomousAuthorization) {
         sealAutonomousPacket(target);
         transition(target, ["draft_review"], "authorized_to_fill");
@@ -100,7 +103,8 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
       if (target?.status === "drafting" && target.runToken === runToken) {
         transition(target, ["drafting"], target.autonomousAuthorization ? "needs_user_action" : target.packet ? "draft_review" : "selected");
         target.error = error instanceof Error ? error.message : "Drafting failed.";
-        if (target.autonomousAuthorization) recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl });
+        if (error instanceof ResumeDraftError) target.resumeDraftDiagnostics = error.diagnostics;
+        if (target.autonomousAuthorization) recordApplicationBlocker(target, error instanceof ResumeDraftError && error.diagnostics.outcome === "needs_information" ? "missing_answer" : blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl });
       }
     });
     if (app.autonomousAuthorization) await (await import("@/lib/application-queue")).dispatchUserQueue(userId).catch(() => undefined);

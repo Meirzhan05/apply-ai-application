@@ -69,6 +69,20 @@ describe("autonomous blocker review", () => {
     await expect(resumeBlockedApplication("another-user", app.id, blocker.id)).rejects.toThrow("Application not found");
   });
 
+  it("keeps a previous packet while retrying a failed résumé draft with updated facts", async () => {
+    const app = application();
+    const fact = fixture.state.profile.facts.find((item) => item.verified)!;
+    app.packet = { schemaVersion: 1, version: 4, summary: "Previously prepared", resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [], createdAt: new Date().toISOString(), model: "fixture" };
+    app.packetHash = "previous-valid-packet";
+    app.resumeDraftDiagnostics = { version: 1, outcome: "needs_information", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2, findings: [], requiredInformation: ["Confirm the missing date."] };
+    const previous = structuredClone(app.packet);
+    const blocker = recordApplicationBlocker(app, "missing_answer", "Confirm the missing date.");
+    await resumeBlockedApplication(app.userId, app.id, blocker.id);
+    expect(app.packet).toEqual(previous);
+    expect(app.packetHash).toBe("previous-valid-packet");
+    expect(app.queuedRun).toMatchObject({ kind: "draft", draftMode: "resume" });
+  });
+
   it("does not resume a cancelled application", async () => {
     const app = application();
     const blocker = recordApplicationBlocker(app, "login", "Sign in to continue");

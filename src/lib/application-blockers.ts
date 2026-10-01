@@ -191,8 +191,11 @@ export async function resumeBlockedApplication(userId: string, applicationId: st
       application.autonomousHumanAnswers.push(confirmedAnswer);
     }
     if (options.freshReconstruct) application.autonomousHumanAnswers = undefined;
-    application.packet = undefined;
-    application.packetHash = undefined;
+    const retryResumeDraft = Boolean(application.resumeDraftDiagnostics);
+    if (!retryResumeDraft) {
+      application.packet = undefined;
+      application.packetHash = undefined;
+    }
     application.approvals = [];
     blocker.progress = "resuming";
     blocker.updatedAt = now();
@@ -202,7 +205,7 @@ export async function resumeBlockedApplication(userId: string, applicationId: st
     application.browserSessionId = application.browserConnectUrl = application.browserLiveUrl = undefined;
     application.browserSessionExpiresAt = undefined;
     if (application.status === "needs_user_action") transition(application, ["needs_user_action"], "selected");
-    application.queuedRun = { id: newId(), kind: "draft", requestedAt: now(), reason: "waiting" };
+    application.queuedRun = { id: newId(), kind: "draft", ...(retryResumeDraft ? { draftMode: "resume" as const } : {}), requestedAt: now(), reason: "waiting" };
     state.activity.unshift({ id: newId(), at: now(), label: "Blocker resolved", detail: `Resuming ${application.jobSnapshot?.title ?? "application"} with current settings.` });
     return true;
   }, { actor: { kind: "owner", userId }, action: "resumeBlocked" });

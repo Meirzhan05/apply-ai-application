@@ -27,6 +27,7 @@ import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { POST } from "@/app/api/actions/route";
+import { GET as getApplicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
 import { recordApplicationBlocker } from "@/lib/application-blockers";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
@@ -37,7 +38,12 @@ beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
   saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
-  fixture.parse.mockImplementation(async (input) => ({ id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed: input.text.format.name === "structured_resume" ? source.document : { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }));
+  fixture.parse.mockImplementation(async (input) => {
+    const format = input.text.format.name;
+    const request = format === "resume_grounding_audit" ? JSON.parse(input.input[1].content) : undefined;
+    const output_parsed = format === "structured_resume" ? source.document : format === "resume_grounding_audit" ? { findings: request.claims.map((claim: { claimId: string; factIds: string[] }) => ({ claimId: claim.claimId, outcome: "supported", reason: "The confirmed facts support this claim.", evidenceFactIds: claim.factIds, requiredInformation: null })) } : { grounded: true, unsupportedClaims: [] };
+    return { id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+  });
   fixture.preflight.mockReset();
   fixture.prepare.mockImplementation(async (app, job, _profile, onSession, onAction) => { await onSession({ sessionId: "session", provider: "browser-use" }); await onAction("Known fields filled"); const file = app.packet.files[0]; return { sessionId: "session", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: { version: 1, url: job.applyUrl, fields: [{ label: "Resume", value: file.filename, identifier: "resume", kind: "file", required: true, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }], attachments: [file.filename], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: job.applyUrl, method: "post" } } }; });
   fixture.submit.mockImplementation(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => { const baseline = { version: 1 as const, kind: "captcha" as const, sessionId: app.browserSessionId!, targetUrl: app.form!.url, attemptedAt: new Date().toISOString(), beforeHash: "baseline", beforeHadConfirmation: false }; expect(await options.beforeAttempt(baseline)).toBe(true); expect(fixture.state!.applications[0].submissionAttemptedAt).toBe(baseline.attemptedAt); return { confirmed: true, evidence: "Application received", receipt: { version: 1, url: app.form!.url, text: "Application received", capturedAt: new Date().toISOString() } }; });
@@ -52,6 +58,73 @@ it("completes a known-answer application from one action without legacy approval
   expect(app.submissionReceipt?.text).toBe("Application received");
   expect(app.autonomousAuthorization).toMatchObject({ profileVersion: fixture.state!.profile.automationVersion, targetUrl: fixture.state!.jobs[0].applyUrl, packetHash: app.packetHash, formHash: app.form?.hash });
   expect(app.packet?.answers).toEqual([]);
+});
+it("carries a successful resume repair through artifact preview, download, and employer attachment", async () => {
+  const source = latexFixture();
+  const unsupported = structuredClone(source.document);
+  unsupported.experience[0].bullets[0].text = "Increased company revenue by 90%.";
+  fixture.state!.profile.id = "resume-repair-flow-user";
+  let writes = 0;
+  let audits = 0;
+  fixture.parse.mockImplementation(async (input) => {
+    if (input.text.format.name === "structured_resume") {
+      writes++;
+      return { id: `write-${writes}`, model: input.model, service_tier: "default", output_parsed: writes === 1 ? unsupported : source.document, usage: { input_tokens: 20, output_tokens: 10 } };
+    }
+    if (input.text.format.name === "resume_grounding_audit") {
+      audits++;
+      const request = JSON.parse(input.input[1].content);
+      return { id: `audit-${audits}`, model: input.model, service_tier: "default", output_parsed: { findings: request.claims.map((claim: { claimId: string; factIds: string[] }) => claim.claimId === "experience.0.bullets.0" && audits === 1
+        ? { claimId: claim.claimId, outcome: "unsupported", reason: "The confirmed fact describes a prediction model, not increased revenue.", evidenceFactIds: claim.factIds, requiredInformation: "Confirm whether revenue increased and provide the measured amount." }
+        : { claimId: claim.claimId, outcome: "supported", reason: "The confirmed facts support this claim.", evidenceFactIds: claim.factIds, requiredInformation: null }) }, usage: { input_tokens: 20, output_tokens: 10 } };
+    }
+    return { id: "essay-response", model: input.model, service_tier: "default", output_parsed: { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10 } };
+  });
+
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  expect(app.status).toBe("submitted");
+  expect(app.approvals).toEqual([]);
+  expect(app.packet?.resumeDocument?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
+  expect(app.packet?.resumeDocument?.experience[0].bullets[0].text).not.toContain("90%");
+  const resume = app.packet!.files!.find((file) => file.kind === "resume")!;
+  expect(app.submissionMaterials?.files.find((file) => file.kind === "resume")).toEqual(resume);
+  expect(app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes).toEqual([`${resume.filename}:${resume.size}:${resume.sha256}`]);
+
+  const preview = await getApplicationFile(new Request(`https://apply.example/api/applications/${app.id}/files/resume`), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
+  const download = await getApplicationFile(new Request(`https://apply.example/api/applications/${app.id}/files/resume?download=1`), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
+  expect(preview.status).toBe(200); expect(download.status).toBe(200);
+  expect(Buffer.from(await preview.arrayBuffer())).toEqual(Buffer.from(await download.arrayBuffer()));
+  expect(preview.headers.get("content-disposition")).toContain("inline");
+  expect(download.headers.get("content-disposition")).toContain("attachment");
+  await rm(`.data/application-files/${resume.storageKey}`, { force: true });
+  await rm(`.data/application-files/${app.packet!.resumeArtifact!.source.storageKey}`, { force: true });
+});
+it("keeps exhausted grounding findings as an actionable blocker and schedules no attachment", async () => {
+  const source = latexFixture();
+  const unsupported = structuredClone(source.document);
+  unsupported.experience[0].bullets[0].text = "Increased company revenue by 90%.";
+  fixture.state!.profile.resumeText = "Orbit Labs · Built an XGBoost model to predict campaign ROI.";
+  let writes = 0;
+  fixture.parse.mockImplementation(async (input) => {
+    if (input.text.format.name === "structured_resume") { writes++; return { id: `write-${writes}`, model: input.model, service_tier: "default", output_parsed: unsupported, usage: { input_tokens: 20, output_tokens: 10 } }; }
+    const request = JSON.parse(input.input[1].content);
+    return { id: `audit-${writes}`, model: input.model, service_tier: "default", output_parsed: { findings: request.claims.map((claim: { claimId: string; factIds: string[]; affectedText: string }) => claim.claimId === "experience.0.bullets.0"
+      ? { claimId: claim.claimId, outcome: writes === 3 ? "contradiction" : "unsupported", reason: "The confirmed fact describes prediction, not increased revenue.", evidenceFactIds: claim.factIds, requiredInformation: "Confirm whether revenue increased and provide the measured amount." }
+      : { claimId: claim.claimId, outcome: "supported", reason: "The confirmed facts support this claim.", evidenceFactIds: claim.factIds, requiredInformation: null }) }, usage: { input_tokens: 20, output_tokens: 10 } };
+  });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const draft = fixture.pending.shift()!;
+  await expect(runDraft(draft.payload)).rejects.toMatchObject({ diagnostics: { outcome: "needs_information", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2 } });
+  const app = fixture.state!.applications[0];
+  expect(app.status).toBe("needs_user_action");
+  expect(app.packet).toBeUndefined();
+  expect(app.resumeDraftDiagnostics?.findings.find((finding) => finding.claimId === "experience.0.bullets.0")).toMatchObject({ outcome: "contradiction", affectedText: "Increased company revenue by 90%.", evidenceFactIds: ["latex-fact-2"] });
+  expect(app.blockers?.[0]).toMatchObject({ reason: "missing_answer", progress: "blocked" });
+  expect(app.blockers?.[0].message).toContain("Confirm whether revenue increased and provide the measured amount");
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(fixture.pending).toEqual([]);
 });
 it("keeps a confirmed receipt and visible release hold when provider stop is still active", async () => {
   fixture.submit.mockImplementationOnce(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => {
