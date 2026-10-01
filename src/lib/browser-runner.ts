@@ -1,3 +1,4 @@
+import { meterModelResponse } from "@/lib/model-usage";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isIP } from "node:net";
@@ -407,8 +408,9 @@ async function aiMappings(
   if (!fields.length || !process.env.OPENAI_API_KEY) return new Map();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 0 });
   try {
-    const response = await client.responses.parse({
+    const response = await meterModelResponse({ userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.browserQuestionRun?.token ?? application.runToken }, "browser-field-mapping", "gpt-6-astra", () => client.responses.parse({
       model: "gpt-6-astra",
+      service_tier: "default",
       store: false,
       input: [
         {
@@ -434,7 +436,7 @@ async function aiMappings(
         },
       ],
       text: { format: zodTextFormat(BrowserMapping, "browser_field_mapping") },
-    });
+    }));
     return new Map(
       (response.output_parsed?.mappings ?? [])
         .filter(

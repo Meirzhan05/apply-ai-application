@@ -1,3 +1,4 @@
+import { withModelUsageContext } from "@/lib/model-usage";
 import { newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
 import { draftPacket, validatePacket } from "@/lib/drafting";
@@ -29,7 +30,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     assertJobEligible(state.profile, job);
-    const packet = await draftPacket(state.profile, job, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) });
+    const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, job, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;

@@ -1,3 +1,4 @@
+import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -72,8 +73,9 @@ export async function draftPacket(
   if (!options && process.env.OPENAI_API_KEY && !previous) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
     try {
-      const response = await client.responses.parse({
+      const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", "gpt-6-sol", () => client.responses.parse({
         model: "gpt-6-sol",
+        service_tier: "default",
         store: false,
         input: [
           {
@@ -95,7 +97,7 @@ export async function draftPacket(
           },
         ],
         text: { format: zodTextFormat(DraftSchema, "application_draft") },
-      });
+      }));
       const value = response.output_parsed;
       if (value) {
         const byId = new Map(facts.map((fact) => [fact.id, fact]));

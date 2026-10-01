@@ -1,3 +1,4 @@
+import { withModelUsageContext } from "@/lib/model-usage";
 import { newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
 import { browserQuestions } from "@/lib/browser-questions";
@@ -35,9 +36,9 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
   try {
     if (!await reserveServiceBudget(userId, `browser-essays:${applicationId}:${token}`, Number(process.env.PROJECTED_DRAFT_USD || "0.20")))
       throw new Error("AI drafting is paused at the service spending limit. Your answers and browser are saved; try again later.");
-    const drafts = await draftEssayAnswers(state.profile, job, questions.map((question) => ({
+    const drafts = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: token }, () => draftEssayAnswers(state.profile, job, questions.map((question) => ({
       question: question.label, answer: "", factIds: [], author: "ai", requiresUserInput: true,
-    })));
+    }))));
     await mutateState(userId, (current) => {
       const target = find(current, userId, applicationId);
       if (target.browserQuestionRun?.token !== token) return;
