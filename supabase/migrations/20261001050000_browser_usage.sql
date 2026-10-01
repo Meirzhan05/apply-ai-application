@@ -28,8 +28,8 @@ declare
   primary_report jsonb;
   secondary_report jsonb;
 begin
-  existing_report := case when existing_has_report then p_existing->'report' else '{}'::jsonb end;
-  incoming_report := case when incoming_has_report then p_incoming->'report' else '{}'::jsonb end;
+  existing_report := case when existing_has_report then jsonb_strip_nulls(p_existing->'report') else '{}'::jsonb end;
+  incoming_report := case when incoming_has_report then jsonb_strip_nulls(p_incoming->'report') else '{}'::jsonb end;
   existing_final := coalesce(existing_report->>'status' = 'stopped' or existing_report->>'finishedAt' is not null, false);
   incoming_final := coalesce(incoming_report->>'status' = 'stopped' or incoming_report->>'finishedAt' is not null, false);
   incoming_newer := (p_incoming->>'occurredAt')::timestamptz >= (p_existing->>'occurredAt')::timestamptz;
@@ -44,7 +44,7 @@ begin
     primary_report := existing_report;
     secondary_report := incoming_report;
   end if;
-  return jsonb_set(p_existing || p_incoming, '{report}', jsonb_strip_nulls(secondary_report || primary_report), true);
+  return jsonb_set(p_existing || p_incoming, '{report}', jsonb_strip_nulls(secondary_report) || jsonb_strip_nulls(primary_report), true);
 end;
 $$;
 revoke all on function public.merge_browser_usage_data(jsonb, jsonb) from public, anon, authenticated;

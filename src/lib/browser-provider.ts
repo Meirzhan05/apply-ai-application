@@ -34,7 +34,7 @@ function browserbaseReport(session: unknown): BrowserProviderReport {
   const value = session && typeof session === "object" ? session as Record<string, unknown> : {};
   const date = (key: string) => typeof value[key] === "string" ? value[key] as string : undefined;
   const bytes = typeof value.proxyBytes === "number" && Number.isFinite(value.proxyBytes) && value.proxyBytes >= 0 ? value.proxyBytes / 1_000_000 : undefined;
-  const status = value.status === "RUNNING" ? "active" : value.status === "REQUEST_RELEASE" || value.status === "RELEASED" || value.status === "STOPPED" ? "stopped" : "unknown";
+  const status = value.status === "PENDING" || value.status === "RUNNING" ? "active" : value.status === "ERROR" || value.status === "TIMED_OUT" || value.status === "COMPLETED" ? "stopped" : "unknown";
   return { status, startedAt: date("startedAt"), finishedAt: date("endedAt"), expiresAt: date("expiresAt"), proxyUsedMb: bytes };
 }
 

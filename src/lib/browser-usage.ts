@@ -131,17 +131,21 @@ export async function recordBrowserUsage(record: BrowserUsageRecord): Promise<vo
 function isFinalReport(report: BrowserProviderReport | null): boolean {
   return report?.status === "stopped" || report?.finishedAt !== undefined;
 }
-function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+function withoutUndefined<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+function normalizedReport(report: BrowserProviderReport | null): BrowserProviderReport | null {
+  return report ? withoutUndefined(report) : null;
 }
 function mergeBrowserUsageRecord(previous: BrowserUsageRecord | undefined, incoming: BrowserUsageRecord): BrowserUsageRecord {
   if (!previous) return incoming;
-  const previousFinal = isFinalReport(previous.report), incomingFinal = isFinalReport(incoming.report);
+  const previousReport = normalizedReport(previous.report), incomingReport = normalizedReport(incoming.report);
+  const previousFinal = isFinalReport(previousReport), incomingFinal = isFinalReport(incomingReport);
   const incomingNewer = incoming.occurredAt >= previous.occurredAt;
   const newer = incomingNewer ? incoming : previous;
   const older = incomingNewer ? previous : incoming;
-  const primary = previousFinal && !incomingFinal ? previous.report : newer.report;
-  const secondary = previousFinal && !incomingFinal ? incoming.report : older.report;
+  const primary = previousFinal && !incomingFinal ? previousReport : normalizedReport(newer.report);
+  const secondary = previousFinal && !incomingFinal ? incomingReport : normalizedReport(older.report);
   const report = primary || secondary ? withoutUndefined({ ...(secondary ?? {}), ...(primary ?? {}) }) : null;
   const merged = { ...older, ...newer, occurredAt: newer.occurredAt, report };
   if (incoming.applicationId === undefined) merged.applicationId = previous.applicationId;

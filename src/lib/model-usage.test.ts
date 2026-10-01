@@ -71,3 +71,25 @@ it("uses a later complete provider report when an earlier delivery lacks measure
   expect(report.measuredCalls).toBe(1);
   expect(report.estimatedUsd).toBeCloseTo(0.000132, 8);
 });
+
+it("preserves a fuller completed report across older and newer same-id partial replays", async () => {
+  const userId = randomUUID();
+  const id = `same-id-${randomUUID()}`;
+  const full = {
+    version: 1 as const, id, userId, runId: "run", provider: "openai" as const, model: "gpt-6-sol", operation: "matching",
+    startedAt: "2026-10-01T00:10:00.000Z", completedAt: "2026-10-01T00:11:00.000Z", status: "reported" as const,
+    responseId: "response", requestId: null, providerStatus: "completed", serviceTier: "default",
+    tokens: { input: 1000, cachedInput: 200, cacheWrite: 100, output: 100, reasoningOutput: 60 },
+    rate: { version: "openai-standard-2026-10-01" as const, source: "pricing", checkedAt: "2026-10-01" as const, unit: "USD per million tokens" as const, context: "short" as const, input: 2, cachedInput: .2, cacheWrite: 2.5, output: 10 },
+    estimatedUsd: .00269, reconciledUsd: null, failure: null,
+  };
+  await recordModelUsage(full);
+  await recordModelUsage({ ...full, startedAt: "2026-10-01T00:01:00.000Z", completedAt: "2026-10-01T00:02:00.000Z", responseId: null, providerStatus: null, rate: null, estimatedUsd: null, tokens: { input: 1000, cachedInput: null, cacheWrite: null, output: null, reasoningOutput: null } });
+  await recordModelUsage({ ...full, startedAt: "2026-10-01T00:20:00.000Z", completedAt: "2026-10-01T00:21:00.000Z", responseId: null, providerStatus: null, rate: null, estimatedUsd: null, tokens: { input: 1000, cachedInput: null, cacheWrite: null, output: null, reasoningOutput: null } });
+  await recordModelUsage({ ...full, startedAt: "2026-10-01T00:30:00.000Z", completedAt: "2026-10-01T00:31:00.000Z", tokens: { ...full.tokens, output: 999 }, estimatedUsd: .09 });
+  await recordModelUsage({ ...full, startedAt: "2026-10-01T00:25:00.000Z", completedAt: "2026-10-01T00:26:00.000Z", tokens: { ...full.tokens, output: 1 }, estimatedUsd: .0001 });
+  const report = await readModelUsage(userId);
+  expect(report.measuredCalls).toBe(1);
+  expect(report.estimatedUsd).toBeCloseTo(.09, 8);
+  expect(report.records[0].tokens).toMatchObject({ input: 1000, cachedInput: 200, cacheWrite: 100, output: 999, reasoningOutput: 60 });
+});

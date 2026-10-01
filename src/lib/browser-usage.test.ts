@@ -63,4 +63,11 @@ describe("browser usage ledger", () => {
     expect(usage.measuredUsd).toBeCloseTo(0.09);
     expect(usage.sessions.find((item) => item.sessionId === "session-order")).toMatchObject({ browserCostUsd: 0.04, proxyCostUsd: 0.05, estimatedUsd: 0.04 });
   });
+
+  it("fills a newer partial browser report whose omitted keys are explicit undefined", async () => {
+    await recordBrowserUsageEvent({ ...owner, provider: "browser-use", sessionId: "session-undefined", event: "stopped", occurredAt: "2026-10-01T00:01:00.000Z", report: { status: "stopped", finishedAt: "2026-10-01T00:01:00.000Z", proxyUsedMb: 8, proxyCostUsd: 0.04, browserCostUsd: 0.02 }, failure: null, orphanedSessionId: null });
+    await recordBrowserUsageEvent({ ...owner, provider: "browser-use", sessionId: "session-undefined", event: "stopped", occurredAt: "2026-10-01T00:02:00.000Z", report: { status: "stopped", finishedAt: "2026-10-01T00:02:00.000Z", proxyUsedMb: undefined, proxyCostUsd: undefined, browserCostUsd: 0.03 }, failure: null, orphanedSessionId: null });
+    const session = (await readBrowserUsage(owner.userId)).sessions.find((item) => item.sessionId === "session-undefined");
+    expect(session).toMatchObject({ proxyUsedMb: 8, proxyCostUsd: 0.04, browserCostUsd: 0.03 });
+  });
 });

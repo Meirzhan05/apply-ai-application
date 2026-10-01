@@ -36,7 +36,7 @@ describe("Browser Use Cloud session lifecycle", () => {
     expect(fetch.mock.calls[0][1].method).toBe("PATCH"); expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: "stop" }); expect(legacy.update).not.toHaveBeenCalled();
   });
   it("releases legacy Browserbase records using their provider rather than the new default", async () => {
-    setup(); legacy.update.mockResolvedValue({}); legacy.retrieve.mockResolvedValue({ status: "REQUEST_RELEASE" }); await releaseRemoteBrowser({ browserSessionId: "legacy-session" });
+    setup(); legacy.update.mockResolvedValue({}); legacy.retrieve.mockResolvedValue({ status: "RUNNING" }); await releaseRemoteBrowser({ browserSessionId: "legacy-session" });
     expect(applicationBrowserProvider({})).toBe("browserbase"); expect(legacy.update).toHaveBeenCalledWith("legacy-session", expect.objectContaining({ status: "REQUEST_RELEASE" }));
   });
   it("returns actionable quota errors without leaking provider response data or retrying", async () => {
@@ -58,6 +58,15 @@ describe("Browser Use Cloud session lifecycle", () => {
   it("reads authoritative lifecycle status", async () => {
     setup(); vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ ...session, status: "stopped" })));
     expect(await remoteBrowserStatus({ browserProvider: "browser-use", browserSessionId: id })).toBe("stopped");
+  });
+  it("maps Browserbase documented statuses without treating a release request as terminal", async () => {
+    setup(); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key");
+    legacy.retrieve.mockResolvedValueOnce({ status: "PENDING" }).mockResolvedValueOnce({ status: "COMPLETED" }).mockResolvedValueOnce({ status: "ERROR" });
+    expect(await remoteBrowserStatus({ browserProvider: "browserbase", browserSessionId: "legacy-session" })).toBe("active");
+    expect(await remoteBrowserStatus({ browserProvider: "browserbase", browserSessionId: "legacy-session" })).toBe("stopped");
+    expect(await remoteBrowserStatus({ browserProvider: "browserbase", browserSessionId: "legacy-session" })).toBe("stopped");
+    legacy.retrieve.mockResolvedValueOnce({ status: "REQUEST_RELEASE" });
+    await expect(remoteBrowserStatus({ browserProvider: "browserbase", browserSessionId: "legacy-session" })).rejects.toThrow("unknown session status");
   });
   it("requires the chosen provider key and never silently falls back", async () => {
     setup(); vi.stubEnv("BROWSER_USE_API_KEY", ""); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key");

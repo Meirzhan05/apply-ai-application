@@ -64,6 +64,32 @@ async function readLocal(file: string): Promise<ModelUsageRecord[]> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
 }
 
+function usageCompleteness(record: ModelUsageRecord): number {
+  return Object.values(record.tokens).filter((value) => value !== null).length
+    + (record.rate ? 1 : 0) + (record.estimatedUsd !== null ? 1 : 0)
+    + (record.responseId ? 1 : 0) + (record.providerStatus ? 1 : 0);
+}
+function usageTimestamp(record: ModelUsageRecord): string {
+  return record.completedAt ?? record.startedAt;
+}
+function mergeModelUsageRecord(previous: ModelUsageRecord, incoming: ModelUsageRecord): ModelUsageRecord {
+  const previousComplete = previous.completedAt !== null;
+  const incomingComplete = incoming.completedAt !== null;
+  if (previousComplete && !incomingComplete) return previous;
+  const previousScore = usageCompleteness(previous), incomingScore = usageCompleteness(incoming);
+  if (incomingScore < previousScore || (incomingScore === previousScore && usageTimestamp(incoming) < usageTimestamp(previous))) return previous;
+  const primary = incoming, secondary = previous;
+  const tokens = Object.fromEntries(Object.keys(primary.tokens).map((key) => {
+    const name = key as keyof ModelUsageRecord["tokens"];
+    return [name, primary.tokens[name] ?? secondary.tokens[name]];
+  })) as ModelUsageRecord["tokens"];
+  return { ...secondary, ...primary, completedAt: primary.completedAt ?? secondary.completedAt,
+    responseId: primary.responseId ?? secondary.responseId, requestId: primary.requestId ?? secondary.requestId,
+    providerStatus: primary.providerStatus ?? secondary.providerStatus, serviceTier: primary.serviceTier ?? secondary.serviceTier,
+    tokens, rate: primary.rate ?? secondary.rate, estimatedUsd: primary.estimatedUsd ?? secondary.estimatedUsd,
+    reconciledUsd: primary.reconciledUsd ?? secondary.reconciledUsd, failure: primary.failure ?? secondary.failure };
+}
+
 // Stable invocation IDs make replayed reports updates, never additional charges.
 // This ledger is separate from owner-state CAS: provider work cannot be rerun by a state retry.
 export async function recordModelUsage(record: ModelUsageRecord): Promise<void> {
@@ -74,9 +100,7 @@ export async function recordModelUsage(record: ModelUsageRecord): Promise<void> 
       const records = await readLocal(file);
       const previous = records.find((item) => item.id === record.id);
       if (previous && previous.userId !== record.userId) throw new Error("Usage record belongs to another owner.");
-      // Never let an older started delivery overwrite a completed report.
-      if (previous?.completedAt && !record.completedAt) return;
-      const next = [...records.filter((item) => item.id !== record.id), record];
+      const next = [...records.filter((item) => item.id !== record.id), previous ? mergeModelUsageRecord(previous, record) : record];
       await mkdir(path.dirname(file), { recursive: true });
       const temporary = `${file}.${randomUUID()}.tmp`;
       await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
@@ -109,9 +133,8 @@ export async function readModelUsage(userId: string): Promise<ModelUsageReport> 
   for (const record of records) {
     const key = record.responseId ? `${record.provider}:${record.responseId}` : record.id;
     const previous = identities.get(key);
-    const completeness = (item: ModelUsageRecord) => Object.values(item.tokens).filter((value) => value !== null).length;
-    if (!previous || completeness(record) > completeness(previous) ||
-      (completeness(record) === completeness(previous) && (record.completedAt ?? "") > (previous.completedAt ?? ""))) identities.set(key, record);
+    if (!previous || usageCompleteness(record) > usageCompleteness(previous) ||
+      (usageCompleteness(record) === usageCompleteness(previous) && usageTimestamp(record) > usageTimestamp(previous))) identities.set(key, record);
   }
   records = [...identities.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   const measuredCalls = records.filter((item) => item.tokens.input !== null && item.tokens.output !== null).length;
