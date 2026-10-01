@@ -170,7 +170,20 @@ export interface ResumeArtifact {
   source: { storageKey: string; sha256: string; size: number };
 }
 
+export interface AutomaticEssayAuthorization {
+  version: 1;
+  profileVersion: number;
+  profileHash: string;
+  jobHash: string;
+  targetUrl: string;
+  questionHash: string;
+  control?: { identifier: string; kind: string; label: string; formStructureHash: string; observedFormHash: string; sessionId: string };
+  contentHash: string;
+  evidenceHash: string;
+}
+
 export interface ScreeningAnswer {
+  autonomousEssayAuthorization?: AutomaticEssayAuthorization;
   question: string;
   answer: string;
   factIds: string[];
@@ -179,6 +192,8 @@ export interface ScreeningAnswer {
   author?: "ai" | "human";
   confirmedAt?: string;
   aiDraft?: {
+    mode?: "general-truthful";
+    preferenceSources?: true;
     version: 1;
     model: string;
     contentHash: string;
@@ -367,7 +382,7 @@ export interface Application {
   runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
-  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; verification?: boolean; verified?: boolean };
+  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; essayOnly?: boolean; verification?: boolean; verified?: boolean };
 }
 
 export interface ActivityEvent {

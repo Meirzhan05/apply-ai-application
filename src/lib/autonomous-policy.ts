@@ -1,3 +1,4 @@
+import { assertAutonomousEssay, hasAutonomousEssayValue } from "@/lib/autonomous-essays";
 import { originalResumeManifest } from "@/lib/original-resume";
 import { hashJson } from "@/lib/crypto";
 import { assertJobEligible } from "@/lib/application-policy";
@@ -8,8 +9,8 @@ import { formDigest } from "@/lib/workflow";
 import { answerOwner } from "@/lib/answer-responsibility";
 import type { Application, Job, Profile, FormSnapshot } from "@/lib/types";
 
-export function unsupportedAutonomousForm(form: Pick<FormSnapshot, "fields">): boolean {
-  return form.fields.some((field) => field.kind === "textarea" || answerOwner(field.label) === "ai");
+export function unsupportedAutonomousForm(form: Pick<FormSnapshot, "fields">, application?: Application): boolean {
+  return form.fields.some((field) => (field.kind === "textarea" || answerOwner(field.label) === "ai") && (field.required || Boolean(field.value.trim())) && !hasAutonomousEssayValue(application, field, form.fields));
 }
 
 export function exactApplicationUrl(raw: string, base?: string): string {
@@ -75,14 +76,15 @@ export function assertAutonomous(application: Application, profile: Profile, job
     throw new Error("The application authorization changed. Start a new authorized workflow after reviewing your settings.");
   if (phase === "draft") return;
   if (!application.packet || auth.packetHash !== application.packetHash || application.packetHash !== hashJson(application.packet) ||
-      !auth.filesHash || auth.filesHash !== hashJson(application.packet.files) || (application.packet.coverLetter && (profile.automationSettings!.coverLetterMode === "disabled" || (profile.automationSettings!.coverLetterMode === "required-only" && !auth.requiredCoverLetter))) || application.packet.answers.length)
+      !auth.filesHash || auth.filesHash !== hashJson(application.packet.files) || (application.packet.coverLetter && (profile.automationSettings!.coverLetterMode === "disabled" || (profile.automationSettings!.coverLetterMode === "required-only" && !auth.requiredCoverLetter))))
     throw new Error("The validated application materials changed or require an unsupported letter or essay.");
   validatePacket(profile, application.packet);
+  for (const answer of application.packet.answers) assertAutonomousEssay(profile, job, answer);
   if (phase === "fill") return;
   const form = application.form;
   if (form) assertAutonomousDestination(application, form);
   if (auth.requiredCoverLetter && !form?.fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label))) throw new Error("The authorized required cover-letter control changed.");
-  if (!form || !form.readyToSubmit || unsupportedAutonomousForm(form) || form.blockers?.length || form.hash !== formDigest(form) || auth.formHash !== form.hash ||
+  if (!form || !form.readyToSubmit || unsupportedAutonomousForm(form, application) || form.blockers?.length || form.hash !== formDigest(form) || auth.formHash !== form.hash ||
       application.packet.files?.some((file) => (file.kind === "resume" || form.fields.some((field) => field.kind === "file" && /cover\s*letter/i.test(field.label))) && !form.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ||
       application.submissionAttemptedAt)
     throw new Error("The authorized form changed or a submission was already attempted. No new submission is allowed.");

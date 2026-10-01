@@ -1,3 +1,4 @@
+import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
@@ -55,7 +56,7 @@ export async function draftPacket(
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
   if (options?.knownAnswersOnly && profile.automationSettings?.resumeTailoring === false) {
-    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResumeManifest(profile), version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: [], createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
+    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResumeManifest(profile), version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
     return profile.automationSettings.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
   }
   if (facts.length === 0)
@@ -138,7 +139,7 @@ export async function draftPacket(
   if (options?.regenerateEssays) answers = answers.map((answer) => answerOwner(answer.question) === "ai" ? { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "ai" } : answer);
   const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&
     (!previous.coverLetterContext || previous.coverLetter === `Dear Hiring Team,\n\nI am applying for the ${previous.coverLetterContext.title} role at ${previous.coverLetterContext.company}.\n\n${previous.coverLetterFactIds.map((id) => facts.find((fact) => fact.id === id)!.text).join("\n")}\n\nThank you for considering my application.\n\nSincerely,\n${profile.name}`);
-  answers = options?.knownAnswersOnly ? [] : await draftEssayAnswers(profile, job, answers, options?.deadline);
+  answers = options?.knownAnswersOnly ? await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline) : await draftEssayAnswers(profile, job, answers, options?.deadline);
   if (options?.beforeModelCall) await options.beforeModelCall();
   const packet = await withPacketFiles(profile, {
     schemaVersion: resumeDocument ? 2 : 1,

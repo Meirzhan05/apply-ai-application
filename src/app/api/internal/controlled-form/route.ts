@@ -37,8 +37,9 @@ export async function GET(request: Request) {
     return html("<h1>Synthetic verification challenge</h1><p>This is a controlled test, not a CAPTCHA provider.</p>", true);
   }
   const questions = context.app.controlledTest?.questions ? '<fieldset><legend>Will you now or in the future require visa sponsorship?</legend><label><input type="radio" name="sponsorship" value="Yes" required>Yes</label><label><input type="radio" name="sponsorship" value="No" required>No</label></fieldset><label>Favorite snack<select name="snack" required><option value="">Choose an option</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label>' : "";
+  const automaticEssay = context.app.controlledTest?.essayOnly && !context.app.controlledTest.questions ? '<label>Why this role?<textarea name="why" required></textarea></label>' : "";
   // Token characters are restricted to base64url and a separator by signing.
-  return html(`<p>Controlled cloud test · no employer receives this application</p><h1>Synthetic test application</h1><form action="/api/internal/controlled-form?token=${token}" method="post" enctype="multipart/form-data" style="display:grid;gap:18px"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" accept=".pdf" required></label>${questions}<button type="submit">Submit application</button></form>`);
+  return html(`<p>Controlled cloud test · no employer receives this application</p><h1>Synthetic test application</h1><form action="/api/internal/controlled-form?token=${token}" method="post" enctype="multipart/form-data" style="display:grid;gap:18px"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" accept=".pdf" required></label>${questions}${automaticEssay}<button type="submit">Submit application</button></form>`);
 }
 
 export async function POST(request: Request) {
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
   const bytes = Buffer.from(await resume.arrayBuffer());
   const fileHash = `${resume.name}:${resume.size}:${createHash("sha256").update(bytes).digest("hex")}`;
   if (!context.app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes?.includes(fileHash)) return new Response("The reviewed attachment changed", { status: 409 });
-  for (const identifier of ["firstName", "lastName", "email", ...(context.app.controlledTest?.questions ? ["sponsorship", "snack", "why"] : [])]) {
+  for (const identifier of ["firstName", "lastName", "email", ...(context.app.controlledTest?.questions ? ["sponsorship", "snack", "why"] : context.app.controlledTest?.essayOnly ? ["why"] : [])]) {
     const reviewed = context.app.form.fields.find((field) => field.identifier === identifier && (field.kind !== "radio" || field.checked));
     if (!reviewed?.value || reviewed.value !== String(data.get(identifier) || "")) return new Response("The reviewed fields changed", { status: 409 });
   }

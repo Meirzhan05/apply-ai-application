@@ -42,7 +42,7 @@ async function main() {
     state.jobs = [job]; state.importedJobs = [job]; state.applications = [];
     const app = selectApplication(state, job.id, owner); applicationId = app.id;
     const issued = issueControlledTestGrant(owner, app.id); job.url = job.applyUrl = `${origin}/api/internal/controlled-form?token=${issued.token}`; app.jobSnapshot = { ...job };
-    app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, verification: process.env.TEST_CLOUD_VERIFICATION === "true" };
+    app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, essayOnly: process.env.TEST_CLOUD_ESSAYS === "true", verification: process.env.TEST_CLOUD_VERIFICATION === "true" };
     // Receiver needs the preassigned synthetic application id to sign its URL.
     // The public action queues this sealed selected fixture through the ordinary pipeline.
     authorizeKnownAnswerApplication(app, state.profile, job);
@@ -64,7 +64,16 @@ async function main() {
     } while (Date.now() < deadline);
     if (!current!.submissionAttemptedAt || !["submitted", "awaiting_verification"].includes(current!.status)) console.error(JSON.stringify({ status: current!.status, attempted: Boolean(current!.submissionAttemptedAt), received: current!.controlledTest?.submissions, packetSchema: current!.packet?.schemaVersion ?? null }));
     assert.ok(current!.submissionAttemptedAt, "No durable attempt was recorded"); assert.equal(current!.controlledTest?.submissions, 1); assert.deepEqual(current!.approvals, []);
-    assert.equal(current!.packet?.schemaVersion, 2); assert.deepEqual(current!.packet?.answers, []);
+    assert.equal(current!.packet?.schemaVersion, 2);
+    if (process.env.TEST_CLOUD_ESSAYS === "true") {
+      assert.equal(current!.packet?.answers.length, 1);
+      for (const answer of current!.packet!.answers) {
+        assert.ok(answer.aiDraft && answer.autonomousEssayAuthorization); assert.equal(answer.confirmedAt, undefined);
+        assert.equal(answer.autonomousEssayAuthorization.profileVersion, current!.autonomousAuthorization!.profileVersion);
+        assert.ok(current!.form!.fields.find((field) => field.identifier === "why")?.value === answer.answer, "The observed essay must equal its authorized draft");
+        assert.ok(answer.autonomousEssayAuthorization.targetUrl === job.applyUrl && answer.autonomousEssayAuthorization.contentHash === answer.aiDraft.contentHash && answer.autonomousEssayAuthorization.evidenceHash === answer.aiDraft.evidenceHash, "Essay evidence and destination must remain sealed");
+      }
+    } else assert.equal(current!.packet?.answers.length, 0);
     assert.equal(current!.autonomousAuthorization?.packetHash, current!.packetHash); assert.equal(current!.autonomousAuthorization?.formHash, current!.form?.hash);
     if (process.env.TEST_CLOUD_VERIFICATION === "true") {
       assert.equal(current!.status, "awaiting_verification"); const browser = await chromium.connectOverCDP(current!.browserConnectUrl!);
@@ -76,6 +85,9 @@ async function main() {
     await startAutonomousApplication(owner, job.id); assert.equal((await loadState(owner)).applications.filter((item) => item.jobId === job.id).length, 1);
     assert.equal((await loadState(owner)).applications.find((item) => item.id === applicationId)!.controlledTest?.submissions, 1);
     const usage = await ownerUsageView(owner); assert.ok(usage.records.length, "Model ledger should contain the real preparation calls");
+    if (process.env.TEST_CLOUD_ESSAYS === "true") {
+      for (const operation of ["essay-generation", "essay-grounding"]) assert.ok(usage.records.some((record) => record.applicationId === applicationId && record.operation === operation && record.status === "reported" && record.responseId && record.tokens.input !== null), `Missing actual provider usage: ${operation}`);
+    }
     const browserSessions = usage.browser.sessions.filter((session) => session.applicationId === applicationId);
     assert.ok(browserSessions.length, "Browser ledger should identify the controlled provider session");
     for (const session of browserSessions) {
@@ -99,7 +111,8 @@ async function main() {
       const proofDirectory = path.join(tmpdir(), "apply-controlled-proofs"); await mkdir(proofDirectory, { recursive: true });
       const proofFile = path.join(proofDirectory, `autonomous-${Date.now()}-${randomUUID()}.json`);
       const proof = {
-        recordedAt: new Date().toISOString(), mode: process.env.TEST_CLOUD_VERIFICATION === "true" ? "verification" : "normal", outcome: app?.status ?? "no_application",
+        recordedAt: new Date().toISOString(), mode: process.env.TEST_CLOUD_VERIFICATION === "true" ? "verification" : "normal", essayMode: process.env.TEST_CLOUD_ESSAYS === "true", outcome: app?.status ?? "no_application",
+        automaticEssays: (app?.packet?.answers ?? []).map((answer) => ({ mode: answer.aiDraft?.mode ?? "grounded", evidenceKind: answer.aiDraft?.preferenceSources ? "facts-and-saved-preferences" : "confirmed-facts", contentHash: answer.aiDraft?.contentHash ?? null, evidenceHash: answer.aiDraft?.evidenceHash ?? null, legacyConfirmed: Boolean(answer.confirmedAt) })),
         packetFiles: (app?.packet?.files ?? []).map(({ filename, size, sha256 }) => ({ filename, size, sha256 })),
         attempted: Boolean(app?.submissionAttemptedAt), requestCount: app?.controlledTest?.submissions ?? 0, legacyApprovalCount: app?.approvals.length ?? 0,
         models: allUsage.records.map((record) => ({ operation: record.operation, model: record.model, status: record.status, tokens: record.tokens, estimatedUsd: record.estimatedUsd, rateVersion: record.rate?.version ?? null })),

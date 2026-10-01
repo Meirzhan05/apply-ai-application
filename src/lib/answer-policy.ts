@@ -4,18 +4,30 @@ import { answerOwner } from "@/lib/answer-responsibility";
 export { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
 
 export function essayContentHash(answer: ScreeningAnswer): string {
-  return hashJson({ question: answer.question, answer: answer.answer, factIds: answer.factIds, sentences: answer.aiDraft?.sentences });
+  return hashJson({ question: answer.question, answer: answer.answer, factIds: answer.factIds, mode: answer.aiDraft?.mode, preferenceSources: answer.aiDraft?.preferenceSources, sentences: answer.aiDraft?.sentences });
 }
 
-export function essayEvidenceHash(profile: Profile, factIds: string[]): string {
-  return hashJson(factIds.map((id) => profile.facts.find((f) => f.id === id && f.verified)).map((f) => f ? { id: f.id, text: f.text } : null));
+export function essaySources(profile: Profile, preferenceSources = false): Array<{ id: string; text: string }> {
+  const facts = profile.facts.filter((fact) => fact.verified && (!preferenceSources || !fact.id.startsWith("profile-preference:"))).map(({ id, text }) => ({ id, text }));
+  if (!preferenceSources || !profile.onboarding?.completedAt || profile.automationAuthorization?.status !== "enabled" || profile.automationAuthorization.version !== profile.automationVersion) return facts;
+  return [...facts,
+    ...(profile.preferredTitles.length ? [{ id: "profile-preference:titles", text: `Preferred role titles: ${profile.preferredTitles.join(", ")}.` }] : []),
+    ...(profile.preferredLocations.length ? [{ id: "profile-preference:locations", text: `Preferred locations: ${profile.preferredLocations.join(", ")}.` }] : []),
+    { id: "profile-preference:remote", text: profile.remoteOnly ? "Remote roles only." : "Remote-only search restriction: disabled." },
+  ];
+}
+
+export function essayEvidenceHash(profile: Profile, factIds: string[], preferenceSources = false): string {
+  const sources = essaySources(profile, preferenceSources);
+  return hashJson(factIds.map((id) => sources.find((fact) => fact.id === id) ?? null));
 }
 
 export function validateAiEssay(profile: Profile, answer: ScreeningAnswer): void {
   const draft = answer.aiDraft;
+  const sources = essaySources(profile, draft?.preferenceSources);
   if (answerOwner(answer.question) !== "ai" || answer.author !== "ai" || answer.userProvided || !draft || draft.version !== 1 ||
-    !answer.factIds.length || draft.evidenceHash !== essayEvidenceHash(profile, answer.factIds) ||
-    answer.factIds.some((id) => !profile.facts.some((f) => f.id === id && f.verified)) ||
+    (!answer.factIds.length && draft.mode !== "general-truthful") || (draft.mode === "general-truthful" && (answer.factIds.length > 0 || draft.sentences.some((sentence) => sentence.kind !== "perspective" || sentence.factIds.length))) || draft.evidenceHash !== essayEvidenceHash(profile, answer.factIds, draft.preferenceSources) ||
+    answer.factIds.some((id) => !sources.some((fact) => fact.id === id)) ||
     answer.answer !== draft.sentences.map((s) => s.text).join(" ") || draft.contentHash !== essayContentHash(answer) ||
     draft.sentences.some((s) => !s.text.trim() || (s.kind === "fact" && !s.factIds.length) || s.factIds.some((id) => !answer.factIds.includes(id))) ||
     hashJson([...new Set(draft.sentences.flatMap((s) => s.factIds))]) !== hashJson(answer.factIds))

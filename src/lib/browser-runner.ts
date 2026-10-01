@@ -16,6 +16,7 @@ import { assertAutonomous, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
 import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
+import { automaticEssayQuestions, hasBoundAutonomousEssayControl } from "@/lib/autonomous-essays";
 import { browserQuestions } from "@/lib/browser-questions";
 import { answerOwner } from "@/lib/answer-responsibility";
 import { browserUsageContext, recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
@@ -315,7 +316,7 @@ function allowedValues(
   };
   application.packet?.answers.forEach((answer, index) => {
     if (
-      (!answer.requiresUserInput || answer.userProvided) &&
+      (!answer.requiresUserInput || answer.userProvided || (application.autonomousAuthorization && answer.autonomousEssayAuthorization)) &&
       answer.answer.trim()
     )
       values[`answer_${index}`] = answer.answer;
@@ -331,6 +332,8 @@ function deterministicKey(
   application: Application,
 ): string | undefined {
   const label = field.label.toLowerCase().trim().replace(/\s+/g, " ");
+  const boundIndex = application.autonomousAuthorization ? application.packet?.answers.findIndex((answer) => answer.autonomousEssayAuthorization?.control?.identifier === field.identifier && answer.autonomousEssayAuthorization.control.kind === field.kind && answer.autonomousEssayAuthorization.control.label === field.label) : undefined;
+  if (boundIndex !== undefined && boundIndex >= 0) return `answer_${boundIndex}`;
   const answerIndex = application.packet?.answers.findIndex(
     (answer) => answer.question.toLowerCase().trim().replace(/\s+/g, " ") === label,
   );
@@ -574,6 +577,7 @@ export async function prepareBrowser(
   onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
   onAction?: (label: string) => Promise<boolean>,
   onRequiredCoverLetter?: (form: Omit<FormSnapshot, "hash">) => Promise<NonNullable<Application["packet"]>>,
+  onAutomaticEssays?: (form: Omit<FormSnapshot, "hash">) => Promise<NonNullable<Application["packet"]>>,
 ): Promise<{
   form: Omit<FormSnapshot, "hash">;
   provider?: RemoteBrowserSession["provider"];
@@ -638,6 +642,7 @@ export async function prepareBrowser(
   const { browser, page } = runtime;
   application.browserCaptchaSolving = captchaSolving;
   try {
+    application.browserSessionId = sessionId;
     if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
     await action("Opening the employer form");
     await page.goto(job.applyUrl, {
@@ -681,7 +686,21 @@ export async function prepareBrowser(
       coverLetter = await reviewedPacketFile(profile, application.packet, "cover-letter");
       await action("Verifying the required cover-letter attachment");
     }
-    const values = allowedValues(profile, application);
+    let essayRounds = 0;
+    const ensureEssays = async () => {
+      if (!application.autonomousAuthorization) return;
+      const observed = await snapshot(page, application);
+      const questions = automaticEssayQuestions(application, observed);
+      if (!questions.some((question) => !hasBoundAutonomousEssayControl(application, observed.fields.find((field) => field.identifier === question.identifier)!, observed.fields))) return;
+      if (!onAutomaticEssays || ++essayRounds > 5) throw new Error("This form requires an unsupported automatic essay continuation.");
+      await action("Preparing truthful answers to the observed essay controls");
+      application.packet = await onAutomaticEssays({ ...observed, readyToSubmit: false });
+      await action("Verifying the authorized essay answers");
+      const fresh = await inspectFields(page);
+      for (const field of fresh) if (!fields.some((item) => item.identifier === field.identifier && item.kind === field.kind && item.label === field.label)) fields.push(field);
+    };
+    await ensureEssays();
+    let values = allowedValues(profile, application);
     await action("Mapping questions to approved answers");
     const ai = await aiMappings(fields, values, application);
     let needsAction = false;
@@ -716,6 +735,7 @@ export async function prepareBrowser(
           });
         await waitForUploads(page);
         await action(`Uploaded: ${field.label}`);
+        await ensureEssays(); values = allowedValues(profile, application);
         continue;
       }
       if (
@@ -736,6 +756,7 @@ export async function prepareBrowser(
           });
         await waitForUploads(page);
         await action(`Uploaded: ${field.label}`);
+        await ensureEssays(); values = allowedValues(profile, application);
         continue;
       }
       if (
@@ -745,6 +766,10 @@ export async function prepareBrowser(
       ) {
         if (field.required && !field.valid) needsAction = true;
         continue;
+      }
+      if (application.autonomousAuthorization && answerOwner(field.label) === "ai" && !hasBoundAutonomousEssayControl(application, field, (await snapshot(page, application)).fields)) {
+        if (!field.required && !field.value.trim()) continue;
+        throw new Error("The authorized essay control changed before writing.");
       }
       const key = deterministicKey(field, application) ?? ai.get(field.index);
       const value = key ? values[key] : undefined;
@@ -777,6 +802,7 @@ export async function prepareBrowser(
         if (!filled && field.required) fillBlockers.push(`Select and confirm the option for: ${field.label}`);
       } else await locator.fill(value);
       await action(`Checked: ${field.label}`);
+      await ensureEssays(); values = allowedValues(profile, application);
     }
     if (!canAutomate(page.url()))
       throw new Error(
