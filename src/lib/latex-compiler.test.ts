@@ -30,7 +30,7 @@ describe("bounded readable one-page fitting", () => {
   });
   it("reports a missing compiler without exposing command output or credentials", async () => {
     vi.stubEnv("TECTONIC_BIN", "/missing/tectonic");
-    await expect(compileLatex("test", Date.now() + 20_000)).rejects.toThrow(/runtime is missing/);
+    await expect(compileLatex("test", Date.now() + 20_000)).rejects.toThrow("Resume compilation is temporarily unavailable. Please try again later; your saved packet is preserved.");
   });
   it("times out before starting a compiler after the shared deadline", async () => {
     await expect(compileLatex("test", Date.now() - 1)).rejects.toThrow(/timed out/);

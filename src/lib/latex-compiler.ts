@@ -18,7 +18,7 @@ export async function compileLatex(source: string, deadline: number): Promise<{ 
   try {
     if (deadline <= Date.now()) throw new Error("Resume compilation timed out. Retry the draft.");
     const version = await execute(tectonicBinary(), ["--version"], { timeout: timeout(), env, maxBuffer: 8192 });
-    if (!/Tectonic 0\.17\.0\b/.test(version.stdout)) throw new Error("Resume compilation requires Tectonic 0.17.0. Run npm run setup:latex.");
+    if (!/Tectonic 0\.17\.0\b/.test(version.stdout)) throw new Error("Resume compilation is temporarily unavailable. Please try again later; your saved packet is preserved.");
     await writeFile(path.join(dir, "resume.tex"), source, { mode: 0o600 });
     await execute(tectonicBinary(), ["-X", "compile", "--untrusted", "--only-cached", "--keep-logs", "--outdir", dir, path.join(dir, "resume.tex")], { cwd: dir, env, timeout: timeout(), killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
     const log = await readFile(path.join(dir, "resume.log"), "utf8");
@@ -28,7 +28,7 @@ export async function compileLatex(source: string, deadline: number): Promise<{ 
     return { bytes, pages: pdf.getPageCount() };
   } catch (error) {
     const problem = error as Error & { code?: string; killed?: boolean };
-    if (problem.code === "ENOENT") throw new Error("The LaTeX runtime is missing. Run npm run setup:latex, then retry; your existing packet is preserved.");
+    if (problem.code === "ENOENT") throw new Error("Resume compilation is temporarily unavailable. Please try again later; your saved packet is preserved.");
     if (problem.killed || deadline <= Date.now()) throw new Error("Resume compilation timed out. Retry the draft.");
     if (problem.message.startsWith("The resume") || problem.message.startsWith("Resume compilation")) throw problem;
     // Compiler diagnostics may contain applicant text or paths; never return

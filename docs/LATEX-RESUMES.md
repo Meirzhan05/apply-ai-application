@@ -18,6 +18,10 @@ Run `npm run setup:latex` for local development. The installer verifies pinned
 Tectonic 0.17.0 release checksums and warms the template's package/font cache.
 Production workers install the same runtime during image build at
 `/app/latex-runtime`. `TECTONIC_BIN` and `TECTONIC_CACHE_DIR` can override local paths.
+Cloud deployments always sync both paths from the installation directory with
+`override: true`; historical project settings must not point workers elsewhere.
+After each worker deployment, run `npm run test:latex-worker` with production
+credentials loaded to verify an actual one-page PDF, not just image build success.
 Runtime compilation uses an argument-array process launch, untrusted mode,
 cached packages only, an isolated temporary directory, a minimal environment,
 and a 20-second timeout per invocation. Temporary files are always removed.
@@ -74,3 +78,12 @@ packaged cache, producing a one-page, 20,097-byte PDF.
 Roll out the private bucket, v2 web readers, then the compiler worker. Inspect
 rendered PDFs and desktop/mobile review screenshots; do not rely only on text
 extraction. Rebuilding an existing owner packet requires an explicit user action.
+
+October 1, 2026 runtime-path correction: worker `20261001.1` reproduced the
+missing-runtime error because saved project settings referenced `/opt/apply-latex`
+while the image installed under `/app/latex-runtime`. Deployment now syncs the
+installed paths over stale settings. The same synthetic production smoke test
+passed on worker `20261001.2`, producing a one-page, 20,097-byte PDF. The deployment
+regression test failed before the fix and passed afterward; all 308 unit tests,
+typecheck, lint, production build, and local real-PDF checks passed. No owner
+application was drafted or submitted during verification.
