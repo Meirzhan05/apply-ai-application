@@ -1,3 +1,4 @@
+import { prepareAutonomousFormEssays } from "@/lib/autonomous-essays";
 import { withModelUsageContext } from "@/lib/model-usage";
 import { assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
 import { queueAutonomousSubmission, saveAutonomousSubmission } from "@/lib/autonomous-application";
@@ -91,6 +92,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       validatePacket(current.profile, target.packet!);
+      app.browserSessionId = opened.sessionId;
       target.browserSessionId = opened.sessionId;
       target.browserProvider = opened.provider;
       target.browserSessionExpiresAt = opened.expiresAt;
@@ -121,12 +123,25 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       });
       app.packet = packet; app.packetHash = hashJson(packet); app.autonomousAuthorization!.requiredCoverLetter = true; sealAutonomousPacket(app);
       return packet;
+    } : undefined, app.autonomousAuthorization ? async (observed) => {
+      assertAutonomousDestination(app, observed);
+      const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareAutonomousFormEssays(state.profile, job, app, observed, () => currentAutonomousRun(userId, applicationId, runToken, "fill")));
+      await mutateState(userId, (current) => {
+        const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
+        if (!target || target.status !== "filling" || target.runToken !== runToken || target.packetHash !== app.packetHash || target.browserSessionId !== app.browserSessionId) throw new Error("The form or materials changed during automatic essay preparation.");
+        assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
+        validatePacket(current.profile, packet);
+        target.packet = packet; target.packetHash = hashJson(packet); target.form = undefined; sealAutonomousPacket(target);
+        current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Essay prepared", detail: "Truthfully grounded; continuing the same authorized form." });
+      });
+      app.packet = packet; app.packetHash = hashJson(packet); sealAutonomousPacket(app);
+      return packet;
     } : undefined));
     const result = session;
-    if (app.autonomousAuthorization && (result.needsCoverLetter || unsupportedAutonomousForm(result.form))) {
+    if (app.autonomousAuthorization && (result.needsCoverLetter || unsupportedAutonomousForm(result.form, app))) {
       result.needsAction = true;
       result.form.readyToSubmit = false;
-      result.form.blockers = [...result.form.blockers || [], result.needsCoverLetter ? "The employer requires a cover letter, but your saved cover-letter mode does not permit this attachment." : "This automatic workflow does not yet support open-ended essays."];
+      result.form.blockers = [...result.form.blockers || [], result.needsCoverLetter ? "The employer requires a cover letter, but your saved cover-letter mode does not permit this attachment." : "An essay or required answer could not be grounded under the current authorization."];
     }
     const saved = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
