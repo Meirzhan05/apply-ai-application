@@ -38,6 +38,21 @@ export function autonomyJobHash(job: Job): string {
   return hashJson(posting);
 }
 
+/** Final claim guard for owner-confirmed controls kept outside the packet. */
+export function hasBoundAutonomousHumanAnswers(application: Application, profile: Profile, form: Pick<FormSnapshot, "url" | "fields">): boolean {
+  return (application.autonomousHumanAnswers ?? []).every((answer) => {
+    if (answer.userId !== profile.id || answer.applicationId !== application.id || answer.profileHash !== autonomyProfileHash(profile) || answer.targetUrl !== form.url) return false;
+    const fields = form.fields.filter((field) => field.identifier === answer.question.identifier && field.kind === answer.question.kind && field.label === answer.question.label);
+    if (!fields.length) return false;
+    if (answer.question.kind === "radio") {
+      const options = fields.map((field) => field.value);
+      return options.length === answer.question.options.length && options.every((option, index) => option === answer.question.options[index]) && fields.some((field) => field.value === answer.value && field.checked === true);
+    }
+    const field = fields.length === 1 ? fields[0] : undefined;
+    return Boolean(field && JSON.stringify(field.options ?? []) === JSON.stringify(answer.question.options) && field.value === answer.value);
+  });
+}
+
 /** Receiver validation for the already claimed attempt, never authorization for another click. */
 export function hasBoundSubmissionAttempt(application: Application, profile: Profile, job: Job | undefined): boolean {
   const attempt = application.submissionVerification;
@@ -84,7 +99,7 @@ export function assertAutonomous(application: Application, profile: Profile, job
   const form = application.form;
   if (form) assertAutonomousDestination(application, form);
   if (auth.requiredCoverLetter && !form?.fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label))) throw new Error("The authorized required cover-letter control changed.");
-  if (!form || !form.readyToSubmit || unsupportedAutonomousForm(form, application) || form.blockers?.length || form.hash !== formDigest(form) || auth.formHash !== form.hash ||
+  if (!form || !form.readyToSubmit || unsupportedAutonomousForm(form, application) || !hasBoundAutonomousHumanAnswers(application, profile, form) || form.blockers?.length || form.hash !== formDigest(form) || auth.formHash !== form.hash ||
       application.packet.files?.some((file) => (file.kind === "resume" || form.fields.some((field) => field.kind === "file" && /cover\s*letter/i.test(field.label))) && !form.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ||
       application.submissionAttemptedAt)
     throw new Error("The authorized form changed or a submission was already attempted. No new submission is allowed.");

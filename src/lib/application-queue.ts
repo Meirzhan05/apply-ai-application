@@ -8,11 +8,12 @@ import { transition } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
 import { explicitConflict } from "@/lib/matching";
 import { runDraft, runFill, type RunPayload } from "@/lib/application-runs";
+import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { AppState } from "@/lib/types";
 
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
-    (["filling", "submitting"].includes(app.status) ||
+    (Boolean(app.browserReleasePending) || ["filling", "submitting"].includes(app.status) ||
       (["final_review", "needs_user_action", "approved_to_submit", "awaiting_verification", "uncertain"].includes(app.status) && Boolean(app.browserSessionId))));
 }
 
@@ -66,7 +67,7 @@ export async function dispatchUserQueue(userId: string) {
     const latest = await loadState(userId);
     if (pendingApp.autonomousAuthorization) {
       try { const app = latest.applications.find((item) => item.id === pendingApp.id)!; assertAutonomous(app, latest.profile, latest.jobs.find((item) => item.id === app.jobId), queued.kind); }
-      catch (error) { await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.queuedRun?.id === queued.id) { target.queuedRun = undefined; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; } }); continue; }
+      catch (error) { await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.queuedRun?.id === queued.id) { target.queuedRun = undefined; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: target.jobSnapshot?.applyUrl }); } }); continue; }
     }
     if (queued.kind === "fill" && hasActiveBrowser(latest, pendingApp.id)) {
       await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.queuedRun?.id === queued.id) target.queuedRun.reason = "active_run"; });
@@ -85,7 +86,7 @@ export async function dispatchUserQueue(userId: string) {
       const job = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
       if (target.autonomousAuthorization) {
         try { assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), queued.kind); }
-        catch (error) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; return false; }
+        catch (error) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: target.jobSnapshot?.applyUrl }); return false; }
       }
       if (!job?.active) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; target.error = "This queued listing closed before the run started."; return false; }
       const conflict = explicitConflict(current.profile, job);

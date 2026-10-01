@@ -143,6 +143,10 @@ export async function releaseRemoteBrowser(app: Pick<Application, "browserProvid
       await browserUseRequest("PATCH", sessionPath(app.browserSessionId), { action: "stop" });
       const report = providerReport(await browserUseRequest("GET", sessionPath(app.browserSessionId)));
       const owner = browserUsageContext();
+      if (report.status !== "stopped") {
+        if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: app.browserSessionId, event: "release_failed", report, failure: "release_failed", orphanedSessionId: app.browserSessionId });
+        return report;
+      }
       if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: app.browserSessionId, event: "stopped", report, failure: null, orphanedSessionId: null });
       return report;
     } catch (error) {
@@ -156,6 +160,10 @@ export async function releaseRemoteBrowser(app: Pick<Application, "browserProvid
       await bb.sessions.update(app.browserSessionId, { projectId: process.env.BROWSERBASE_PROJECT_ID, status: "REQUEST_RELEASE" });
       const report = browserbaseReport(await bb.sessions.retrieve(app.browserSessionId));
       const owner = browserUsageContext();
+      if (report.status !== "stopped") {
+        if (owner) await recordBrowserUsageEvent({ ...owner, provider: "browserbase", sessionId: app.browserSessionId, event: "release_failed", report, failure: "release_failed", orphanedSessionId: app.browserSessionId });
+        return report;
+      }
       if (owner) await recordBrowserUsageEvent({ ...owner, provider: "browserbase", sessionId: app.browserSessionId, event: "stopped", report, failure: null, orphanedSessionId: null });
       return report;
     } catch (error) {
