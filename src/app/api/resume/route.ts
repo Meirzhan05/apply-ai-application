@@ -9,6 +9,8 @@ import { sameOrigin } from "@/lib/request-security";
 import { suggestResumeFacts } from "@/lib/resume-facts";
 import { bumpAutomationVersion } from "@/lib/onboarding";
 
+import { saveDemoOriginalResume } from "@/lib/original-resume";
+
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   if (!sameOrigin(request))
@@ -49,6 +51,7 @@ export async function POST(request: Request) {
     const suggestions = suggestResumeFacts(extracted);
     const sha256 = createHash("sha256").update(buffer).digest("hex");
     let storageKey: string | undefined;
+    if (isDemo()) { storageKey = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`; await saveDemoOriginalResume(storageKey, buffer); }
     if (!isDemo()) {
       const client = adminSupabase();
       const key = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`;

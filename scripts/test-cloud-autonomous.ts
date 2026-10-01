@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { tasks, runs } from "@trigger.dev/sdk";
@@ -11,7 +13,7 @@ import { authorizeKnownAnswerApplication } from "../src/lib/autonomous-policy";
 import { issueControlledTestGrant } from "../src/lib/controlled-tests";
 import { mkdir, writeFile } from "node:fs/promises";
 import { cleanupControlledOwner, ControlledCleanupBlocked, type CleanupSession } from "./lib/controlled-cleanup";
-import { readBrowserUsage, withBrowserUsageContext } from "../src/lib/browser-usage";
+import { withBrowserUsageContext } from "../src/lib/browser-usage";
 import { startAutonomousApplication } from "../src/lib/autonomous-application";
 import { ownerUsageView } from "../src/lib/usage-view";
 import { releaseRemoteBrowser, remoteBrowserStatus } from "../src/lib/browser-provider";
@@ -24,6 +26,7 @@ async function main() {
   process.env.DEMO_MODE = "false";
   const origin = process.env.TEST_REMOTE_APP_URL || process.env.APP_ORIGIN;
   assert.ok(origin?.startsWith("https://"), "Configure the deployed app and production Trigger environment");
+  assert.ok(process.env.TRIGGER_SECRET_KEY?.startsWith("tr_prod_"), "Configure a production Trigger key before creating a synthetic owner");
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
   const email = `cloud-submit-${randomUUID()}@example.com`;
   const created = await db.auth.admin.createUser({ email, email_confirm: true }); assert.equal(created.error, null);
@@ -92,7 +95,18 @@ async function main() {
       if (current && !current.submissionAttemptedAt) { current.status = "cancelled"; current.queuedRun = undefined; }
     });
     try {
-      const usage = await readBrowserUsage(owner);
+      const allUsage = await ownerUsageView(owner);
+      const proofDirectory = path.join(tmpdir(), "apply-controlled-proofs"); await mkdir(proofDirectory, { recursive: true });
+      const proofFile = path.join(proofDirectory, `autonomous-${Date.now()}-${randomUUID()}.json`);
+      const proof = {
+        recordedAt: new Date().toISOString(), mode: process.env.TEST_CLOUD_VERIFICATION === "true" ? "verification" : "normal", outcome: app?.status ?? "no_application",
+        packetFiles: (app?.packet?.files ?? []).map(({ filename, size, sha256 }) => ({ filename, size, sha256 })),
+        attempted: Boolean(app?.submissionAttemptedAt), requestCount: app?.controlledTest?.submissions ?? 0, legacyApprovalCount: app?.approvals.length ?? 0,
+        models: allUsage.records.map((record) => ({ operation: record.operation, model: record.model, status: record.status, tokens: record.tokens, estimatedUsd: record.estimatedUsd, rateVersion: record.rate?.version ?? null })),
+        browsers: allUsage.browser.sessions.map((session) => ({ provider: session.provider, status: session.status, durationMinutes: session.durationMinutes, browserCostUsd: session.browserCostUsd, proxyCostUsd: session.proxyCostUsd, proxyUsedMb: session.proxyUsedMb, trafficStatus: session.trafficStatus, estimatedUsd: session.estimatedUsd, rateVersion: session.rate?.version ?? null, orphaned: session.orphaned })),
+      };
+      await writeFile(proofFile, JSON.stringify(proof, null, 2), { mode: 0o600 }); console.log(`Safe synthetic proof saved: ${proofFile}`);
+      const usage = allUsage.browser;
       const sessions = new Map<string, CleanupSession>();
       for (const record of usage.records) {
         const sessionId = record.sessionId || record.orphanedSessionId;

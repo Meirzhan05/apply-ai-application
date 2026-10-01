@@ -6,7 +6,7 @@ import type {
 import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
-import { newId } from "@/lib/crypto";
+import { hashJson, newId } from "@/lib/crypto";
 import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
 import { sendActionNeeded } from "@/lib/email";
@@ -83,6 +83,18 @@ const findJob = (state: AppState, app: Application): Job => {
     state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   if (!job) throw new Error("Job not found.");
   return job;
+};
+
+// Storage/rendering happens before CAS; only the unchanged review can publish it.
+const materialReviewHash = (state: AppState, app: Application) => hashJson({
+  profile: packetProfileHash(state.profile), job: findJob(state, app),
+  packet: app.packet, packetHash: app.packetHash, status: app.status,
+  queuedRun: app.queuedRun, needsCoverLetter: app.needsCoverLetter,
+  browserSessionId: app.browserSessionId,
+});
+const assertMaterialReviewCurrent = (state: AppState, app: Application, expected: string) => {
+  if (materialReviewHash(state, app) !== expected)
+    throw new Error("The application or confirmed facts changed while preparing files. Review it again.");
 };
 
 async function perform(
@@ -294,88 +306,76 @@ async function perform(
     await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode));
     return;
   }
-  if (action === "editPacket")
-    return mutateState(userId, async (state) => {
-      const app = findApp(state, text(payload.applicationId, 100), userId);
-      if (app.status !== "draft_review" || app.queuedRun || !app.packet)
-        throw new Error("Open the current packet review after drafting finishes.");
-      const answers = z
-        .array(
-          z.object({
-            question: z.string().max(500),
-            answer: z.string().max(4000),
-            factIds: z.array(z.string()),
-            requiresUserInput: z.boolean(),
-            userProvided: z.boolean().optional(),
-          }),
-        )
-        .max(30)
-        .parse(payload.answers);
-      const packet = await withPacketFiles(state.profile, {
-        ...app.packet,
-        schemaVersion: app.packet.schemaVersion,
-        answers: applyHumanAnswerEdits(app.packet.answers, answers),
-        profileHash: packetProfileHash(state.profile),
-        version: app.packet.version + 1,
-        createdAt: new Date().toISOString(),
-      });
-      validatePacket(state.profile, packet);
-      setPacket(state, app, packet);
-      activity(state, "Packet revised", packet.summary);
-    });
-  if (action === "confirmEssay")
-    return mutateState(userId, async (state) => {
-      const app = findApp(state, text(payload.applicationId, 100), userId);
-      if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
-        throw new Error("The packet changed. Review it again before confirming this essay.");
-      const index = z.number().int().min(0).parse(payload.answerIndex);
-      const answer = app.packet.answers[index];
-      if (!answer?.aiDraft || answer.aiDraft.contentHash !== text(payload.answerHash, 100))
-        throw new Error("The essay changed. Review its latest draft.");
-      validatePacket(state.profile, app.packet);
-      const answers = [...app.packet.answers];
-      answers[index] = confirmAiEssay(state.profile, answer);
-      const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
-      setPacket(state, app, packet);
-      activity(state, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
-    });
-  if (action === "addCoverLetter") {
-    const appId = text(payload.applicationId, 100);
+  if (action === "editPacket") {
     const state = await loadState(userId);
-    const app = findApp(state, appId, userId);
-    if (
-      app.status !== "needs_user_action" ||
-      !app.needsCoverLetter ||
-      !app.packet
-    )
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    if (app.status !== "draft_review" || app.queuedRun || !app.packet)
+      throw new Error("Open the current packet review after drafting finishes.");
+    const answers = z.array(z.object({
+      question: z.string().max(500), answer: z.string().max(4000),
+      factIds: z.array(z.string()), requiresUserInput: z.boolean(),
+      userProvided: z.boolean().optional(),
+    })).max(30).parse(payload.answers);
+    const expected = materialReviewHash(state, app);
+    const packet = await withPacketFiles(state.profile, {
+      ...app.packet, answers: applyHumanAnswerEdits(app.packet.answers, answers),
+      profileHash: packetProfileHash(state.profile), version: app.packet.version + 1,
+      createdAt: new Date().toISOString(),
+    });
+    validatePacket(state.profile, packet);
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
+      setPacket(current, target, packet);
+      activity(current, "Packet revised", packet.summary);
+    });
+  }
+  if (action === "confirmEssay") {
+    const state = await loadState(userId);
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
+      throw new Error("The packet changed. Review it again before confirming this essay.");
+    const index = z.number().int().min(0).parse(payload.answerIndex);
+    const answer = app.packet.answers[index];
+    if (!answer?.aiDraft || answer.aiDraft.contentHash !== text(payload.answerHash, 100))
+      throw new Error("The essay changed. Review its latest draft.");
+    validatePacket(state.profile, app.packet);
+    const expected = materialReviewHash(state, app);
+    const answers = [...app.packet.answers];
+    answers[index] = confirmAiEssay(state.profile, answer);
+    const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
+      setPacket(current, target, packet);
+      activity(current, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
+    });
+  }
+  if (action === "addCoverLetter") {
+    const state = await loadState(userId);
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    if (app.status !== "needs_user_action" || app.queuedRun || !app.needsCoverLetter || !app.packet)
       throw new Error("No required cover letter is awaiting review.");
+    const expected = materialReviewHash(state, app);
     await cancelBrowser(app);
-    return mutateState(userId, async (current) => {
-      const target = findApp(current, appId, userId);
-      if (!target.packet) throw new Error("Application packet is missing.");
-      const letter = coverLetterFromFacts(
-        current.profile,
-        findJob(current, target),
-      );
+    const job = findJob(state, app);
+    const letter = coverLetterFromFacts(state.profile, job);
+    const packet = await withPacketFiles(state.profile, {
+      ...app.packet, coverLetter: letter.text, coverLetterFactIds: letter.factIds,
+      coverLetterContext: { title: job.title, company: job.company },
+      version: app.packet.version + 1, createdAt: new Date().toISOString(),
+    });
+    validatePacket(state.profile, packet);
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
       transition(target, ["needs_user_action"], "draft_review");
       target.browserSessionId = undefined;
       target.browserConnectUrl = undefined;
       target.browserLiveUrl = undefined;
       target.needsCoverLetter = false;
-      setPacket(current, target, await withPacketFiles(current.profile, {
-        ...target.packet,
-        schemaVersion: target.packet.schemaVersion,
-        coverLetter: letter.text,
-        coverLetterFactIds: letter.factIds,
-        coverLetterContext: { title: findJob(current, target).title, company: findJob(current, target).company },
-        version: target.packet.version + 1,
-        createdAt: new Date().toISOString(),
-      }));
-      activity(
-        current,
-        "Cover letter added",
-        "Review the revised packet and approve it before a new form fill.",
-      );
+      setPacket(current, target, packet);
+      activity(current, "Cover letter added", "Review the revised packet and approve it before a new form fill.");
     });
   }
   if (action === "approveFill")

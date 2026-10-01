@@ -1,3 +1,5 @@
+import { mkdir, writeFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
 const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, prepare: vi.fn(), submit: vi.fn(), cancel: vi.fn(), parse: vi.fn() }));
@@ -85,9 +87,19 @@ it("distinguishes a click without confirmation from a submitted application", as
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress();
   expect(fixture.state!.applications[0].status).toBe("uncertain"); expect(fixture.state!.applications[0].submittedAt).toBeUndefined();
 });
-it("blocks unsupported material settings before model or browser spending", async () => {
-  fixture.state!.profile.automationSettings!.resumeTailoring = false;
-  expect((await action("startAutonomous", { jobId: fixture.state!.jobs[0].id })).status).toBe(400); expect(fixture.state!.applications).toHaveLength(0); expect(fixture.parse).not.toHaveBeenCalled();
+it.each(["pdf", "docx"])("uses the exact confirmed uploaded %s when tailoring is disabled", async (extension) => {
+  const profile = fixture.state!.profile; const bytes = Buffer.from(extension === "pdf" ? "%PDF-original-confirmed-upload" : "PK-original-confirmed-docx");
+  const key = `${profile.id}/00000000-0000-4000-8000-000000000001.${extension}`;
+  await mkdir(`.data/resumes/${profile.id}`, { recursive: true }); await writeFile(`.data/resumes/${key}`, bytes);
+  profile.resumeFileName = `my-original.${extension}`; profile.resumeSource = { storageKey: key, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  profile.automationSettings!.resumeTailoring = false; activateAutomation(profile, "original preference confirmed");
+  try {
+    expect((await action("startAutonomous", { jobId: fixture.state!.jobs[0].id })).status).toBe(200); await progress();
+    const app = fixture.state!.applications[0]; expect(app.status).toBe("submitted"); expect(fixture.parse).not.toHaveBeenCalled();
+    expect(app.submissionMaterials?.resumeMode).toBe("original"); expect(app.submissionMaterials?.files[0].filename).toBe(`my-original.${extension}`);
+    expect(app.packet?.files?.[0]).toMatchObject({ filename: `my-original.${extension}`, mimeType: profile.resumeSource.mimeType, sha256: profile.resumeSource.sha256, size: bytes.length });
+    expect((await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet!, "resume")).bytes.equals(bytes)).toBe(true);
+  } finally { await rm(`.data/resumes/${key}`, { force: true }); }
 });
 it("blocks a changed form after filling without a submit attempt", async () => {
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await step(); await step(); fixture.state!.applications[0].form!.fields[0].value = "changed";
@@ -97,11 +109,20 @@ it("blocks a revised profile before filling the prepared packet", async () => {
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await step(); fixture.state!.profile.automationAuthorization!.status = "paused";
   await expect(step()).rejects.toThrow(/enable your current automation/); expect(fixture.state!.applications[0].status).toBe("needs_user_action"); expect(fixture.prepare).not.toHaveBeenCalled();
 });
-it.each(["cover letter", "essay"])("stops an observed unsupported %s form without requesting reviews or submitting", async (material) => {
+it("blocks unsupported essays without requesting review or submitting", async () => {
   const known = fixture.prepare.getMockImplementation()!;
-  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); if (material === "cover letter") result.needsCoverLetter = true; else result.form.fields.push({ label: "Why are you excited to join us?", identifier: "why", kind: "textarea", required: true, value: "", valid: false }); return result; });
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); result.form.fields.push({ label: "Why are you excited to join us?", identifier: "why", kind: "textarea", required: true, value: "", valid: false }); return result; });
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); const app = fixture.state!.applications[0];
-  expect(app.status).toBe("needs_user_action"); expect(app.form?.blockers).toContain("This automatic workflow does not yet support cover letters or open-ended essays."); expect(app.approvals).toEqual([]); expect(app.browserSessionId).toBeUndefined(); expect(fixture.submit).not.toHaveBeenCalled();
+  expect(app.status).toBe("needs_user_action"); expect(app.form?.blockers?.join(" ")).toMatch(/essays/); expect(app.approvals).toEqual([]); expect(app.browserSessionId).toBeUndefined(); expect(fixture.submit).not.toHaveBeenCalled();
+});
+it("includes a grounded optional cover letter when the saved mode is enabled", async () => {
+  fixture.state!.profile.automationSettings!.coverLetterMode = "enabled"; activateAutomation(fixture.state!.profile, "letter mode confirmed");
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); const file = args[0].packet.files.find((item: { kind: string }) => item.kind === "cover-letter"); if (file) result.form.fields.push({ label: "Cover letter", identifier: "cover", kind: "file", required: false, value: file.filename, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }); return result; });
+  expect((await action("startAutonomous", { jobId: fixture.state!.jobs[0].id })).status).toBe(200); await progress();
+  const app = fixture.state!.applications[0]; expect(app.status).toBe("submitted"); expect(app.packet?.coverLetter).toContain("Dear Hiring Team");
+  expect(app.packet?.files?.map((file) => file.kind)).toEqual(["resume", "cover-letter"]);
+  expect((await (await import("@/lib/packet-files")).reviewedPacketFile(fixture.state!.profile, app.packet!, "cover-letter")).bytes.subarray(0, 4).toString()).toBe("%PDF");
 });
 it("rejects mutated packet bytes before the fill provider is invoked", async () => {
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await step(); fixture.state!.applications[0].packet!.files![0].sha256 = "tampered";
@@ -158,4 +179,68 @@ it("checks current policy between paid résumé generation and its grounding cal
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); const running = step(); await generated.promise;
   fixture.state!.profile.automationAuthorization!.status = "paused"; resume.resolve();
   await expect(running).rejects.toThrow(); expect(fixture.parse).toHaveBeenCalledTimes(1); expect(fixture.prepare).not.toHaveBeenCalled();
+});
+it("prepares a discovered required letter and continues the same browser session automatically", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const initial = await known(...args); const resume = args[0].packet.files[0];
+    initial.form.fields.push({ label: "Cover letter", identifier: "cover", kind: "file", required: true, value: "", valid: false });
+    const packet = await args[5](initial.form);
+    expect(packet.files[0]).toEqual(resume);
+    const file = packet.files.find((item: { kind: string }) => item.kind === "cover-letter");
+    initial.form.fields[1] = { ...initial.form.fields[1], value: file.filename, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] };
+    return initial;
+  });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress();
+  const app = fixture.state!.applications[0]; expect(app.status).toBe("submitted"); expect(app.approvals).toEqual([]);
+  expect(fixture.prepare).toHaveBeenCalledTimes(1); expect(app.packet?.coverLetterFactIds?.length).toBeGreaterThan(0);
+  expect(app.autonomousAuthorization?.filesHash).toBeTruthy(); expect(app.form?.fields[1].value).toBe("cover-letter.pdf");
+});
+
+it("keeps required letters blocked when letters are disabled without overriding the preference", async () => {
+  fixture.state!.profile.automationSettings!.coverLetterMode = "disabled"; activateAutomation(fixture.state!.profile, "disabled confirmed");
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); result.needsCoverLetter = result.needsAction = true; result.form.readyToSubmit = false; result.form.fields.push({ label: "Cover letter", identifier: "cover", kind: "file", required: true, value: "", valid: false }); return result; });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress();
+  const app = fixture.state!.applications[0]; expect(app.status).toBe("needs_user_action"); expect(app.form?.blockers?.join(" ")).toMatch(/saved cover-letter mode/);
+  expect(app.packet?.coverLetter).toBeUndefined(); expect(app.packet?.files).toHaveLength(1); expect(fixture.submit).not.toHaveBeenCalled();
+});
+it.each(["required-only", "disabled"] as const)("omits an optional cover letter in %s mode", async (mode) => {
+  fixture.state!.profile.automationSettings!.coverLetterMode = mode; activateAutomation(fixture.state!.profile, "optional letter preference");
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); result.form.fields.push({ label: "Cover letter", identifier: "cover", kind: "file", required: false, value: "", valid: true }); return result; });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); expect(fixture.state!.applications[0].status).toBe("submitted"); expect(fixture.state!.applications[0].packet?.coverLetter).toBeUndefined();
+});
+it("rejects revoked grounding facts during a required letter continuation", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); result.form.fields.push({ label: "Cover letter", kind: "file", required: true, value: "", valid: false }); fixture.state!.profile.facts[0].verified = false; return args[5](result.form); });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await expect(progress()).rejects.toThrow(/authorization changed/); expect(fixture.state!.applications[0].status).toBe("needs_user_action"); expect(fixture.state!.applications[0].packet?.coverLetter).toBeUndefined(); expect(fixture.submit).not.toHaveBeenCalled();
+});
+it("blocks saved material preferences changed before a queued fill", async () => {
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await step();
+  expect((await action("automationSettings", { coverLetterMode: "disabled" })).status).toBe(200);
+  await expect(progress()).rejects.toThrow(); expect(fixture.state!.applications[0].status).toBe("needs_user_action"); expect(fixture.prepare).not.toHaveBeenCalled(); expect(fixture.submit).not.toHaveBeenCalled();
+});
+it("lets the owner inspect exact submitted artifacts after changing profile facts", async () => {
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); const app = fixture.state!.applications[0];
+  fixture.state!.profile.facts[0].text = "A later profile revision must not replace the material already used";
+  const { GET } = await import("@/app/api/applications/[id]/files/[kind]/route");
+  const response = await GET(new Request("https://apply.example/file?download=1"), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
+  expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("%PDF-controlled");
+});
+it("submits the résumé when enabled letters have no supported control and records no unused letter", async () => {
+  fixture.state!.profile.automationSettings!.coverLetterMode = "enabled"; activateAutomation(fixture.state!.profile, "enabled optional material");
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); const app = fixture.state!.applications[0];
+  expect(app.status).toBe("submitted"); expect(app.packet?.coverLetter).toBeTruthy(); expect(app.submissionMaterials?.files.map((file) => file.kind)).toEqual(["resume"]);
+});
+it("keeps the exact attached letter downloadable independently of the live packet or renderer", async () => {
+  fixture.state!.profile.automationSettings!.coverLetterMode = "enabled"; activateAutomation(fixture.state!.profile, "enabled letter archive");
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => { const result = await known(...args); const file = args[0].packet.files.find((item: { kind: string }) => item.kind === "cover-letter"); result.form.fields.push({ label: "Cover letter", identifier: "cover", kind: "file", required: false, valid: true, value: file.filename, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }); return result; });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); const app = fixture.state!.applications[0];
+  const { GET } = await import("@/app/api/applications/[id]/files/[kind]/route");
+  const parameters = { params: Promise.resolve({ id: app.id, kind: "cover-letter" }) };
+  const before = await GET(new Request("https://apply.example/file"), parameters); expect(before.status).toBe(200); const bytes = await before.arrayBuffer();
+  app.packet = undefined; fixture.state!.profile.facts[0].text = "Updated after the attempt";
+  const archived = await GET(new Request("https://apply.example/file"), parameters); expect(archived.status).toBe(200); expect(Buffer.from(await archived.arrayBuffer()).equals(Buffer.from(bytes))).toBe(true);
 });

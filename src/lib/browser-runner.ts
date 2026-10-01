@@ -573,6 +573,7 @@ export async function prepareBrowser(
   profile: Profile,
   onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
   onAction?: (label: string) => Promise<boolean>,
+  onRequiredCoverLetter?: (form: Omit<FormSnapshot, "hash">) => Promise<NonNullable<Application["packet"]>>,
 ): Promise<{
   form: Omit<FormSnapshot, "hash">;
   provider?: RemoteBrowserSession["provider"];
@@ -592,7 +593,7 @@ export async function prepareBrowser(
     throw new Error("The current packet requires fill approval.");
   // Verify before opening a billable session or entering any applicant data.
   const resume = await reviewedPacketFile(profile, application.packet, "resume");
-  const coverLetter = application.packet.coverLetter
+  let coverLetter = application.packet.coverLetter
     ? await reviewedPacketFile(profile, application.packet, "cover-letter") : undefined;
   if (!canAutomate(job.applyUrl))
     throw new Error("This site requires a manual application handoff.");
@@ -673,6 +674,13 @@ export async function prepareBrowser(
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true,
         needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
     }
+    if (application.autonomousAuthorization && !application.packet.coverLetter && fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label)) && profile.automationSettings?.coverLetterMode !== "disabled") {
+      if (!onRequiredCoverLetter) throw new Error("An authorized required cover-letter continuation is unavailable.");
+      await action("Preparing the required cover letter under your saved settings");
+      application.packet = await onRequiredCoverLetter(await snapshot(page, application));
+      coverLetter = await reviewedPacketFile(profile, application.packet, "cover-letter");
+      await action("Verifying the required cover-letter attachment");
+    }
     const values = allowedValues(profile, application);
     await action("Mapping questions to approved answers");
     const ai = await aiMappings(fields, values, application);
@@ -697,6 +705,10 @@ export async function prepareBrowser(
       if (field.kind === "file" && /resume|cv|curriculum/i.test(field.label)) {
         const attachment = await currentFieldLocator(page, field);
         if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        const accepted = (await attachment.getAttribute("accept") || "").toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
+        if (accepted.length && !accepted.some((value) => value === resume.mimeType || value === `.${resume.filename.split(".").pop()?.toLowerCase()}` || value === `${resume.mimeType.split("/")[0]}/*`)) {
+          fillBlockers.push(`The employer résumé control does not accept ${resume.mimeType}. Your selected résumé will not be converted or replaced.`); continue;
+        }
         await attachment.setInputFiles({
             name: resume.filename,
             mimeType: resume.mimeType,
@@ -713,6 +725,10 @@ export async function prepareBrowser(
       ) {
         const attachment = await currentFieldLocator(page, field);
         if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        const accepted = (await attachment.getAttribute("accept") || "").toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
+        if (accepted.length && !accepted.some((value) => value === coverLetter!.mimeType || value === `.${coverLetter!.filename.split(".").pop()?.toLowerCase()}` || value === `${coverLetter!.mimeType.split("/")[0]}/*`)) {
+          fillBlockers.push(`The employer cover-letter control does not accept ${coverLetter!.mimeType}. Your grounded letter will not be converted or replaced.`); continue;
+        }
         await attachment.setInputFiles({
             name: coverLetter!.filename,
             mimeType: coverLetter!.mimeType,
