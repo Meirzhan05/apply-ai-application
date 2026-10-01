@@ -365,18 +365,23 @@ function sensitiveQuestion(label: string): boolean {
 // Owner-confirmed screening values are separate from AI essay authorization.
 // They may only be applied when the fresh page exposes the same control and
 // option set at the same authorized destination.
-function humanAnswerForField(field: InspectedField, application: Application, profile: Profile, targetUrl: string) {
-  return application.autonomousHumanAnswers?.find((answer) =>
-    answer.userId === application.userId &&
-    answer.applicationId === application.id &&
-    answer.profileHash === autonomyProfileHash(profile) &&
-    answer.targetUrl === targetUrl &&
-    answer.question.identifier === field.identifier &&
-    answer.question.kind === field.kind &&
-    answer.question.label === field.label &&
-    answer.question.options.length === field.options.length &&
-    answer.question.options.every((option, index) => option === field.options[index])
-  );
+function humanAnswerForField(field: InspectedField, fields: InspectedField[], application: Application, profile: Profile, targetUrl: string) {
+  const group = field.kind === "radio"
+    ? fields.filter((candidate) => candidate.kind === "radio" && candidate.identifier === field.identifier && candidate.label === field.label)
+    : [];
+  const currentOptions = field.kind === "radio" ? group.map((candidate) => candidate.value) : field.options;
+  const currentLabels = field.kind === "radio" ? group.map((candidate) => candidate.optionLabel) : field.options;
+  return application.autonomousHumanAnswers?.find((answer) => {
+    if (answer.userId !== application.userId || answer.applicationId !== application.id || answer.profileHash !== autonomyProfileHash(profile) ||
+      answer.targetUrl !== targetUrl || answer.question.identifier !== field.identifier || answer.question.kind !== field.kind || answer.question.label !== field.label)
+      return false;
+    if (field.kind !== "radio") return answer.question.options.length === currentOptions.length && answer.question.options.every((option, index) => option === currentOptions[index]);
+    if (!answer.question.optionValues || answer.question.options.length !== currentLabels.length || answer.question.optionValues.length !== currentOptions.length ||
+      !answer.question.options.every((option, index) => option === currentLabels[index]) || !answer.question.optionValues.every((option, index) => option === currentOptions[index]) ||
+      new Set(currentLabels).size !== currentLabels.length || new Set(currentOptions).size !== currentOptions.length) return false;
+    const matchingCandidates = group.filter((candidate) => candidate.value === answer.value || candidate.optionLabel === answer.value);
+    return matchingCandidates.length === 1;
+  });
 }
 
 function matchingOption(label: string, value: string, options: string[]): string | undefined {
@@ -505,6 +510,7 @@ async function snapshot(
         field.kind === "file"
           ? field.value.split(/[\\/]/).pop() || ""
           : ["radio", "checkbox"].includes(field.kind) ? field.optionLabel : field.value,
+      optionValue: field.kind === "radio" ? field.value : undefined,
       kind: field.kind,
       required: field.required,
       checked: ["checkbox", "radio"].includes(field.kind) ? field.checked : undefined,
@@ -789,7 +795,7 @@ export async function prepareBrowser(
         throw new Error("The authorized essay control changed before writing.");
       }
       const humanAnswer = application.autonomousAuthorization
-        ? humanAnswerForField(field, application, profile, page.url())
+        ? humanAnswerForField(field, fields, application, profile, page.url())
         : undefined;
       const key = deterministicKey(field, application) ?? ai.get(field.index);
       const value = humanAnswer?.value ?? (key ? values[key] : undefined);
@@ -798,7 +804,10 @@ export async function prepareBrowser(
         handledRadioGroups.add(field.identifier);
         const group = fields.filter((candidate) => candidate.kind === "radio" && candidate.identifier === field.identifier);
         const option = value ? matchingOption(field.label, value, group.map((candidate) => candidate.optionLabel)) : undefined;
-        const chosen = group.find((candidate) => candidate.optionLabel === option);
+        const humanMatches = humanAnswer ? group.filter((candidate) => candidate.value === value || candidate.optionLabel === value) : [];
+        const chosen = humanAnswer
+          ? humanMatches.length === 1 ? humanMatches[0] : undefined
+          : group.find((candidate) => candidate.optionLabel === option);
         if (chosen) {
           const choice = await currentFieldLocator(page, chosen);
           if (choice) { await choice.check(); await action(`Filled: ${field.label}`); }

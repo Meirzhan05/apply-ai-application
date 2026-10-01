@@ -111,4 +111,46 @@ describe("autonomous blocker review", () => {
     });
     expect(app.autonomousHumanAnswers).toMatchObject([{ applicationId: app.id, targetUrl, value: "Coffee" }]);
   });
+
+  it("rejects a radio answer when the employer changes its option values", async () => {
+    const app = application();
+    app.form = {
+      version: 1,
+      url: fixture.state.jobs[0].applyUrl,
+      fields: [
+        { identifier: "pattern", label: "Preferred work pattern", kind: "radio", value: "Remote", optionValue: "pattern-remote", required: true, checked: false, valid: false },
+        { identifier: "pattern", label: "Preferred work pattern", kind: "radio", value: "Office", optionValue: "pattern-office", required: true, checked: false, valid: false },
+      ],
+      attachments: [], capturedAt: new Date().toISOString(), hash: "radio-form", readyToSubmit: false,
+    };
+    const blocker = recordApplicationBlocker(app, "missing_answer", "Correct or complete the field: Preferred work pattern", {
+      formHash: "radio-form", targetUrl: app.form.url,
+      observedQuestion: { identifier: "pattern", label: "Preferred work pattern", kind: "radio", options: ["Remote", "Office"], value: "" },
+    });
+    await expect(resumeBlockedApplication(app.userId, app.id, blocker.id, {
+      question: { identifier: "pattern", label: "Preferred work pattern", kind: "radio", options: ["Remote", "Hybrid"] }, value: "pattern-office",
+    })).rejects.toThrow(/changed/);
+    expect(app.autonomousHumanAnswers).toBeUndefined();
+  });
+
+  it("accepts a radio choice when its label and native value are the same", async () => {
+    const app = application();
+    app.form = {
+      version: 1,
+      url: fixture.state.jobs[0].applyUrl,
+      fields: [
+        { identifier: "consent", label: "Consent", kind: "radio", value: "Yes", optionValue: "Yes", required: true, checked: false, valid: false },
+        { identifier: "consent", label: "Consent", kind: "radio", value: "No", optionValue: "No", required: true, checked: false, valid: false },
+      ],
+      attachments: [], capturedAt: new Date().toISOString(), hash: "same-radio", readyToSubmit: false,
+    };
+    const blocker = recordApplicationBlocker(app, "missing_answer", "Correct or complete the field: Consent", {
+      formHash: "same-radio", targetUrl: app.form.url,
+      observedQuestion: { identifier: "consent", label: "Consent", kind: "radio", options: ["Yes", "No"], value: "" },
+    });
+    await resumeBlockedApplication(app.userId, app.id, blocker.id, {
+      question: { identifier: "consent", label: "Consent", kind: "radio", options: ["Yes", "No"] }, value: "Yes",
+    });
+    expect(app.autonomousHumanAnswers?.[0].question.optionValues).toEqual(["Yes", "No"]);
+  });
 });

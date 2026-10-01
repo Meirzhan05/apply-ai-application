@@ -136,11 +136,17 @@ export function validateAutonomousHumanAnswer(
     throw new Error("Enter a confirmed answer before resuming this application.");
   if (["password", "file", "checkbox", "textarea"].includes(observed.kind) || credentialLabel.test(observed.label))
     throw new Error("This control requires browser takeover and cannot be answered by the automatic workflow.");
-  if (["select", "radio"].includes(observed.kind) && !observed.options.includes(answer.value))
-    throw new Error("Choose one of the employer's current options before resuming.");
   const fields = form.fields.filter((item) => item.identifier === observed.identifier && item.kind === observed.kind && item.label === observed.label);
-  const currentOptions = observed.kind === "radio" ? fields.map((field) => field.value) : fields.length === 1 ? fields[0].options ?? [] : [];
-  if (!fields.length || !sameArray(currentOptions, observed.options))
+  const currentLabels = observed.kind === "radio" ? fields.map((field) => field.value) : fields.length === 1 ? fields[0].options ?? [] : [];
+  const currentValues = observed.kind === "radio" ? fields.map((field) => field.optionValue ?? field.value) : currentLabels;
+  const optionsMatch = ["radio", "select"].includes(observed.kind) ? sameArray(currentLabels, observed.options) : true;
+  const matchingRadioFields = observed.kind === "radio" ? fields.filter((field) => field.optionValue === answer.value || field.value === answer.value) : [];
+  const answerMatchesControl = observed.kind === "radio" ? matchingRadioFields.length === 1 : true;
+  if (observed.kind === "select" && !observed.options.includes(answer.value))
+    throw new Error("Choose one of the employer's current options before resuming.");
+  if (observed.kind === "radio" && (!currentValues.length || new Set(currentLabels).size !== currentLabels.length || new Set(currentValues).size !== currentValues.length))
+    throw new Error("The employer changed this question. Refresh the application before answering it.");
+  if (!fields.length || !optionsMatch || !answerMatchesControl)
     throw new Error("The employer changed this question. Refresh the application before answering it.");
   return {
     version: 1,
@@ -149,7 +155,7 @@ export function validateAutonomousHumanAnswer(
     targetUrl: form.url,
     profileHash: autonomyProfileHash(profile),
     formHash: form.hash,
-    question: { identifier: observed.identifier, kind: observed.kind, label: observed.label, options: [...observed.options] },
+    question: { identifier: observed.identifier, kind: observed.kind, label: observed.label, options: [...observed.options], optionValues: observed.kind === "radio" ? [...currentValues] : undefined },
     value: answer.value,
     confirmedAt: now(),
   };

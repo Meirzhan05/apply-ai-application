@@ -121,6 +121,45 @@ it("lets the owner answer an observed required select and resumes the same appli
   expect(fixture.state!.applications[0].status).toBe("submitted");
   expect(fixture.state!.applications[0].approvals).toEqual([]);
 });
+it("binds and resumes an observed radio by its exact underlying values", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    result.needsAction = true;
+    result.form.readyToSubmit = false;
+    result.form.fields.push(
+      { label: "Preferred work pattern", identifier: "work-pattern", kind: "radio", required: true, value: "Remote", optionValue: "pattern-remote", checked: false, valid: false },
+      { label: "Preferred work pattern", identifier: "work-pattern", kind: "radio", required: true, value: "Office", optionValue: "pattern-office", checked: false, valid: false },
+    );
+    result.form.blockers = ["Correct or complete the field: Preferred work pattern"];
+    return result;
+  });
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    const answer = args[0].autonomousHumanAnswers?.find((item: { question: { identifier: string } }) => item.question.identifier === "work-pattern");
+    result.form.fields.push(
+      { label: "Preferred work pattern", identifier: "work-pattern", kind: "radio", required: true, value: "Remote", optionValue: "pattern-remote", checked: answer?.value === "pattern-office" ? false : answer?.value === "pattern-remote", valid: Boolean(answer?.value) },
+      { label: "Preferred work pattern", identifier: "work-pattern", kind: "radio", required: true, value: "Office", optionValue: "pattern-office", checked: answer?.value === "pattern-office", valid: Boolean(answer?.value) },
+    );
+    return result;
+  });
+  fixture.budget = true;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  const blocker = app.blockers?.find((item) => item.reason === "missing_answer");
+  expect(blocker?.context?.observedQuestion).toMatchObject({ identifier: "work-pattern", kind: "radio", options: ["Remote", "Office"] });
+  const radioResponse = await action("resolveBlocker", {
+    applicationId: app.id,
+    blockerId: blocker!.id,
+    answer: { question: { identifier: "work-pattern", label: "Preferred work pattern", kind: "radio", options: ["Remote", "Office"] }, value: "pattern-office" },
+  });
+  expect(radioResponse.status).toBe(200);
+  await progress();
+  expect(app.autonomousHumanAnswers?.[0].value).toBe("pattern-office");
+  expect(app.autonomousHumanAnswers?.[0].question.optionValues).toEqual(["pattern-remote", "pattern-office"]);
+  expect(app.status).toBe("submitted");
+});
 it("refreshes a stale observed question under current authorization before accepting a new answer", async () => {
   fixture.budget = false;
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });

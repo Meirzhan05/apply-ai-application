@@ -45,8 +45,13 @@ export function hasBoundAutonomousHumanAnswers(application: Application, profile
     const fields = form.fields.filter((field) => field.identifier === answer.question.identifier && field.kind === answer.question.kind && field.label === answer.question.label);
     if (!fields.length) return false;
     if (answer.question.kind === "radio") {
-      const options = fields.map((field) => field.value);
-      return options.length === answer.question.options.length && options.every((option, index) => option === answer.question.options[index]) && fields.some((field) => field.value === answer.value && field.checked === true);
+      const labels = fields.map((field) => field.value);
+      const values = fields.map((field) => field.optionValue ?? field.value);
+      if (!answer.question.optionValues || labels.length !== answer.question.options.length || values.length !== answer.question.optionValues.length ||
+        !labels.every((option, index) => option === answer.question.options[index]) || !values.every((option, index) => option === answer.question.optionValues![index]) ||
+        new Set(labels).size !== labels.length || new Set(values).size !== values.length) return false;
+      const matchingFields = fields.filter((field) => field.optionValue === answer.value || field.value === answer.value);
+      return matchingFields.length === 1 && matchingFields[0].checked === true;
     }
     const field = fields.length === 1 ? fields[0] : undefined;
     return Boolean(field && JSON.stringify(field.options ?? []) === JSON.stringify(answer.question.options) && field.value === answer.value);
