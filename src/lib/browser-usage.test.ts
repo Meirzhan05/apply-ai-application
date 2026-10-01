@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, rm } from "node:fs/promises";
-import { readBrowserUsage, recordBrowserUsageEvent, withBrowserUsageContext, type BrowserProviderReport } from "./browser-usage";
+import { readBrowserUsage, recordBrowserUsage, recordBrowserUsageEvent, withBrowserUsageContext, type BrowserUsageRecord, type BrowserProviderReport } from "./browser-usage";
 
 const directory = "/tmp/apply-browser-usage-test";
 const owner = { userId: "owner", applicationId: "application", jobId: "job", runId: "run" };
@@ -9,6 +9,21 @@ beforeEach(async () => { vi.stubEnv("NODE_ENV", "test"); vi.stubEnv("BROWSER_USA
 afterEach(() => vi.unstubAllEnvs());
 
 describe("browser usage ledger", () => {
+  it.each(["userId", "provider", "sessionId", "event", "runId"] as const)("rejects changing immutable %s on a stable id", async (key) => {
+    const record: BrowserUsageRecord = { ...owner, version: 1, id: "stable-id", provider: "browser-use", sessionId: "session", event: "status", occurredAt: "2026-10-01T00:05:00Z", report, failure: null, orphanedSessionId: null };
+    await recordBrowserUsage(record);
+    const changed = { ...record, [key]: key === "provider" ? "browserbase" : key === "event" ? "stopped" : "other" };
+    await expect(recordBrowserUsage(changed)).rejects.toThrow();
+    expect((await readBrowserUsage(owner.userId)).records[0]).toMatchObject(record);
+  });
+
+  it("keeps the chronologically newer envelope and optional ids on older and null-report replay", async () => {
+    const newer: BrowserUsageRecord = { ...owner, version: 1, id: "offset-time", provider: "browser-use", sessionId: "session", event: "status", occurredAt: "2026-10-01T02:05:00+02:00", report: { status: "stopped", browserCostUsd: 0 }, failure: null, orphanedSessionId: null };
+    await recordBrowserUsage(newer);
+    await recordBrowserUsage({ ...newer, applicationId: undefined, jobId: undefined, occurredAt: "2026-10-01T00:06:00Z", report: null });
+    await recordBrowserUsage({ ...newer, applicationId: "stale", jobId: "stale", occurredAt: "2026-10-01T01:04:00+01:00", report: null, failure: "release_failed", orphanedSessionId: "session" });
+    expect((await readBrowserUsage(owner.userId)).records[0]).toMatchObject({ applicationId: "application", jobId: "job", occurredAt: "2026-10-01T00:06:00Z", report: { status: "stopped", browserCostUsd: 0 }, failure: null, orphanedSessionId: null });
+  });
   it("records lifecycle events idempotently and keeps a disconnected session active", async () => {
     await withBrowserUsageContext(owner, async () => {
       await recordBrowserUsageEvent({ ...owner, provider: "browser-use", sessionId: "session-1", event: "created", report, failure: null, orphanedSessionId: null });
