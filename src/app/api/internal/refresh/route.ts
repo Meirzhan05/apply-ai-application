@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { refreshCatalog } from "@/lib/catalog-refresh";
 import { queueMatchAssessment } from "@/lib/match-queue";
-import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { tasks } from "@trigger.dev/sdk";
 import type { refreshUserImports } from "../../../../../trigger/imports";
@@ -9,29 +8,11 @@ import { readState, updateState } from "@/lib/store";
 import { applyImportedRefresh, refreshImportedJobs } from "@/lib/import-jobs";
 import { mutateState } from "@/lib/repository";
 import { recordDiscoveryRefresh } from "@/lib/discovery";
+import { readAllAppStateOwners, type AppStateOwnerRow } from "@/lib/app-state-owners";
 
 export const runtime = "nodejs";
 
-async function readAllOwners() {
-  const owners: Array<{ user_id: string; data?: { importedJobs?: unknown[] } }> = [];
-  const pageSize = 100;
-  let cursor: string | undefined;
-  for (;;) {
-    let query = adminSupabase()
-      .from("app_states")
-      .select("user_id,data")
-      .order("user_id", { ascending: true });
-    if (cursor) query = query.gt("user_id", cursor);
-    const { data, error } = await query.range(0, pageSize - 1);
-    if (error) throw error;
-    owners.push(...((data ?? []) as Array<{ user_id: string; data?: { importedJobs?: unknown[] } }>));
-    if (!data || data.length < pageSize) break;
-    const next = data.at(-1)?.user_id;
-    if (!next || next === cursor) throw new Error("Owner pagination did not advance.");
-    cursor = next;
-  }
-  return owners;
-}
+type RefreshOwnerRow = AppStateOwnerRow & { data?: { importedJobs?: unknown[] } };
 
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_TASK_SECRET;
@@ -50,7 +31,7 @@ export async function POST(request: Request) {
       !isDemo() &&
       process.env.TRIGGER_SECRET_KEY
     ) {
-      const owners = await readAllOwners();
+      const owners = await readAllAppStateOwners<RefreshOwnerRow>("user_id,data", 100);
       const queued = await Promise.allSettled(owners.map((row) =>
         row.data?.importedJobs?.length
           ? tasks.trigger<typeof refreshUserImports>("refresh-user-imported-jobs", { userId: row.user_id }, { concurrencyKey: row.user_id })
