@@ -5,6 +5,7 @@ import { selectApplication, transition } from "@/lib/workflow";
 import { canonicalJobUrl } from "@/lib/sources";
 import { assertAutomationEnabled, assertAutonomous, authorizeKnownAnswerApplication } from "@/lib/autonomous-policy";
 import type { AppState, Application } from "@/lib/types";
+import type { PilotMutationContext } from "@/lib/pilot";
 
 /** Save the continuation in the same transaction as the ready snapshot. */
 export function saveAutonomousSubmission(state: AppState, app: Application): void {
@@ -16,7 +17,7 @@ export function saveAutonomousSubmission(state: AppState, app: Application): voi
   app.submissionDispatch = { token: newId() };
 }
 
-export async function startAutonomousApplication(userId: string, jobId: string) {
+export async function startAutonomousApplication(userId: string, jobId: string, context?: PilotMutationContext) {
   const id = await mutateState(userId, (state) => {
     assertAutomationEnabled(state.profile);
     const job = state.jobs.find((item) => item.id === jobId && item.active);
@@ -37,7 +38,7 @@ export async function startAutonomousApplication(userId: string, jobId: string) 
     authorizeKnownAnswerApplication(app, state.profile, job);
     app.queuedRun = { id: newId(), kind: "draft", requestedAt: new Date().toISOString(), reason: "waiting" };
     return app.id;
-  });
+  }, context);
   await (await import("@/lib/application-queue")).dispatchUserQueue(userId);
   return { applicationId: id };
 }

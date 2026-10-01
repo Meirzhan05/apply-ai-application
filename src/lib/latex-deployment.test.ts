@@ -7,11 +7,13 @@ afterEach(() => vi.unstubAllEnvs());
 it("syncs installed compiler paths over stale production settings", async () => {
   vi.stubEnv("TECTONIC_BIN", "/opt/apply-latex/tectonic");
   vi.stubEnv("TECTONIC_CACHE_DIR", "/opt/apply-latex/cache");
+  vi.stubEnv("APP_ORIGIN", "https://apply-ai-chi.vercel.app");
+  vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://apply-ai-chi.vercel.app/");
   const addLayer = vi.fn();
   const context = {
     target: "deploy", config,
     addLayer,
-    logger: { spinner: () => ({ stop: vi.fn() }) },
+    logger: { spinner: () => ({ stop: vi.fn() }), warn: vi.fn() },
   } as unknown as BuildContext;
   const manifest = {
     environment: "prod",

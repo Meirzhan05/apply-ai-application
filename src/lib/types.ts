@@ -520,6 +520,178 @@ export interface Application {
       lastError?: string;
     };
   };
+  /** Immutable pilot denominator row and append-only evidence for this app. */
+  pilotAttempt?: PilotAttempt;
+}
+
+export type PilotCohort = "internship" | "new-grad" | "unclassified";
+export type PilotOrigin = "real" | "controlled" | "unknown";
+export type PilotActorKind = "owner" | "service" | "operator";
+
+export interface PilotActor {
+  kind: PilotActorKind;
+  userId?: string;
+}
+
+export interface PilotConsentEpisode {
+  version: 1;
+  id: string;
+  ownerId: string;
+  consentVersion: string;
+  consentTextHash: string;
+  consentedAt: string;
+  onboardingCompletedAt: string;
+  automationVersion: number;
+  automationAuthorization?: AutomationAuthorization;
+  profileHash: string;
+  profileSnapshot: PilotProfileSnapshot;
+  withdrawnAt?: string;
+}
+
+export interface PilotProfileSnapshot {
+  name: string;
+  school: string;
+  graduationYear: string;
+  headline: string;
+  workAuthorization: string;
+  facts: Array<Pick<VerifiedFact, "id" | "text" | "verified" | "source">>;
+  skills: string[];
+  preferredTitles: string[];
+  preferredLocations: string[];
+  questionnaire: OnboardingQuestionnaire;
+  resumeHash?: string;
+  factsTruncated?: boolean;
+}
+
+export interface PilotPostingSnapshot {
+  jobId: string;
+  source: JobSource;
+  sourceId: string;
+  canonicalUrl: string;
+  targetIdentityHash: string;
+  title: string;
+  company: string;
+  employmentType: string;
+  description: string;
+  evidenceHash: string;
+}
+
+export type PilotEventKind =
+  | "initiated"
+  | "queued"
+  | "hold"
+  | "intervention-requested"
+  | "owner-action"
+  | "submission-attempted"
+  | "receipt-confirmed"
+  | "outcome-uncertain"
+  | "failed"
+  | "cancelled"
+  | "controlled-excluded"
+  | "service-update";
+
+export interface PilotEvent {
+  version: 1;
+  id: string;
+  kind: PilotEventKind;
+  at: string;
+  actor: PilotActor;
+  blockerId?: string;
+  blockerReason?: ApplicationBlockerReason;
+  outcome?: "confirmed" | "uncertain" | "failed" | "cancelled";
+  detail?: string;
+  evidenceHash?: string;
+}
+
+export interface PilotCostEvidence {
+  version: 1;
+  status: "unknown" | "incomplete" | "measured";
+  projectedUsd: number;
+  measuredUsd?: number;
+  reconciledUsd?: number;
+  evidenceIds: string[];
+  capturedAt?: string;
+}
+
+export interface PilotReview {
+  version: 1;
+  id: string;
+  attemptId: string;
+  reviewerId: string;
+  rubricVersion: string;
+  suitability: "pass" | "fail" | "insufficient";
+  factualAccuracy: "pass" | "fail" | "insufficient" | "not-applicable";
+  notes: string;
+  evidenceDigest: string;
+  createdAt: string;
+  supersedesReviewId?: string;
+}
+
+export interface PilotAttempt {
+  version: 1;
+  id: string;
+  applicationId: string;
+  ownerId: string;
+  consentEpisodeId: string;
+  consentVersion: string;
+  consentedAt: string;
+  initiatedAt: string;
+  onboardingCompletedAt: string;
+  automationVersion: number;
+  automationAuthorization?: AutomationAuthorization;
+  profileHash: string;
+  profileSnapshot: PilotProfileSnapshot;
+  postingSnapshot: PilotPostingSnapshot;
+  origin: PilotOrigin;
+  cohort: PilotCohort;
+  cohortEvidence?: string;
+  cohortClassifierVersion: string;
+  costEvidence: PilotCostEvidence;
+  events: PilotEvent[];
+  reviews: PilotReview[];
+}
+
+export interface PilotState {
+  version: 1;
+  episodes: PilotConsentEpisode[];
+  activeEpisodeId?: string;
+  events: PilotEvent[];
+}
+
+export type PilotGateStatus = "insufficient-real-evidence" | "review-incomplete" | "failed" | "passed";
+
+export interface PilotReportSnapshot {
+  version: 1;
+  id: string;
+  createdAt: string;
+  createdBy: PilotActor;
+  cutoffAt: string;
+  gateVersion: string;
+  status: PilotGateStatus;
+  reasons: string[];
+  totals: {
+    realInitiated: number;
+    confirmed: number;
+    unattendedConfirmed: number;
+    interventions: number;
+    controlled: number;
+    unknown: number;
+    unknownCosts: number;
+  };
+  cohorts: Record<PilotCohort, { initiated: number; confirmed: number }>;
+  sourceManifest: {
+    stateOwnerIds: string[];
+    stateReadAt: string;
+    stateRows: Array<{ ownerId: string; revision?: number; readAt: string }>;
+    cost?: {
+      scope: "owner" | "service";
+      period?: string;
+      evidenceIds: string[];
+      unknownComponents: number;
+      capturedAt: string;
+    };
+  };
+  attempts: PilotAttempt[];
 }
 
 export interface ActivityEvent {
@@ -577,4 +749,5 @@ export interface AppState {
   budgetReservations?: Record<string, number>;
   matchLabels?: Array<{ jobId: string; label: "strong" | "possible" | "uncertain"; profile: Profile; job: Job; labeledAt: string }>;
   discovery?: DiscoveryState;
+  pilot?: PilotState;
 }

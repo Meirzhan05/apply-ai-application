@@ -3,6 +3,7 @@ import { answerNeedsAction } from "@/lib/answer-responsibility";
 import { validatePacket } from "@/lib/drafting";
 import { explicitConflict } from "@/lib/matching";
 import { canonicalJobUrl } from "@/lib/sources";
+import { attachPilotAttempt } from "@/lib/pilot";
 import type {
   AppState,
   Application,
@@ -56,6 +57,7 @@ export function selectApplication(
     updatedAt: now,
   };
   state.applications.unshift(application);
+  attachPilotAttempt(state, application);
   return application;
 }
 

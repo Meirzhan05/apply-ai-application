@@ -31,6 +31,7 @@ The first visual direction is [dashboard-mockup.png](docs/dashboard-mockup.png).
 - Versioned approval records and application packets with separate schema/revision numbers. New packet file manifests bind approved filenames, sizes, SHA-256 hashes and verified source facts; preview and upload verify the same PDF bytes.
 - Trigger.dev browser fill and submit workers for production, Browser Use Cloud sessions, an embedded live browser with action history and takeover controls, local Chromium for the controlled demo, private form screenshots, and a shared monthly service budget reservation in Postgres. A watchdog marks stalled submissions uncertain without retrying them.
 - Supabase magic-link sign-in, owner scoped app state, private resume and form screenshot storage, a daily digest task, and action-needed email hooks.
+- Invited-pilot participation at `/pilot`: explicit versioned consent after onboarding, withdrawal for future initiations, immutable per-application snapshots, append-only lifecycle evidence, and operator-captured reports with separate real, controlled and unknown outcomes. Pilot participation is separate from automation permission and does not enable public access.
 
 ## Production setup
 
@@ -41,6 +42,8 @@ For a new deployment, configure dedicated Supabase, Browser Use Cloud, Trigger.d
 Set `BROWSER_PROVIDER=browser-use` and the server-only `BROWSER_USE_API_KEY` on both Vercel and Trigger.dev. Sessions remain available across review for up to 30 minutes. Existing Browserbase sessions retain their original provider; setting `BROWSER_PROVIDER=browserbase` explicitly enables that adapter and requires its `keepAlive` capability. In Applications, the Agent browser panel shows the real remote page and timestamped actions. Watch mode prevents embedded input while the agent fills. When paused, choose Take control, then Refresh form state to review your edits. Open browser window provides a larger live view. The browser uses only the approved packet, pauses at unfamiliar required fields and consent controls, and blocks LinkedIn and Indeed automation. Users can import those links for tracking and handoff. Public ATS posting APIs are used for discovery only. No direct ATS submit adapter is active.
 
 The global $500 monthly projected ceiling covers drafting, matching, and browser runs. Reconcile estimates with actual provider bills before beta. Set `EMAIL_TEST_RECIPIENT` to restrict outbound email during testing. Digest delivery is marked after provider acceptance.
+
+The pilot report keeps all real initiated applications in its denominator, including blocked, uncertain, failed and cancelled attempts. It requires at least 20 real attempts, both internship and new-grad evidence, an 80% unattended confirmed-receipt rate, and explicit suitability and factual-accuracy review for confirmed attempts. Controlled validation remains excluded, and a report that does not meet the gate states its failure reasons instead of implying launch readiness. Configure `USAGE_OPERATOR_USER_IDS` only for the small set of server-authorized reviewers; the client cannot grant operator access.
 
 ## Jev shadow evaluation
 

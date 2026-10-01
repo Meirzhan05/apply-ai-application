@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import type { AppState } from "@/lib/types";
+import { preparePilotMutation } from "@/lib/pilot";
 import { POST } from "@/app/api/actions/route";
 
 const mocks = vi.hoisted(() => ({
@@ -14,7 +15,9 @@ vi.mock("@/lib/repository", () => ({
   loadState: async (userId: string) => structuredClone(mocks.memory.get(userId) ?? initialDemoState()),
   mutateState: async (userId: string, change: (state: AppState) => unknown) => {
     const state = structuredClone(mocks.memory.get(userId) ?? initialDemoState());
+    const previous = structuredClone(state);
     const result = await change(state);
+    preparePilotMutation(previous, state);
     mocks.memory.set(userId, state);
     return result;
   },
@@ -86,5 +89,23 @@ describe("onboarding action boundary", () => {
     expect(response.status).toBe(400);
     expect(mocks.memory.get("owner-a")!.profile.automationAuthorization).toBeUndefined();
     expect(mocks.memory.get("owner-b")!.profile.automationAuthorization).toBeUndefined();
+  });
+
+  it("enrolls only the authenticated completed owner and captures later selections", async () => {
+    const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action, payload }),
+    });
+    const facts = initialDemoState().profile.facts;
+    await POST(post("onboarding", { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, facts }));
+    const before = mocks.memory.get("owner-a")!.profile.automationVersion;
+    expect((await POST(post("enrollPilot", { confirmed: true, consentVersion: "pilot-consent-v1", userId: "owner-b" }))).status).toBe(200);
+    expect(mocks.memory.get("owner-a")!.profile.automationVersion).toBe(before);
+    expect((await POST(post("select", { jobId: "demo-engineering-intern", userId: "owner-b" }))).status).toBe(200);
+    expect(mocks.memory.get("owner-a")!.applications[0].pilotAttempt?.ownerId).toBe("owner-a");
+    expect(mocks.memory.get("owner-b")!.pilot).toBeUndefined();
+    expect((await POST(post("withdrawPilot"))).status).toBe(200);
+    expect(mocks.memory.get("owner-a")!.pilot?.activeEpisodeId).toBeUndefined();
   });
 });
