@@ -42,7 +42,8 @@ export function redactedProfile(profile: Profile): Profile {
     preferredTitles: profile.preferredTitles.map(redact),
     preferredLocations: profile.preferredLocations.map(redact),
     workAuthorization: redact(profile.workAuthorization),
-    resumeFileName: undefined, resumeText: undefined, sensitiveAnswers: {},
+    resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, sensitiveAnswers: {},
+    onboarding: undefined, automationAuthorization: undefined,
     facts: profile.facts.filter((fact) => fact.verified).map((fact) => ({ ...fact, text: redact(fact.text) })),
   };
 }

@@ -138,6 +138,42 @@ export function formDigest(
   });
 }
 
+export function authorizeAutonomous(
+  application: Application,
+  userId: string,
+  profileVersion: number,
+  targetUrl: string,
+): void {
+  if (application.userId !== userId)
+    throw new Error("This application belongs to another user.");
+  if (!targetUrl.trim()) throw new Error("An application target is required.");
+  application.autonomousAuthorization = {
+    version: 1,
+    userId,
+    profileVersion,
+    targetUrl,
+    authorizedAt: new Date().toISOString(),
+  };
+}
+
+export function hasAutonomousAuthorization(
+  application: Application,
+  userId: string,
+  profileVersion: number,
+  targetUrl: string | undefined,
+): boolean {
+  const authorization = application.autonomousAuthorization;
+  return Boolean(
+    authorization &&
+      authorization.version === 1 &&
+      authorization.userId === userId &&
+      application.userId === userId &&
+      authorization.profileVersion === profileVersion &&
+      targetUrl &&
+      authorization.targetUrl === targetUrl,
+  );
+}
+
 export function approveSubmit(
   application: Application,
   userId: string,
@@ -174,7 +210,8 @@ function supportedApproval(approval: Approval): boolean {
   return approval.version === 1 || approval.version === undefined;
 }
 
-export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined): boolean {
+export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined, profileVersion?: number): boolean {
+  if (profileVersion !== undefined && hasAutonomousAuthorization(application, userId, profileVersion, targetUrl)) return true;
   return Boolean(targetUrl && application.userId === userId && application.packet &&
     (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 || (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact)) &&
     application.packetHash === hashJson(application.packet) &&
@@ -184,14 +221,15 @@ export function hasFillApproval(application: Application, userId: string, target
       approval.reviewHash === application.packetHash && approval.targetUrl === targetUrl));
 }
 
-export function hasSubmissionApproval(application: Application): boolean {
+export function hasSubmissionApproval(application: Application, profileVersion?: number): boolean {
   return (
     ["approved_to_submit", "submitting"].includes(application.status) &&
     Boolean(
       application.form && application.form.readyToSubmit !== false && application.packet &&
       application.packetHash === hashJson(application.packet) &&
       !application.submissionAttemptedAt &&
-      hasFillApproval(application, application.userId, application.jobSnapshot?.applyUrl) &&
+      hasFillApproval(application, application.userId, application.jobSnapshot?.applyUrl, profileVersion) &&
+      (profileVersion !== undefined && hasAutonomousAuthorization(application, application.userId, profileVersion, application.form?.url) ||
         application.approvals.some(
           (approval) =>
             supportedApproval(approval) && approval.kind === "submit" &&
@@ -199,7 +237,7 @@ export function hasSubmissionApproval(application: Application): boolean {
             approval.applicationId === application.id &&
             approval.targetUrl === application.form?.url &&
             approval.reviewHash === application.form?.hash,
-        ),
+        )),
     )
   );
 }

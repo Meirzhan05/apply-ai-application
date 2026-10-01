@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
+import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
@@ -36,6 +37,13 @@ import type {
 
 type ViewState = AppState & {
   matches: { jobId: string; assessment: MatchAssessment }[];
+  onboarding: { complete: boolean; missing: string[]; confirmedFactCount: number };
+  automation: {
+    enabled: boolean;
+    paused: boolean;
+    version: number;
+    settings: NonNullable<Profile["automationSettings"]>;
+  };
 };
 type Section = "matches" | "applications" | "profile" | "settings";
 type Filter = "all" | "strong" | "possible" | "uncertain" | "saved";
@@ -304,6 +312,13 @@ export default function Dashboard() {
                 >
                   + Import a job link
                 </button>
+              </div>
+              <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
+                <div>
+                  <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
+                  <p>{data.onboarding.complete ? "Your confirmed facts and saved settings are ready." : `Onboarding is incomplete: ${data.onboarding.missing.map(onboardingMissingLabel).join(", ")}.`}</p>
+                </div>
+                <button className="text-button" onClick={() => setSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
               {(incompleteFacts > 0 || !data.profile.resumeFileName) && (
                 <div className="review-banner">
@@ -1238,6 +1253,81 @@ export default function Dashboard() {
                     <input maxLength={200} value={profileDraft.sensitiveAnswers[key] ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, sensitiveAnswers: { ...profileDraft.sensitiveAnswers, [key]: event.target.value } })} placeholder="Leave blank for manual entry" />
                   </label>
                 ))}
+                <h3>Required onboarding answers</h3>
+                <p className="muted">These answers are stored as explicit declarations. Leaving one blank keeps it missing; “No” is saved as a real answer.</p>
+                <label>
+                  Are you authorized to work in the United States?
+                  <select
+                    value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          workAuthorization: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
+                        },
+                      },
+                    })}
+                  >
+                    <option value="">Choose an answer</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                    <option value="unknown">I’m not sure yet</option>
+                  </select>
+                </label>
+                <label>
+                  Will you require sponsorship for employment?
+                  <select
+                    value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          requiresSponsorship: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
+                        },
+                      },
+                    })}
+                  >
+                    <option value="">Choose an answer</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                    <option value="unknown">I’m not sure yet</option>
+                  </select>
+                </label>
+                <label>
+                  When are you available to start?
+                  <input
+                    maxLength={200}
+                    value={profileDraft.onboarding?.questionnaire.availability ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          availability: event.target.value,
+                        },
+                      },
+                    })}
+                    placeholder="For example, May 2026 or immediately"
+                  />
+                </label>
+                {section === "settings" && <>
+                  <h3>Application materials</h3>
+                  <label className="checkline">
+                    <input type="checkbox" checked={profileDraft.automationSettings?.resumeTailoring ?? true} onChange={(event) => setProfileDraft({ ...profileDraft, automationSettings: { ...(profileDraft.automationSettings ?? { version: 1, coverLetterMode: "required-only", essayMode: "automatic-truthful" }), resumeTailoring: event.target.checked } })} />
+                    Tailor my resume to each role
+                  </label>
+                  <label>
+                    Cover letters
+                    <select value={profileDraft.automationSettings?.coverLetterMode ?? "required-only"} onChange={(event) => setProfileDraft({ ...profileDraft, automationSettings: { ...(profileDraft.automationSettings ?? { version: 1, resumeTailoring: true, essayMode: "automatic-truthful" }), coverLetterMode: event.target.value as "disabled" | "required-only" | "enabled" } })}>
+                      <option value="disabled">Never generate</option>
+                      <option value="required-only">Generate when required</option>
+                      <option value="enabled">Generate when supported</option>
+                    </select>
+                  </label>
+                  <p className="muted">Essay answers use confirmed facts and general truthful language when personal detail is unavailable.</p>
+                </>}
                 <button
                   className="dark-button"
                   onClick={() =>
@@ -1250,6 +1340,22 @@ export default function Dashboard() {
                   Save profile and preferences
                 </button>
               </div>
+              {section === "settings" && <section className="profile-card autonomy-card">
+                <h3>Automation authorization</h3>
+                <p className="muted">Automation acts only within your current confirmed facts and settings. You can pause future work at any time.</p>
+                <div className={`automation-state ${data.automation.enabled ? "on" : data.automation.paused ? "paused" : "off"}`} role="status">
+                  <strong>{data.automation.enabled ? "Enabled" : data.automation.paused ? "Paused" : "Not enabled"}</strong>
+                  <span>Settings version {data.automation.version}</span>
+                </div>
+                {data.automation.enabled ? (
+                  <button className="outline-action" disabled={Boolean(busy)} onClick={() => act("pauseAutomation")}>Pause automation</button>
+                ) : (
+                  <button className="dark-button" disabled={Boolean(busy) || !data.onboarding.complete} onClick={() => act("activateAutomation", { reason: "applicant-confirmed" })}>
+                    {data.automation.paused ? "Resume automation" : "Enable automation"}
+                  </button>
+                )}
+                {!data.onboarding.complete && <p className="muted">Complete the required answers and confirm at least one resume fact before enabling automation.</p>}
+              </section>}
               <div className="profile-card">
                 <h3>Resume and confirmed facts</h3>
                 <p className="muted">

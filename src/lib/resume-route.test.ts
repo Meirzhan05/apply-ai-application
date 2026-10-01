@@ -26,6 +26,7 @@ describe("resume upload confirmation boundaries", () => {
     expect(mocks.state!.profile.facts).toMatchObject([{ text: "Orbit Labs · ML Intern June 2026 – August 2026 · Built a recommender with explainable feature-level predictions.", verified: false, source: "resume" }]);
     expect(mocks.state!.applications).toEqual(applications);
     expect(mocks.state!.profile.sensitiveAnswers).toEqual(sensitive);
+    expect(mocks.state!.profile.automationVersion).toBeGreaterThan(1);
     expect(mocks.upload.mock.calls[0][0]).toMatch(/^synthetic-owner\//);
     expect(mocks.mutate).toHaveBeenCalledWith("synthetic-owner");
   });

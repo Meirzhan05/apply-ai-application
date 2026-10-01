@@ -11,9 +11,23 @@ import {
   selectApplication,
   setFormSnapshot,
   setPacket,
+  authorizeAutonomous,
+  hasAutonomousAuthorization,
 } from "@/lib/workflow";
 
 describe("application approval gates", () => {
+  it("records autonomous authorization without changing legacy reviewed approvals", () => {
+    const state = initialDemoState();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+
+    authorizeAutonomous(app, state.profile.id, 7, state.jobs[0].applyUrl);
+
+    expect(app.approvals).toEqual([]);
+    expect(hasAutonomousAuthorization(app, state.profile.id, 7, state.jobs[0].applyUrl)).toBe(true);
+    expect(hasAutonomousAuthorization(app, "another-owner", 7, state.jobs[0].applyUrl)).toBe(false);
+    expect(hasAutonomousAuthorization(app, state.profile.id, 6, state.jobs[0].applyUrl)).toBe(false);
+  });
+
   it("refuses a second application through a tracking alias of the same posting", () => {
     const state = initialDemoState();
     const job = state.jobs[0];
