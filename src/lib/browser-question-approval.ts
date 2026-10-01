@@ -1,4 +1,4 @@
-import { browserQuestions } from "@/lib/browser-questions";
+import { browserQuestions, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
 import { confirmAiEssay } from "@/lib/answer-policy";
 import { hasFillApproval } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
@@ -14,6 +14,7 @@ export function assertQuestionSession(app: Application, profile: Profile, formHa
     !hasFillApproval(app, profile.id, app.jobSnapshot?.applyUrl))
     throw new Error("The browser or form changed. Refresh its current state before answering.");
   validatePacket(profile, app.packet!);
+  if (hasUnreadableQuestionLabels(app.form)) throw new Error("Refresh the form questions before answering. Some employer headings could not be read.");
 }
 
 export function approveBrowserAnswers(app: Application, profile: Profile, formHash: string, inputs: BrowserAnswerInput[]): BrowserAnswerApproval[] {

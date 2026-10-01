@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { draftPacket } from "@/lib/drafting";
 import { approveFill, selectApplication, setFormSnapshot, setPacket } from "@/lib/workflow";
-import { browserQuestions, browserTakeoverReasons } from "@/lib/browser-questions";
+import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
 import { approveBrowserAnswers } from "@/lib/browser-question-approval";
 import { essayContentHash, essayEvidenceHash } from "@/lib/answer-policy";
 import type { FormSnapshot, ScreeningAnswer } from "@/lib/types";
@@ -18,6 +18,17 @@ async function fixture() {
 }
 
 describe("questions inside Apply", () => {
+  it("refuses ambiguous cached headings instead of accepting Yes as a question or exposing field IDs", async () => {
+    const { app, profile } = await fixture();
+    setFormSnapshot(app, { ...app.form!, fields: [
+      { identifier: "cards[source][field0]", label: "cards[source][field0]", kind: "select", required: true, value: "", options: ["Other"] },
+      { identifier: "visa", label: "Yes", kind: "radio", required: true, value: "Yes", checked: false },
+      { identifier: "visa", label: "No", kind: "radio", required: true, value: "No", checked: false },
+    ] });
+    expect(hasUnreadableQuestionLabels(app.form)).toBe(true);
+    expect(browserQuestions(app.form)).toEqual([]);
+    expect(() => approveBrowserAnswers(app, profile, app.form!.hash, [{ questionId: "visa", value: "Yes" }])).toThrow(/Refresh the form questions/);
+  });
   it("asks missing required questions once, keeps optional blanks and browser challenges separate", () => {
     const form: FormSnapshot = { version: 1, url: "https://employer.test/apply", capturedAt: "now", hash: "form", attachments: [], readyToSubmit: false, fields: [
       { identifier: "office", label: "Preferred office", kind: "radio", required: true, value: "San Francisco", checked: false },

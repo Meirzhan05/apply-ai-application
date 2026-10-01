@@ -3,6 +3,18 @@ import type { BrowserQuestion, FormSnapshot } from "@/lib/types";
 
 const writableKinds = new Set(["text", "email", "tel", "url", "number", "date", "textarea", "select", "radio", "checkbox"]);
 
+function unreadableLabel(label: string): boolean {
+  return !label.trim() || /^cards\[|^Field \d+$/i.test(label) ||
+    /^(yes|no)(?:,?\s+i\s+(?:do\s+not\s+)?consent)?[.!]?$/i.test(label.trim()) ||
+    /No location found\. Try entering a different location|locationLoading/i.test(label);
+}
+
+// Older snapshots can contain option text or internal names instead of the
+// question. Never accept answers until the employer's headings are read again.
+export function hasUnreadableQuestionLabels(form: FormSnapshot | undefined): boolean {
+  return Boolean(form?.readyToSubmit === false && form.fields.some(field => field.required && writableKinds.has(field.kind) && unreadableLabel(field.label)));
+}
+
 // Use only the employer's inspected controls. Optional blanks, attachments,
 // credentials, and ambiguous identifiers never become invented questions.
 export function browserQuestions(form: FormSnapshot | undefined): BrowserQuestion[] {
@@ -10,7 +22,7 @@ export function browserQuestions(form: FormSnapshot | undefined): BrowserQuestio
   const questions: BrowserQuestion[] = [];
   const seen = new Set<string>();
   for (const field of form.fields) {
-    if (!field.identifier || /^\d+$/.test(field.identifier) || field.editable === false || !writableKinds.has(field.kind)) continue;
+    if (!field.identifier || /^\d+$/.test(field.identifier) || field.editable === false || !writableKinds.has(field.kind) || unreadableLabel(field.label)) continue;
     const group = form.fields.filter((item) => item.identifier === field.identifier);
     if (field.kind !== "radio" && group.length !== 1) continue;
     if (seen.has(field.identifier)) continue;
@@ -29,6 +41,7 @@ export function browserQuestions(form: FormSnapshot | undefined): BrowserQuestio
 
 export function browserTakeoverReasons(form: FormSnapshot | undefined): string[] {
   const labels = new Set(browserQuestions(form).map((question) => question.label));
+  for (const field of form?.fields ?? []) if (unreadableLabel(field.label)) labels.add(field.label);
   return (form?.blockers ?? []).filter((blocker) => ![
     "Correct or complete the field: ", "Choose an exact option for: ", "Select and confirm the option for: ",
   ].some((prefix) => blocker.startsWith(prefix) && labels.has(blocker.slice(prefix.length))));

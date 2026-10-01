@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Page } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
@@ -58,6 +59,17 @@ const server = createServer((request, response) => {
   }
   if (url.pathname === "/recaptcha/api2/bframe") {
     response.end("<html><body>Synthetic challenge frame</body></html>");
+    return;
+  }
+  if (scenario === "label-extraction") {
+    const choice = (heading: string, name: string, options: string[]) => `<li class="application-question custom-question"><div><div class="application-label full-width multiple-choice"><div class="text">${heading}<span class="required">✱</span></div></div><div class="application-field full-width required-field"><ul>${options.map(option => `<li><label><input type="radio" name="${name}" value="${option}" required><span class="application-answer-alternative">${option}</span></label></li>`).join("")}</ul></div></div></li>`;
+    response.end(`<html><head><meta charset="utf-8"></head><body><form><ul>
+      <li class="application-question"><label><div class="application-label">Current location <span class="required">✱</span></div><div class="application-field"><input name="location" required><div class="dropdown-no-results">No location found. Try entering a different location</div><div class="dropdown-loading-results">Loading</div></div></label></li>
+      ${choice("Are you legally authorized to work in the country for which you are applying?", "cards[authorization][field0]", ["Yes", "No"])}
+      ${choice("Will you now or in the future require sponsorship for employment visa status?", "cards[sponsor][field0]", ["Yes", "No"])}
+      <li class="application-question custom-question"><div><div class="application-label full-width dropdown"><div class="text">Please tell us how you heard about this opportunity.<span class="required">✱</span></div></div><div class="application-field"><select name="cards[source][field0]" required><option value="">Click Here</option><option>University Job Board</option><option>Other</option></select></div></div></li>
+      ${choice("Do you consent to the employer retaining your application?", "cards[consent][field0]", ["Yes, I consent", "No, I do not consent"])}
+    </ul><button>Submit application</button></form></body></html>`);
     return;
   }
   const group = (question: string, name: string, options: string[], required = true) => `<fieldset><label class="ashby-application-form-question-title ${required ? "_required_fixture" : ""}">${question}</label>${options.map((option, index) => `<input type="radio" name="${name}" id="${name}-${index}"><label for="${name}-${index}">${option}</label>`).join("")}</fieldset>`;
@@ -150,6 +162,16 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("label extraction: employer headings stay separate from options, technical names, and location status", async () => {
+    const { app, result } = await fill("label-extraction"); setFormSnapshot(app, result.form);
+    const questions = browserQuestions(app.form);
+    assert.deepEqual(questions.map(question => question.label), ["Current location", "Are you legally authorized to work in the country for which you are applying?", "Will you now or in the future require sponsorship for employment visa status?", "Please tell us how you heard about this opportunity.", "Do you consent to the employer retaining your application?"]);
+    assert.deepEqual(questions[1].options, ["Yes", "No"]);
+    assert.deepEqual(questions[4].options, ["Yes, I consent", "No, I do not consent"]);
+    await mkdir(".data/label-debug", { recursive: true });
+    await writeFile(".data/label-debug/inspected-form.json", JSON.stringify(app.form));
+    assert.equal(submissions.get("label-extraction"), undefined);
+  });
   await test("in-app questions: a required checkbox is filled only after explicit agreement", async () => {
     const { state, app, result } = await fill("consent"); setFormSnapshot(app, result.form);
     const question = browserQuestions(app.form)[0];

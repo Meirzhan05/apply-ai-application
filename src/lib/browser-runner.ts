@@ -81,7 +81,14 @@ export function canAutomate(urlString: string): boolean {
 }
 
 async function inspectFields(page: Page): Promise<InspectedField[]> {
-  return page.locator("input, textarea, select").evaluateAll(async (elements) =>
+  return page.locator("input, textarea, select").evaluateAll(async (elements) => {
+    const labelText = { read(element: Element | null): string {
+      if (!element) return "";
+      const clone = element.cloneNode(true) as Element;
+      clone.querySelectorAll('input, textarea, select, button, [hidden], [aria-hidden="true"], [role="status"], [role="alert"], [role="listbox"], .required, .dropdown-container').forEach(node => node.remove());
+      return (clone.textContent || "").trim().replace(/\s+/g, " ").replace(/[✱*]\s*$/, "").trim();
+    } };
+    return (
     (await Promise.all(elements
       .map(async (element, index) => {
         const input = element as
@@ -89,22 +96,25 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           | HTMLTextAreaElement
           | HTMLSelectElement;
         const id = input.id;
+        const kind = input.tagName.toLowerCase() === "input"
+          ? (input as HTMLInputElement).type || "text" : input.tagName.toLowerCase();
+        const associated = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
         const optionLabel =
-          (id
-            ? document.querySelector(`label[for="${CSS.escape(id)}"]`)
-                ?.textContent
-            : null) ||
-          input.closest("label")?.textContent ||
+          labelText.read(associated) ||
+          labelText.read(input.closest("label")) ||
           input.getAttribute("aria-label") ||
           input.getAttribute("placeholder") ||
           input.name ||
           `Field ${index + 1}`;
         const fieldset = input.closest("fieldset");
-        const kind = input.tagName.toLowerCase() === "input"
-          ? (input as HTMLInputElement).type || "text" : input.tagName.toLowerCase();
-        const grouped = ["radio", "checkbox"].includes(kind) || input.getAttribute("aria-autocomplete") === "list";
-        const heading = grouped ? fieldset?.querySelector("legend, .ashby-application-form-question-title") : null;
-        const label = heading?.textContent || optionLabel;
+        const group = input.closest('.application-question, fieldset, [role="radiogroup"], [role="group"]');
+        const heading = group ? Array.from(group.querySelectorAll("legend, .application-label, .ashby-application-form-question-title"))
+          .find(node => node.closest('.application-question, fieldset, [role="radiogroup"], [role="group"]') === group) ?? null : null;
+        const labelledBy = (input.getAttribute("aria-labelledby") || group?.getAttribute("aria-labelledby") || "")
+          .split(/\s+/).filter(Boolean).map(ref => labelText.read(document.getElementById(ref))).filter(Boolean).join(" ");
+        // Question headings and option labels are separate: hosted ATS forms
+        // commonly use a div heading and wrapping labels for Yes/No choices.
+        const label = labelText.read(heading) || labelledBy || optionLabel;
         const groupRequired = Boolean(heading && Array.from(heading.classList).some((name) => /^_required_/.test(name))) || fieldset?.getAttribute("aria-required") === "true";
         const required = input.required || input.getAttribute("aria-required") === "true" || groupRequired;
         const groupChecked = kind === "radio" && Boolean(fieldset
@@ -147,8 +157,9 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
               : [],
         };
       })))
-      .filter((field): field is NonNullable<typeof field> => Boolean(field)),
-);
+      .filter((field): field is NonNullable<typeof field> => Boolean(field))
+    );
+  });
 }
 
 async function waitForForm(page: Page): Promise<void> {
