@@ -3,16 +3,25 @@ import { isDemo, mutateState } from "@/lib/repository";
 
 export const serviceBudgetMonth = () => new Date().toISOString().slice(0, 7);
 
+export const browserBudgetReservationId = (applicationId: string, attemptId: string) => `browser:${applicationId}:${attemptId}`;
+
 export async function reserveServiceBudget(
   userId: string,
   reservationId: string,
   projectedUsd: number,
+  month = serviceBudgetMonth(),
 ): Promise<boolean> {
-  if (!Number.isFinite(projectedUsd) || projectedUsd <= 0) throw new Error("A valid projected cost is required.");
+  if (!Number.isFinite(projectedUsd) || projectedUsd <= 0) {
+    const error = new Error("A valid projected cost is required.");
+    Object.assign(error, { budgetNeverAllocated: true });
+    throw error;
+  }
   const ceiling = Number(process.env.MONTHLY_SPEND_LIMIT_USD || "500");
-  if (!Number.isFinite(ceiling) || ceiling <= 0)
-    throw new Error("Monthly spending limit is not configured correctly.");
-  const month = serviceBudgetMonth();
+  if (!Number.isFinite(ceiling) || ceiling <= 0) {
+    const error = new Error("Monthly spending limit is not configured correctly.");
+    Object.assign(error, { budgetNeverAllocated: true });
+    throw error;
+  }
   if (isDemo())
     return mutateState(userId, (state) => {
       if (state.budgetMonth !== month) { state.budgetMonth = month; state.budgetReservations = {}; state.estimatedSpendUsd = 0; }
@@ -33,8 +42,29 @@ export async function reserveServiceBudget(
   return data === true;
 }
 
-export const reserveBrowserBudget = (userId: string, applicationId: string) =>
-  reserveServiceBudget(userId, `browser:${applicationId}`, 0.15);
+export const reserveBrowserBudget = (userId: string, applicationId: string, attemptId = "initial", month = serviceBudgetMonth()) =>
+  reserveServiceBudget(userId, browserBudgetReservationId(applicationId, attemptId), 0.15, month);
+
+export async function releaseServiceBudget(userId: string, reservationId: string, month = serviceBudgetMonth()): Promise<boolean> {
+  if (isDemo()) {
+    return mutateState(userId, (state) => {
+      const held = state.budgetReservations?.[reservationId];
+      if (held === undefined) return true;
+      delete state.budgetReservations![reservationId];
+      state.estimatedSpendUsd = Math.max(0, state.estimatedSpendUsd - held);
+      return true;
+    });
+  }
+  const { data, error } = await adminSupabase().rpc("release_service_budget", {
+    p_reservation_id: `${month}:${reservationId}`,
+    p_month: month,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
+export const releaseBrowserBudget = (userId: string, applicationId: string, attemptId: string, month?: string) =>
+  releaseServiceBudget(userId, browserBudgetReservationId(applicationId, attemptId), month);
 
 export interface QueuedBudgetReceipt {
   queuedId: string;

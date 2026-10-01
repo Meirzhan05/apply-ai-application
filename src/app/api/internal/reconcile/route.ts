@@ -6,6 +6,7 @@ import { recoverStaleRuns } from "@/lib/run-recovery";
 import { cancelBrowser } from "@/lib/browser-runner";
 import { dispatchUserQueue } from "@/lib/application-queue";
 import { resolveResourceHold, recordApplicationBlocker } from "@/lib/application-blockers";
+import { browserBudgetReservationId, releaseServiceBudget } from "@/lib/budget";
 
 export const runtime = "nodejs";
 export async function POST(request: Request) {
@@ -60,6 +61,32 @@ export async function POST(request: Request) {
           if (!target?.browserReleasePending) return;
           target.browserReleasePending.attempts += 1;
           target.browserReleasePending.lastError = error instanceof Error ? error.message : "The provider did not confirm the browser release.";
+        });
+      }
+    }
+    const budgetCompensations = (await loadState(row.user_id)).applications.filter((item) => item.importedPreflight?.budgetReleasePending);
+    for (const app of budgetCompensations) {
+      const preflight = app.importedPreflight;
+      const marker = preflight?.budgetReleasePending;
+      const expectedReservationId = preflight ? browserBudgetReservationId(app.id, preflight.token) : undefined;
+      if (!preflight || !marker || marker.kind !== "unused" || marker.reservationId !== expectedReservationId || preflight.budgetReservationId !== marker.reservationId || marker.month !== preflight.budgetMonth || app.userId !== row.user_id) continue;
+      try {
+        const released = await releaseServiceBudget(row.user_id, marker.reservationId, marker.month);
+        if (!released) throw new Error("The unused browser budget reservation could not be released.");
+        await mutateState(row.user_id, (current) => {
+          const target = current.applications.find((item) => item.id === app.id && item.userId === row.user_id);
+          const targetMarker = target?.importedPreflight?.budgetReleasePending;
+          if (!target || !targetMarker || target.importedPreflight?.token !== preflight.token || targetMarker.reservationId !== marker.reservationId || targetMarker.month !== marker.month) return;
+          target.importedPreflight = undefined;
+          resolveResourceHold(target);
+        });
+      } catch (error) {
+        await mutateState(row.user_id, (current) => {
+          const target = current.applications.find((item) => item.id === app.id && item.userId === row.user_id);
+          const targetMarker = target?.importedPreflight?.budgetReleasePending;
+          if (!target || !targetMarker || target.importedPreflight?.token !== preflight.token || targetMarker.reservationId !== marker.reservationId || targetMarker.month !== marker.month) return;
+          targetMarker.attempts += 1;
+          targetMarker.lastError = error instanceof Error ? error.message : "The unused browser budget could not be released.";
         });
       }
     }

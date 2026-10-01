@@ -304,6 +304,51 @@ export interface FormSnapshot {
   submitControl?: { label: string; identifier: string; action?: string; method?: string; encoding?: string };
 }
 
+export type ImportedCompatibilityStatus = "reachable" | "blocked" | "uncertain";
+
+export interface ImportedCompatibilityRecord {
+  version: 1;
+  ownerId: string;
+  applicationId: string;
+  jobId: string;
+  canonicalPostingUrl: string;
+  postingUrl: string;
+  observedUrl: string;
+  observedOrigin: string;
+  formUrl?: string;
+  formHash?: string;
+  submitControl?: FormSnapshot["submitControl"];
+  contextHash: string;
+  postingEvidence: {
+    postingUrl?: string;
+    postingIdentityHash?: string;
+    title?: string;
+    company?: string;
+    markers: string[];
+    identityHash: string;
+  };
+  observedContext?: {
+    title?: string;
+    company?: string;
+    location?: string;
+    text: string;
+  };
+  checkedAt: string;
+  status: ImportedCompatibilityStatus;
+  blocker?: string;
+  controlled?: boolean;
+}
+
+export type ImportedApplicationOutcomeKind = "reachable" | "attempted" | "blocked" | "confirmed" | "uncertain";
+
+export interface ImportedApplicationOutcome {
+  version: 1;
+  kind: ImportedApplicationOutcomeKind;
+  at: string;
+  evidence?: string;
+  synthetic?: boolean;
+}
+
 export interface Approval {
   version: 1;
   id: string;
@@ -394,9 +439,12 @@ export interface Application {
   browserSessionCreatedAt?: string;
   browserReleasePending?: {
     sessionId: string;
+    provider?: BrowserProvider;
     requestedAt: string;
     attempts: number;
     lastError?: string;
+    budgetReservationId?: string;
+    budgetMonth?: string;
   };
   browserConnectUrl?: string;
   browserLiveUrl?: string;
@@ -454,6 +502,24 @@ export interface Application {
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
   controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; factualOnly?: boolean; essayOnly?: boolean; verification?: boolean; verified?: boolean };
+  importedCompatibility?: ImportedCompatibilityRecord;
+  importedOutcome?: ImportedApplicationOutcome;
+  importedPreflight?: {
+    token: string;
+    startedAt: string;
+    sessionId?: string;
+    provider?: BrowserProvider;
+    budgetReservationId?: string;
+    budgetMonth?: string;
+    allocationUncertain?: boolean;
+    budgetReleasePending?: {
+      kind: "unused";
+      reservationId: string;
+      month: string;
+      attempts: number;
+      lastError?: string;
+    };
+  };
 }
 
 export interface ActivityEvent {

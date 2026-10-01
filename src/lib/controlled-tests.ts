@@ -33,13 +33,29 @@ export interface ControlledFixtureScope {
   jobId?: string;
 }
 
+/** A controlled grant is valid only at the configured synthetic receiver. */
+export function controlledReceiverUrl(raw: string): URL | null {
+  try {
+    const url = new URL(raw);
+    const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_ORIGIN;
+    const expectedOrigin = configuredOrigin
+      ? new URL(configuredOrigin).origin
+      : process.env.DEMO_MODE === "true" ? "https://apply.example" : "";
+    if (!expectedOrigin || url.origin !== expectedOrigin || url.pathname !== "/api/internal/controlled-form") return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 function grantForApplication(application: AppState["applications"][number]): TestGrant | null {
   const snapshot = application.jobSnapshot;
   if (!snapshot || !application.controlledTest || application.controlledTest.expiresAt <= Date.now()) return null;
   const urls = [snapshot.url, snapshot.applyUrl];
   for (const raw of urls) {
     try {
-      const token = new URL(raw).searchParams.get("token");
+      const url = controlledReceiverUrl(raw);
+      const token = url?.searchParams.get("token");
       if (!token) continue;
       const grant = verifyControlledTestGrant(token);
       if (grant && grant.expiresAt === application.controlledTest.expiresAt &&

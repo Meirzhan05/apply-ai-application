@@ -88,8 +88,10 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
         enableRecording: false, allowResizing: false,
       });
     } catch (error) {
+      const ambiguous = error instanceof Error && error.message.includes("No automatic session retry");
+      if (ambiguous && error instanceof Error) Object.assign(error, { allocationUncertain: true });
       const owner = browserUsageContext();
-      if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: null, event: error instanceof Error && error.message.includes("No automatic session retry") ? "ambiguous" : "failed", report: null, failure: error instanceof Error && error.message.includes("No automatic session retry") ? "ambiguous_allocation" : "allocation_failed", orphanedSessionId: null }).catch(() => undefined);
+      if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: null, event: ambiguous ? "ambiguous" : "failed", report: null, failure: ambiguous ? "ambiguous_allocation" : "allocation_failed", orphanedSessionId: null }).catch(() => undefined);
       throw error;
     }
     try {

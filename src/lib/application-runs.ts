@@ -13,6 +13,7 @@ import { browserQuestions } from "@/lib/browser-questions";
 import { recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBlockers } from "@/lib/application-blockers";
+import { importedAutonomyJob } from "@/lib/import-compatibility";
 import type { Application } from "@/lib/types";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
@@ -71,11 +72,12 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
-    assertJobEligible(state.profile, job);
+    const eligibilityJob = importedAutonomyJob(app, job);
+    assertJobEligible(state.profile, eligibilityJob);
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");
     const beforeModelCall = app.autonomousAuthorization ? () => currentAutonomousRun(userId, applicationId, runToken, "draft") : undefined;
     if (beforeModelCall) await beforeModelCall();
-    const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, job, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
+    const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, eligibilityJob, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;
@@ -115,7 +117,8 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
   let session: Awaited<ReturnType<typeof prepareBrowser>> | undefined;
   try {
     if (!job?.active || !app.packet) throw new Error("The job or approved packet is unavailable.");
-    assertJobEligible(state.profile, job);
+    const eligibilityJob = importedAutonomyJob(app, job);
+    assertJobEligible(state.profile, eligibilityJob);
     validatePacket(state.profile, app.packet);
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "fill");
     if (app.autonomousAuthorization) await currentAutonomousRun(userId, applicationId, runToken, "fill");
@@ -144,7 +147,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!observed.fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label))) throw new Error("The required cover-letter control changed.");
       assertAutonomousDestination(app, observed);
       if (state.profile.automationSettings!.coverLetterMode === "disabled") throw new Error("The employer requires a cover letter, but your cover-letter setting is disabled.");
-      const packet = await withGroundedCoverLetter(state.profile, job, app.packet!, () => currentAutonomousRun(userId, applicationId, runToken, "fill"));
+      const packet = await withGroundedCoverLetter(state.profile, eligibilityJob, app.packet!, () => currentAutonomousRun(userId, applicationId, runToken, "fill"));
       await mutateState(userId, (current) => {
         const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
         if (!target || target.status !== "filling" || target.runToken !== runToken || target.packetHash !== app.packetHash) throw new Error("The application materials changed during letter preparation.");
@@ -157,7 +160,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       return packet;
     } : undefined, app.autonomousAuthorization ? async (observed) => {
       assertAutonomousDestination(app, observed);
-      const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareAutonomousFormEssays(state.profile, job, app, observed, () => currentAutonomousRun(userId, applicationId, runToken, "fill")));
+      const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareAutonomousFormEssays(state.profile, eligibilityJob, app, observed, () => currentAutonomousRun(userId, applicationId, runToken, "fill")));
       await mutateState(userId, (current) => {
         const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
         if (!target || target.status !== "filling" || target.runToken !== runToken || target.packetHash !== app.packetHash || target.browserSessionId !== app.browserSessionId) throw new Error("The form or materials changed during automatic essay preparation.");
@@ -254,9 +257,11 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
   } catch (error) {
     await withBrowserUsageContext({ userId, applicationId, jobId: job?.id, runId: runToken ?? app.runToken ?? newId() }, () => recordBrowserUsageEvent({ userId, applicationId, jobId: job?.id, runId: runToken ?? app.runToken ?? newId(), provider: app.browserProvider ?? (process.env.BROWSER_PROVIDER === "browser-use" ? "browser-use" : "browserbase"), sessionId: session?.sessionId ?? null, event: "failed", report: null, failure: "allocation_failed", orphanedSessionId: null })).catch(() => undefined);
     let released = true;
-    if (session) {
+    const failedSessionId = session?.sessionId ?? app.browserSessionId;
+    const failedProvider = session?.provider ?? app.browserProvider;
+    if (failedSessionId) {
       try {
-        await cancelBrowser({ ...app, browserSessionId: session.sessionId, browserProvider: session.provider }, { strict: true });
+        await cancelBrowser({ ...app, browserSessionId: failedSessionId, browserProvider: failedProvider }, { strict: true });
       } catch {
         released = false;
       }
@@ -267,9 +272,9 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
         transition(target, [target.status], target.autonomousAuthorization ? "needs_user_action" : "authorized_to_fill");
         target.error = error instanceof Error ? error.message : "Browser run failed.";
         if (target.autonomousAuthorization) {
-          recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl, sessionId: released ? undefined : session?.sessionId });
-          if (!released) recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The next application will wait until this session is stopped.", { sessionId: session?.sessionId, packetHash: target.packetHash, targetUrl: target.form?.url });
-          if (!released && session) target.browserReleasePending = { sessionId: session.sessionId, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the browser release." };
+          recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl, sessionId: released ? undefined : failedSessionId });
+          if (!released) recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The next application will wait until this session is stopped.", { sessionId: failedSessionId, packetHash: target.packetHash, targetUrl: target.form?.url });
+          if (!released && failedSessionId) target.browserReleasePending = { sessionId: failedSessionId, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the browser release." };
           if (released) target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
         } else if (released) target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
       }

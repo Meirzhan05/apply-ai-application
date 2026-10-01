@@ -35,6 +35,7 @@ import {
 } from "@/lib/repository";
 import { canonicalJobUrl } from "@/lib/sources";
 import { newImportedJob, refreshImportedJobs } from "@/lib/import-jobs";
+import { runImportedPreflight } from "@/lib/import-preflight";
 import { resumeBlockedApplication } from "@/lib/application-blockers";
 import { recordApplicationBlocker } from "@/lib/application-blockers";
 import {
@@ -299,6 +300,12 @@ async function perform(
     });
   }
   if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200));
+  if (action === "preflightImportedPosting") {
+    const jobId = text(payload.jobId, 200);
+    const result = await runImportedPreflight(userId, jobId);
+    if (result.status === "reachable") await startAutonomousApplication(userId, jobId);
+    return result;
+  }
   if (action === "select")
     return mutateState(userId, (state) => {
       const app = selectApplication(state, text(payload.jobId, 200), userId);

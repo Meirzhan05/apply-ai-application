@@ -84,6 +84,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
             files: structuredClone(target.packet!.files?.filter((file) => target.form?.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ?? []), capturedAt: baseline.attemptedAt };
           target.submissionAttemptedAt = baseline.attemptedAt;
           target.submissionVerification = baseline;
+          if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: "attempted", at: baseline.attemptedAt, evidence: "The durable pre-click attempt marker was saved.", synthetic: Boolean(target.controlledTest) };
           return true;
         }),
       });
@@ -100,6 +101,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
         );
         target.confirmation = result.evidence;
         target.submissionReceipt = result.receipt;
+        if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: result.confirmed ? "confirmed" : result.verification ? "attempted" : "uncertain", at: new Date().toISOString(), evidence: result.evidence, synthetic: Boolean(target.controlledTest) };
         if (result.confirmed) target.submissionVerification = undefined;
         else if (result.verification) target.submissionVerification = result.verification;
         else {
@@ -184,6 +186,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
             error instanceof Error
               ? error.message
               : "Submission result unknown.";
+          if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: "uncertain", at: new Date().toISOString(), evidence: target.error, synthetic: Boolean(target.controlledTest) };
           target.submissionAttemptedAt ??= app.submissionAttemptedAt;
           current.activity.unshift({
             id: newId(),

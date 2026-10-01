@@ -7,6 +7,7 @@ import { onboardingCompleteness } from "@/lib/onboarding";
 import { canonicalJobUrl } from "@/lib/sources";
 import { formDigest } from "@/lib/workflow";
 import { answerOwner } from "@/lib/answer-responsibility";
+import { assertImportedCompatibility, assertImportedDestination, importedAutonomyJob, importedCompatibilityRequired } from "@/lib/import-compatibility";
 import type { Application, Job, Profile, FormSnapshot } from "@/lib/types";
 
 export function unsupportedAutonomousForm(form: Pick<FormSnapshot, "fields">, application?: Application): boolean {
@@ -21,10 +22,13 @@ export function exactApplicationUrl(raw: string, base?: string): string {
 
 export function assertAutonomousDestination(application: Application, form: Pick<FormSnapshot, "url" | "submitControl">): void {
   const auth = application.autonomousAuthorization;
-  if (!auth?.expectedFormUrl || auth.expectedFormUrl !== auth.targetUrl || auth.expectedSubmitAction !== auth.targetUrl ||
+  if (!auth?.expectedFormUrl || !auth.expectedSubmitAction ||
       exactApplicationUrl(form.url) !== exactApplicationUrl(auth.expectedFormUrl) || !form.submitControl ||
       exactApplicationUrl(form.submitControl.action || form.url, form.url) !== exactApplicationUrl(auth.expectedSubmitAction))
     throw new Error("The observed form or submit destination changed from the authorized application URL. This workflow cannot follow a different posting or action.");
+  if (auth.expectedFormUrl !== auth.targetUrl || auth.expectedSubmitAction !== auth.targetUrl) {
+    assertImportedDestination(application, undefined, form);
+  }
 }
 
 export function autonomyProfileHash(profile: Profile): string { return hashJson(profile); }
@@ -78,7 +82,10 @@ export function assertAutomationEnabled(profile: Profile): void {
 }
 
 export function authorizeKnownAnswerApplication(application: Application, profile: Profile, job: Job): void {
-  application.autonomousAuthorization = { version: 1, userId: profile.id, profileVersion: profile.automationVersion!, targetUrl: job.applyUrl, expectedFormUrl: job.applyUrl, expectedSubmitAction: job.applyUrl, authorizedAt: new Date().toISOString(), profileHash: autonomyProfileHash(profile), jobHash: autonomyJobHash(job), postingIdentity: canonicalJobUrl(job.url) };
+  assertImportedCompatibility(application, profile, job);
+  const eligibilityJob = importedAutonomyJob(application, job);
+  const imported = importedCompatibilityRequired(application, job) ? application.importedCompatibility : undefined;
+  application.autonomousAuthorization = { version: 1, userId: profile.id, profileVersion: profile.automationVersion!, targetUrl: job.applyUrl, expectedFormUrl: imported?.formUrl ?? job.applyUrl, expectedSubmitAction: imported?.submitControl?.action ?? job.applyUrl, authorizedAt: new Date().toISOString(), profileHash: autonomyProfileHash(profile), jobHash: autonomyJobHash(eligibilityJob), postingIdentity: canonicalJobUrl(job.url) };
   assertAutonomous(application, profile, job, "draft");
 }
 
@@ -86,12 +93,14 @@ export function authorizeKnownAnswerApplication(application: Application, profil
 export function assertAutonomous(application: Application, profile: Profile, job: Job | undefined, phase: "draft" | "fill" | "submit"): void {
   assertAutomationEnabled(profile);
   if (!job?.active) throw new Error("The listing closed before this application could proceed.");
-  assertJobEligible(profile, job);
+  const eligibilityJob = importedAutonomyJob(application, job);
+  assertJobEligible(profile, eligibilityJob);
+  assertImportedCompatibility(application, profile, job);
   const auth = application.autonomousAuthorization;
   if (!auth || auth.version !== 1 || auth.userId !== profile.id || application.userId !== profile.id ||
       auth.profileVersion !== profile.automationVersion || auth.profileHash !== autonomyProfileHash(profile) ||
-      auth.jobHash !== autonomyJobHash(job) || auth.postingIdentity !== canonicalJobUrl(job.url) || auth.targetUrl !== job.applyUrl ||
-      auth.expectedFormUrl !== auth.targetUrl || auth.expectedSubmitAction !== auth.targetUrl ||
+      auth.jobHash !== autonomyJobHash(eligibilityJob) || auth.postingIdentity !== canonicalJobUrl(job.url) || auth.targetUrl !== job.applyUrl ||
+      (!importedCompatibilityRequired(application, job) && (auth.expectedFormUrl !== auth.targetUrl || auth.expectedSubmitAction !== auth.targetUrl)) ||
       ["cancelled", "submitted", "uncertain", "awaiting_verification"].includes(application.status))
     throw new Error("The application authorization changed. Start a new authorized workflow after reviewing your settings.");
   if (phase === "draft") return;

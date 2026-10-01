@@ -23,7 +23,10 @@ export async function startAutonomousApplication(userId: string, jobId: string) 
     if (!job) throw new Error("The listing is no longer available.");
     const existing = state.applications.find((app) => app.userId === userId && (app.jobId === job.id || canonicalJobUrl(app.jobSnapshot?.url || "") === canonicalJobUrl(job.url)));
     if (existing) {
-      if (!existing.autonomousAuthorization) throw new Error("This posting already has an application. Continue its existing workflow.");
+      if (!existing.autonomousAuthorization) {
+        if (existing.importedCompatibility?.status !== "reachable") throw new Error("Verify this imported employer posting before starting its automatic application.");
+        authorizeKnownAnswerApplication(existing, state.profile, job);
+      }
       if (existing.status === "selected" && !existing.runToken && !existing.queuedRun) {
         assertAutonomous(existing, state.profile, state.jobs.find((item) => item.id === existing.jobId), "draft");
         existing.queuedRun = { id: newId(), kind: "draft", requestedAt: new Date().toISOString(), reason: "waiting" };
