@@ -2,7 +2,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
-const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), afterSession: undefined as undefined | (() => void | Promise<void>), budget: true, storageDemo: false, captureAttachment: false, attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>, extractedText: "Confirmed experience from the uploaded résumé.", beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
   return { ...fs, writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
@@ -16,9 +16,11 @@ vi.mock("node:fs/promises", async (original) => {
 });
 
 vi.mock("@trigger.dev/sdk", () => ({ task: (config: unknown) => config, tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => { fixture.pending.push({ task, payload }); if (fixture.triggerFailure === task) throw new Error("Accepted handoff timed out"); return { id: "dispatch" }; } } }));
-vi.mock("@/lib/repository", () => ({ isDemo: () => false, currentUserId: async () => fixture.state!.profile.id, loadState: async () => { const snapshot = structuredClone(fixture.state); await fixture.afterLoad?.(fixture.state!); return snapshot; }, mutateState: async (_user: string, change: (state: AppState) => unknown) => { const pending = fixture.queue.then(async () => { const result = await change(fixture.state!); fixture.saved.push(structuredClone(fixture.state!)); return result; }); fixture.queue = pending.then(() => undefined, () => undefined); return pending; } }));
+vi.mock("@/lib/repository", () => ({ isDemo: () => fixture.storageDemo, currentUserId: async () => fixture.state!.profile.id, loadState: async () => { const snapshot = structuredClone(fixture.state); await fixture.afterLoad?.(fixture.state!); return snapshot; }, mutateState: async (_user: string, change: (state: AppState) => unknown) => { const pending = fixture.queue.then(async () => { const result = await change(fixture.state!); fixture.saved.push(structuredClone(fixture.state!)); return result; }); fixture.queue = pending.then(() => undefined, () => undefined); return pending; } }));
 vi.mock("@/lib/budget", () => ({ serviceBudgetMonth: () => "2026-10", browserBudgetReservationId: (applicationId: string, attemptId: string) => `browser:${applicationId}:${attemptId}`, releaseBrowserBudget: async () => true, reserveServiceBudget: async () => fixture.budget, reserveBrowserBudget: async () => fixture.budget, reserveQueuedBudget: async (_user: string, app: string, queued: string, projected: number) => fixture.budget ? { queuedId: queued, reservationId: `queued:${queued}`, month: "2026-10", ownerId: "owner", applicationId: app, projectedUsd: projected } : null, releaseQueuedBudget: async () => true, markQueuedBudgetClaimed: async () => true, markQueuedBudgetTerminal: async () => true }));
 vi.mock("openai", () => ({ default: class { responses = { parse: fixture.parse }; } }));
+vi.mock("pdf-parse", () => ({ PDFParse: class { async getText() { return { text: fixture.extractedText }; } async destroy() {} } }));
+vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: fixture.extractedText }) } }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-controlled"), source: "controlled compiler" }) }));
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, preflightBrowser: fixture.preflight, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
@@ -27,14 +29,22 @@ import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { POST } from "@/app/api/actions/route";
+import { POST as uploadResume } from "@/app/api/resume/route";
 import { GET as getApplicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
+import { setPacket } from "@/lib/workflow";
 import { recordApplicationBlocker } from "@/lib/application-blockers";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
+function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
+  const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(bytes)], `meir-original.${extension}`, { type: mimeType }));
+  return new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form });
+}
 async function step() { const next = fixture.pending.shift()!; if (next.task === "draft-application-packet") await runDraft(next.payload); else if (next.task === "fill-application-form") await runFill(next.payload); else if (next.task === "submit-application-form") await runSubmission(next.payload); return next; }
 async function progress() { while (fixture.pending.length) await step(); }
 beforeEach(() => {
-  vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.beforeUsageStart = undefined;
+  vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.afterSession = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.storageDemo = false; fixture.captureAttachment = false; fixture.attached = []; fixture.extractedText = "Confirmed experience from the uploaded résumé."; fixture.beforeUsageStart = undefined;
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
   saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
@@ -45,7 +55,7 @@ beforeEach(() => {
     return { id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
   });
   fixture.preflight.mockReset();
-  fixture.prepare.mockImplementation(async (app, job, _profile, onSession, onAction) => { await onSession({ sessionId: "session", provider: "browser-use" }); await onAction("Known fields filled"); const file = app.packet.files[0]; return { sessionId: "session", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: { version: 1, url: job.applyUrl, fields: [{ label: "Resume", value: file.filename, identifier: "resume", kind: "file", required: true, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }], attachments: [file.filename], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: job.applyUrl, method: "post" } } }; });
+  fixture.prepare.mockImplementation(async (app, job, profile, onSession, onAction) => { await onSession({ sessionId: "session", provider: "browser-use" }); const afterSession = fixture.afterSession; fixture.afterSession = undefined; await afterSession?.(); await onAction("Checking permission: Resume"); const file = app.packet.files[0]; if (fixture.captureAttachment) { const attachment = await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet, "resume"); fixture.attached.push(attachment); } return { sessionId: "session", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: { version: 1, url: job.applyUrl, fields: [{ label: "Resume", value: file.filename, identifier: "resume", kind: "file", required: true, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }], attachments: [file.filename], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: job.applyUrl, method: "post" } } }; });
   fixture.submit.mockImplementation(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => { const baseline = { version: 1 as const, kind: "captcha" as const, sessionId: app.browserSessionId!, targetUrl: app.form!.url, attemptedAt: new Date().toISOString(), beforeHash: "baseline", beforeHadConfirmation: false }; expect(await options.beforeAttempt(baseline)).toBe(true); expect(fixture.state!.applications[0].submissionAttemptedAt).toBe(baseline.attemptedAt); return { confirmed: true, evidence: "Application received", receipt: { version: 1, url: app.form!.url, text: "Application received", capturedAt: new Date().toISOString() } }; });
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -125,6 +135,105 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
   expect(app.blockers?.[0].message).toContain("Confirm whether revenue increased and provide the measured amount");
   expect(fixture.prepare).not.toHaveBeenCalled();
   expect(fixture.pending).toEqual([]);
+it("replaces a manual tailored artifact with the uploaded original after the saved preference changes", async () => {
+  const profile = fixture.state!.profile;
+  const bytes = Buffer.from("%PDF original after preference change\n");
+  fixture.storageDemo = true;
+  const upload = await uploadResume(resumeUploadRequest("pdf", bytes));
+  expect(upload.status).toBe(200);
+  const sourceKey = profile.resumeSource!.storageKey!;
+  try {
+    fixture.storageDemo = false;
+    expect((await action("select", { jobId: fixture.state!.jobs[0].id })).status).toBe(200);
+    const app = fixture.state!.applications[0];
+    expect((await action("draft", { applicationId: app.id })).status).toBe(200);
+    await progress();
+    expect(app.packet?.resumeMode).toBe("tailored");
+
+    expect((await action("automationSettings", { settings: { resumeTailoring: false } })).status).toBe(200);
+    fixture.parse.mockClear();
+    expect((await action("draft", { applicationId: app.id })).status).toBe(200);
+    await progress();
+
+    expect(app.packet?.resumeMode).toBe("original");
+    expect(app.packet?.resumeDocument).toBeUndefined();
+    expect(app.packet?.resumeArtifact).toBeUndefined();
+    expect(app.packet?.files?.[0]).toMatchObject({ filename: "meir-original.pdf", sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length });
+    expect(fixture.parse.mock.calls.some(([input]) => input.text?.format?.name === "structured_resume")).toBe(false);
+    expect((await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet!, "resume")).bytes.equals(bytes)).toBe(true);
+  } finally {
+    fixture.storageDemo = false;
+    await rm(`.data/resumes/${sourceKey}`, { force: true });
+  }
+});
+it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual preparation and preview/download when tailoring is off", async (extension) => {
+  const profile = fixture.state!.profile;
+  const bytes = Buffer.from(extension === "pdf" ? "%PDF uploaded original bytes\npage one\n" : "PK uploaded original DOCX bytes\n");
+  const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  fixture.extractedText = "Work Experience\nOrbit Labs\nMachine Learning Engineer\n2024-2025\n• Built a vector retrieval service with Python that improved ranking quality by 22%.";
+  fixture.storageDemo = true;
+  const upload = await uploadResume(resumeUploadRequest(extension, bytes));
+  expect(upload.status).toBe(200);
+  const sourceKey = profile.resumeSource!.storageKey!;
+  try {
+    expect(profile.facts.some((fact) => !fact.verified)).toBe(true);
+    expect((await action("profile", { facts: profile.facts.filter((fact) => !fact.verified) })).status).toBe(200);
+    expect(profile.facts.some((fact) => fact.verified)).toBe(false);
+    expect((await action("automationSettings", { settings: { resumeTailoring: false } })).status).toBe(200);
+    fixture.storageDemo = false;
+
+    expect((await action("select", { jobId: fixture.state!.jobs[0].id })).status).toBe(200);
+    const app = fixture.state!.applications[0];
+    expect((await action("draft", { applicationId: app.id })).status).toBe(200);
+    await progress();
+
+    expect(app.status).toBe("draft_review");
+    expect(app.packet?.resumeMode).toBe("original");
+    expect(fixture.parse.mock.calls.some(([input]) => input.text?.format?.name === "structured_resume")).toBe(false);
+    const file = app.packet!.files![0];
+    expect(file).toMatchObject({ filename: `meir-original.${extension}`, mimeType, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length });
+
+    const params = { params: Promise.resolve({ id: app.id, kind: "resume" }) };
+    const preview = await getApplicationFile(new Request("https://apply.example/api/applications/file"), params);
+    const download = await getApplicationFile(new Request("https://apply.example/api/applications/file?download=1"), params);
+    expect(Buffer.from(await preview.arrayBuffer()).equals(bytes)).toBe(true);
+    expect(Buffer.from(await download.arrayBuffer()).equals(bytes)).toBe(true);
+    expect(preview.headers.get("Content-Disposition")).toContain(extension === "pdf" ? "inline" : "attachment");
+    expect(download.headers.get("Content-Disposition")).toContain("attachment");
+
+    const packet = structuredClone(app.packet!);
+    const { validatePacket } = await import("@/lib/drafting");
+    const changedSettings = structuredClone(profile);
+    changedSettings.automationSettings!.resumeTailoring = true;
+    expect(() => validatePacket(changedSettings, packet)).toThrow(/profile changed/);
+    const changedSource = structuredClone(profile);
+    changedSource.resumeSource!.sha256 = "a".repeat(64);
+    expect(() => validatePacket(changedSource, packet)).toThrow(/profile changed/);
+    const foreign = structuredClone(packet);
+    foreign.originalResume!.storageKey = foreign.originalResume!.storageKey!.replace(profile.id, "another-owner");
+    await expect((await import("@/lib/packet-files")).reviewedPacketFile(profile, foreign, "resume")).rejects.toThrow(/invalid or belongs to another applicant/);
+
+    await writeFile(`.data/resumes/${sourceKey}`, Buffer.from("tampered original bytes"));
+    expect((await action("draft", { applicationId: app.id })).status).toBe(200);
+    await expect(progress()).rejects.toThrow(/bytes changed/);
+    expect(app.packet).toEqual(packet);
+    expect((await getApplicationFile(new Request("https://apply.example/api/applications/file"), params)).status).toBe(404);
+
+    await writeFile(`.data/resumes/${sourceKey}`, bytes);
+    const fillable = structuredClone(app.packet!);
+    fillable.answers = [];
+    setPacket(fixture.state!, app, fillable);
+    expect((await action("approveFill", { applicationId: app.id, packetHash: app.packetHash })).status).toBe(200);
+    fixture.captureAttachment = true;
+    fixture.afterSession = async () => { profile.automationSettings!.resumeTailoring = true; };
+    expect((await action("startBrowser", { applicationId: app.id })).status).toBe(200);
+    await expect(progress()).rejects.toThrow(/profile changed/);
+    expect(fixture.attached).toEqual([]);
+    expect(app.status).toBe("authorized_to_fill");
+  } finally {
+    fixture.storageDemo = false;
+    await rm(`.data/resumes/${sourceKey}`, { force: true });
+  }
 });
 it("keeps a confirmed receipt and visible release hold when provider stop is still active", async () => {
   fixture.submit.mockImplementationOnce(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => {
@@ -412,12 +521,14 @@ it.each(["pdf", "docx"])("uses the exact confirmed uploaded %s when tailoring is
   await mkdir(`.data/resumes/${profile.id}`, { recursive: true }); await writeFile(`.data/resumes/${key}`, bytes);
   profile.resumeFileName = `my-original.${extension}`; profile.resumeSource = { storageKey: key, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
   profile.automationSettings!.resumeTailoring = false; activateAutomation(profile, "original preference confirmed");
+  fixture.captureAttachment = true;
   try {
     expect((await action("startAutonomous", { jobId: fixture.state!.jobs[0].id })).status).toBe(200); await progress();
     const app = fixture.state!.applications[0]; expect(app.status).toBe("submitted"); expect(fixture.parse).not.toHaveBeenCalled();
     expect(app.submissionMaterials?.resumeMode).toBe("original"); expect(app.submissionMaterials?.files[0].filename).toBe(`my-original.${extension}`);
     expect(app.packet?.files?.[0]).toMatchObject({ filename: `my-original.${extension}`, mimeType: profile.resumeSource.mimeType, sha256: profile.resumeSource.sha256, size: bytes.length });
     expect((await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet!, "resume")).bytes.equals(bytes)).toBe(true);
+    expect(fixture.attached).toEqual([{ bytes, filename: `my-original.${extension}`, mimeType: profile.resumeSource.mimeType }]);
   } finally { await rm(`.data/resumes/${key}`, { force: true }); }
 });
 it("blocks a changed form after filling without a submit attempt", async () => {

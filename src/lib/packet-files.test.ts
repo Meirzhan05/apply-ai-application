@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { initialDemoState } from "@/lib/demo-data";
-import { coverLetterFromFacts, draftPacket, validatePacket } from "@/lib/drafting";
+import { coverLetterFromFacts, draftPacket, packetProfileHash, validatePacket } from "@/lib/drafting";
 import { reviewedPacketFile, withPacketFiles } from "@/lib/packet-files";
+import { saveDemoOriginalResume } from "@/lib/original-resume";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
 import { prepareBrowser } from "@/lib/browser-runner";
 import { hashJson } from "@/lib/crypto";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("reviewed application files", () => {
   it("reproduces the preview and upload bytes across different clocks", async () => {
@@ -64,5 +66,31 @@ describe("reviewed application files", () => {
     wrongFacts.files![0].factIds = ["invented-fact"];
     expect(() => validatePacket(state.profile, wrongFacts)).toThrow("verified facts");
     expect(hashJson(revised)).toBe(app.packetHash);
+  });
+
+  it("keeps the original DOCX unchanged while revising answers and adding a cover letter", async () => {
+    vi.stubEnv("DEMO_MODE", "true");
+    const state = initialDemoState();
+    const { profile } = state;
+    const bytes = Buffer.from("PK-original-DOCX-content");
+    const key = `${profile.id}/00000000-0000-4000-8000-000000000015.docx`;
+    await saveDemoOriginalResume(key, bytes);
+    try {
+      profile.resumeFileName = "meir-original.docx";
+      profile.resumeSource = { storageKey: key, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+      profile.automationSettings!.resumeTailoring = false;
+      const packet = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: { ...profile.resumeSource, filename: profile.resumeFileName }, version: 1, summary: "Original résumé fixture", resumeLines: [], answers: [], createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) });
+      validatePacket(profile, packet);
+      const letter = coverLetterFromFacts(profile, state.jobs[0]);
+      const revised = await withPacketFiles(profile, { ...packet, version: 2, answers: [{ question: "Will you require visa sponsorship?", answer: "No", factIds: [], author: "human", userProvided: true, requiresUserInput: false }], coverLetter: letter.text, coverLetterFactIds: letter.factIds, coverLetterContext: { title: state.jobs[0].title, company: state.jobs[0].company } });
+      validatePacket(profile, revised);
+
+      expect(revised.files![0]).toEqual(packet.files![0]);
+      expect(revised.files![0]).toMatchObject({ filename: "meir-original.docx", mimeType: profile.resumeSource.mimeType, storageKey: key, sha256: profile.resumeSource.sha256, size: bytes.length, factIds: [] });
+      expect((await reviewedPacketFile(profile, revised, "resume")).bytes.equals(bytes)).toBe(true);
+      expect((await reviewedPacketFile(profile, revised, "cover-letter")).bytes.subarray(0, 4).toString()).toBe("%PDF");
+    } finally {
+      await rm(`.data/resumes/${key}`, { force: true });
+    }
   });
 });
