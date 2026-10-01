@@ -31,7 +31,7 @@ Users upload a resume, confirm profile facts and search preferences, review matc
 - Shared job monitoring targets a four to six hour discovery window, with a daily email digest.
 - Begin with public Greenhouse, Lever, and Ashby postings and imported links. Broader feeds require authorized access.
 - No unauthorized LinkedIn or Indeed automation.
-- Three initiated applications per user per day, one active browser run per user, and a global monthly service-spend ceiling of $500.
+- Unlimited initiated applications per user per day for now, one active browser run per user, and a global monthly service-spend ceiling of $500.
 - Applications require distinct approval to fill a form and approval to submit its final state.
 - A controlled demo precedes a free invited beta for 50–100 users.
 - TypeSafe Jev is evaluated in parallel before taking over matching decisions.

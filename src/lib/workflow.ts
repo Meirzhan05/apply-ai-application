@@ -25,20 +25,6 @@ export function transition(
   application.updatedAt = new Date().toISOString();
 }
 
-export function dailyRunCount(
-  state: AppState,
-  userId: string,
-  now = new Date(),
-): number {
-  const dayKey = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: state.profile.timeZone || "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
-  const day = dayKey(now);
-  return state.applications.filter(
-    (application) =>
-      application.userId === userId &&
-      dayKey(new Date(application.createdAt)) === day,
-  ).length;
-}
-
 export function selectApplication(
   state: AppState,
   jobId: string,
@@ -58,8 +44,6 @@ export function selectApplication(
   ) {
     throw new Error("An application for this job already exists.");
   }
-  if (dailyRunCount(state, userId) >= 3)
-    throw new Error("You have reached today's limit of three applications.");
   const now = new Date().toISOString();
   const application: Application = {
     id: newId(),

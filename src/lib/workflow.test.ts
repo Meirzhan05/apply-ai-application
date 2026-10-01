@@ -122,16 +122,17 @@ describe("application approval gates", () => {
     expect(formDigest({ ...form, fields: [{ ...form.fields[0], options: ["new"] }] })).not.toBe(initial);
   });
 
-  it("stops duplicate and excess initiated applications", () => {
+  it("allows more than three applications per day while stopping duplicates", () => {
     const state = initialDemoState();
+    const job = state.jobs[0];
+    for (let index = 0; index < 10; index++) {
+      state.jobs.push({ ...job, id: `extra-job-${index}`, sourceId: `extra-${index}`, url: `${job.url}/extra-${index}`, applyUrl: `${job.applyUrl}/extra-${index}` });
+    }
     for (const job of state.jobs)
       selectApplication(state, job.id, state.profile.id);
+    expect(state.applications).toHaveLength(state.jobs.length);
     expect(() =>
       selectApplication(state, state.jobs[0].id, state.profile.id),
     ).toThrow(/already exists/);
-    state.jobs.push({ ...state.jobs[0], id: "extra-job", sourceId: "extra", url: `${state.jobs[0].url}/extra`, applyUrl: `${state.jobs[0].applyUrl}/extra` });
-    expect(() =>
-      selectApplication(state, "extra-job", state.profile.id),
-    ).toThrow(/limit of three/);
   });
 });
