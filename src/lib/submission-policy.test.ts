@@ -16,6 +16,26 @@ afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs(); });
 const run = (submitApplicationForm as unknown as { run: (payload: { userId: string; applicationId: string }) => Promise<Record<string, unknown>> }).run;
 
 describe("eligibility changes after form review", () => {
+  it("persists a post-click challenge as awaiting verification and skips duplicate workers", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    mocks.state = initialDemoState(); const state = mocks.state; const job = state.jobs[0];
+    const app = selectApplication(state, job.id, state.profile.id);
+    const packet = await draftPacket(state.profile, job); packet.answers = [];
+    setPacket(state, app, packet); approveFill(app, app.userId, app.packetHash!, job.applyUrl);
+    setFormSnapshot(app, { version: 1, url: job.applyUrl, fields: [], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: true });
+    approveSubmit(app, app.userId, app.form!.hash); transition(app, ["approved_to_submit"], "submitting");
+    app.submissionStartedAt = new Date().toISOString(); app.browserSessionId = "reviewed-session";
+    mocks.submit.mockImplementationOnce(async (copy) => {
+      copy.submissionAttemptedAt = new Date().toISOString();
+      return { confirmed: false, evidence: "Complete employer verification", receipt: { version: 1, url: job.applyUrl, text: "Verification", capturedAt: new Date().toISOString() }, verification: { version: 1, kind: "captcha", sessionId: copy.browserSessionId, attemptedAt: copy.submissionAttemptedAt, targetUrl: job.applyUrl, beforeHash: "before", beforeHadConfirmation: false } };
+    });
+    expect(await run({ userId: app.userId, applicationId: app.id })).toMatchObject({ awaitingVerification: true });
+    expect(app.status).toBe("awaiting_verification"); expect(app.submissionAttemptedAt).toBeTruthy();
+    expect(app.submissionVerification?.attemptedAt).toBe(app.submissionAttemptedAt);
+    expect(app.browserSessionId).toBe("reviewed-session"); expect(app.submissionReceipt?.text).toBe("Verification");
+    expect(await run({ userId: app.userId, applicationId: app.id })).toEqual({ skipped: true });
+    expect(mocks.submit).toHaveBeenCalledOnce(); expect(mocks.cancel).not.toHaveBeenCalled();
+  });
   it.each(["closed", "deadline", "required rule", "employment sponsorship"])("pauses %s before the submit click and releases the browser", async (scenario) => {
     vi.stubEnv("OPENAI_API_KEY", "");
     mocks.state = initialDemoState();

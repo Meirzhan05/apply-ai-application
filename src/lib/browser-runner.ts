@@ -217,14 +217,8 @@ async function waitForUploads(page: Page): Promise<void> {
   }), undefined, { timeout: 10000 }).catch(() => undefined);
 }
 
-async function formBlockers(page: Page, fields: InspectedField[]): Promise<string[]> {
-  const blockers: string[] = [];
-  if (!fields.length) blockers.push("No application fields are visible. Open the application form through takeover, then refresh the review.");
-  for (const field of fields) {
-    if (field.kind === "password") blockers.push("Login requires your takeover.");
-    if (!field.valid) blockers.push(`Correct or complete the field: ${field.label}`);
-  }
-  const captchaUnresolved = await page.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="challenge" i], [data-sitekey]').evaluateAll((elements) => elements
+async function visibleCaptchaChallenge(page: Page): Promise<boolean> {
+  return await page.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="challenge" i], [data-sitekey]').evaluateAll((elements) => elements
     .filter((element) => {
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
@@ -261,6 +255,16 @@ async function formBlockers(page: Page, fields: InspectedField[]): Promise<strin
       // persist the provider token. The employer verifies it on submission.
       return !responses.length || responses.some((response) => !response.value.trim());
     }));
+}
+
+async function formBlockers(page: Page, fields: InspectedField[]): Promise<string[]> {
+  const blockers: string[] = [];
+  if (!fields.length) blockers.push("No application fields are visible. Open the application form through takeover, then refresh the review.");
+  for (const field of fields) {
+    if (field.kind === "password") blockers.push("Login requires your takeover.");
+    if (!field.valid) blockers.push(`Correct or complete the field: ${field.label}`);
+  }
+  const captchaUnresolved = await visibleCaptchaChallenge(page);
   if (captchaUnresolved) blockers.push("CAPTCHA requires your takeover.");
   const custom = page.locator('[aria-required="true"]:not(input):not(textarea):not(select)');
   for (let i = 0; i < await custom.count(); i++) if (await custom.nth(i).isVisible()) { blockers.push("An unfamiliar required control needs review."); break; }
@@ -854,75 +858,132 @@ export async function repairEducationFields(application: Application, job: Job, 
   } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
 }
 
-export async function submitBrowser(
-  application: Application,
-): Promise<{ confirmed: boolean; evidence: string; receipt?: Application["submissionReceipt"] }> {
+export type BrowserSubmissionResult = {
+  confirmed: boolean;
+  evidence: string;
+  receipt?: Application["submissionReceipt"];
+  verification?: Application["submissionVerification"];
+};
+
+const confirmationPattern = /application (?:received|submitted)|thank you for applying|your application has been sent/i;
+
+// Native select options can add tens of thousands of invisible words to
+// innerText. Read the complete rendered response before bounding the receipt.
+async function submissionText(page: Page): Promise<string> {
+  return page.locator("body").evaluate((body) => {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const text: string[] = [];
+    while (walker.nextNode()) {
+      const element = walker.currentNode.parentElement;
+      if (!element || element.closest("select, option, textarea, input, script, style, [hidden], [aria-hidden='true']") || !element.getClientRects().length) continue;
+      let visible = true;
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.display === "none" || style.visibility !== "visible" || Number(style.opacity) === 0) { visible = false; break; }
+      }
+      if (visible) text.push(walker.currentNode.textContent || "");
+    }
+    return text.join(" ").replace(/\s+/g, " ").trim();
+  });
+}
+
+async function observeSubmission(page: Page, application: Application, baseline: NonNullable<Application["submissionVerification"]>, waitMs: number): Promise<BrowserSubmissionResult> {
+  const deadline = Date.now() + waitMs;
+  let body = "";
+  let challenge = false;
+  let confirmed = false;
+  do {
+    if (new URL(page.url()).origin !== new URL(baseline.targetUrl).origin || !canAutomate(page.url()))
+      throw new Error("The submission page left the approved employer site.");
+    body = await submissionText(page);
+    challenge = await visibleCaptchaChallenge(page);
+    confirmed = !challenge && !baseline.beforeHadConfirmation && hashJson(body) !== baseline.beforeHash && confirmationPattern.test(body);
+    if (confirmed || challenge || Date.now() >= deadline) break;
+    await page.waitForTimeout(500);
+  } while (true);
+  let screenshotPath: string | undefined;
+  try {
+    const screenshot = await page.screenshot({ fullPage: true });
+    if (isDemo()) await writeFile(path.join(process.cwd(), ".data", "screenshots", `${application.id}-confirmation.png`), screenshot);
+    else {
+      const { error } = await adminSupabase().storage.from("form-shots").upload(`${application.userId}/${application.id}-confirmation.png`, screenshot, { contentType: "image/png", upsert: true });
+      if (error) throw error;
+    }
+    screenshotPath = `/api/screenshots/${application.id}?phase=confirmation`;
+  } catch { /* Text proof remains useful when screenshot storage fails. */ }
+  // Save the actual confirmation even if it appears at the end of a long page.
+  const match = body.search(confirmationPattern);
+  const receiptText = confirmed && match >= 3000 ? body.slice(Math.max(0, match - 300), match + 2700) : body.slice(0, 3000);
+  const awaiting = !confirmed && (challenge || application.status === "awaiting_verification");
+  return {
+    confirmed,
+    evidence: confirmed ? `Confirmation visible at ${page.url()}` : awaiting
+      ? challenge ? "The employer opened a CAPTCHA after the approved Submit click. Complete it in the same browser, then check the result." : "Waiting for the employer's confirmation of the existing attempt. No additional Submit click was made."
+      : `Submission attempted; confirmation could not be verified at ${page.url()}`,
+    receipt: { version: 1, url: page.url(), text: receiptText, capturedAt: new Date().toISOString(), screenshotPath },
+    verification: awaiting ? baseline : undefined,
+  };
+}
+
+export async function submitBrowser(application: Application): Promise<BrowserSubmissionResult> {
   if (!application.form) throw new Error("There is no reviewed form.");
   if (!hasSubmissionApproval(application)) throw new Error("The exact form needs both approvals before submission.");
-  const runtime = await getPage(application);
-  const { browser, page } = runtime;
+  const { browser, page } = await getPage(application);
   let clicked = false;
+  let keepSession = false;
   try {
     if (!canAutomate(page.url())) throw new Error("This site requires a manual application handoff.");
     const latest = await snapshot(page, application);
-    if (formDigest(latest) !== application.form.hash)
-      throw new Error("FORM_CHANGED");
-    if (!latest.readyToSubmit) throw new Error("FORM_CHANGED");
+    if (formDigest(latest) !== application.form.hash || !latest.readyToSubmit) throw new Error("FORM_CHANGED");
     const button = (await finalSubmitButton(page)).first();
-    if ((await button.count()) === 0)
-      throw new Error("The final submit button needs user takeover.");
-    const before = await page.locator("body").innerText();
+    if ((await button.count()) === 0) throw new Error("The final submit button needs user takeover.");
+    const before = await submissionText(page);
     clicked = true;
     application.submissionAttemptedAt = new Date().toISOString();
-    // A navigation timeout may occur after the one click was dispatched.
-    // Observe the outcome of that attempt; never click again to resolve it.
-    await button.click({ timeout: 10000 }).catch(() => undefined);
-    await page
-      .waitForLoadState("domcontentloaded", { timeout: 12000 })
-      .catch(() => undefined);
-    await page.waitForFunction((previous) => {
-      const text = document.body.innerText;
-      return text !== previous && /application (?:received|submitted)|thank you for applying|your application has been sent/i.test(text);
-    }, before, { timeout: 20000 }).catch(() => undefined);
-    const body = (
-      await page
-        .locator("body")
-        .innerText()
-        .catch(() => "")
-    ).slice(0, 3000);
-    const confirmed = body !== before.slice(0, 3000) && !/application (?:received|submitted)|thank you for applying|your application has been sent/i.test(before) &&
-      /application (?:received|submitted)|thank you for applying|your application has been sent/i.test(
-        body,
-      );
-    let screenshotPath: string | undefined;
-    try {
-      const screenshot = await page.screenshot({ fullPage: true });
-      if (isDemo()) await writeFile(path.join(process.cwd(), ".data", "screenshots", `${application.id}-confirmation.png`), screenshot);
-      else {
-        const { error } = await adminSupabase().storage.from("form-shots").upload(`${application.userId}/${application.id}-confirmation.png`, screenshot, { contentType: "image/png", upsert: true });
-        if (error) throw error;
-      }
-      screenshotPath = `/api/screenshots/${application.id}?phase=confirmation`;
-    } catch { /* The text proof remains useful when screenshot storage fails. */ }
-    return {
-      confirmed,
-      evidence: confirmed
-        ? `Confirmation visible at ${page.url()}`
-        : `Submission attempted; confirmation could not be verified at ${page.url()}`,
-      receipt: { version: 1, url: page.url(), text: body, capturedAt: new Date().toISOString(), screenshotPath },
+    const baseline: NonNullable<Application["submissionVerification"]> = {
+      version: 1, kind: "captcha", sessionId: application.browserSessionId!, targetUrl: application.form.url,
+      attemptedAt: application.submissionAttemptedAt, beforeHash: hashJson(before), beforeHadConfirmation: confirmationPattern.test(before),
     };
+    // A timeout can follow a dispatched click. Observe; never click again.
+    await button.click({ timeout: 10000 }).catch(() => undefined);
+    await page.waitForLoadState("domcontentloaded", { timeout: 12000 }).catch(() => undefined);
+    const result = await observeSubmission(page, application, baseline, 20000);
+    keepSession = Boolean(result.verification);
+    return result;
   } catch (error) {
     if (clicked) throw new Error("SUBMISSION_UNCERTAIN");
     throw error;
   } finally {
-    if (clicked) {
-      await browser.close().catch(() => undefined);
-      if (application.browserSessionId?.startsWith("local-"))
-        localBrowsers.delete(application.browserSessionId);
-    } else if (application.browserConnectUrl) {
-      await browser.close().catch(() => undefined);
+    if ((clicked && !keepSession) || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if (clicked && !keepSession) {
+      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
+      await releaseRemoteBrowser(application).catch(() => undefined);
     }
-    if (clicked) await releaseRemoteBrowser(application).catch(() => undefined);
+  }
+}
+
+// This path has no form filling, uploads, navigation, or submit action. It
+// observes only the existing, owner-bound attempt after human verification.
+export async function checkBrowserSubmission(application: Application): Promise<BrowserSubmissionResult> {
+  const verification = application.submissionVerification;
+  if (application.status !== "awaiting_verification" || !verification || verification.version !== 1 ||
+    verification.sessionId !== application.browserSessionId || verification.attemptedAt !== application.submissionAttemptedAt ||
+    verification.targetUrl !== application.form?.url || application.submittedAt)
+    throw new Error("There is no active verification for this submission attempt.");
+  if (application.browserSessionExpiresAt && Date.parse(application.browserSessionExpiresAt) <= Date.now())
+    throw new Error("The verification browser expired. Check the employer receipt; do not repeat submission.");
+  const { browser, page } = await getPage(application);
+  let finished = false;
+  try {
+    const result = await observeSubmission(page, application, verification, 5000);
+    finished = result.confirmed;
+    return result;
+  } finally {
+    if (finished || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if (finished) {
+      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
+      await releaseRemoteBrowser(application).catch(() => undefined);
+    }
   }
 }
 

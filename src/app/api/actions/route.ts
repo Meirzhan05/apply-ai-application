@@ -13,6 +13,7 @@ import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmAiEssay } from "@/lib/answer-policy";
 import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
+import { checkSubmissionResult } from "@/lib/submission-verification";
 import { sameOrigin } from "@/lib/request-security";
 import { adminSupabase } from "@/lib/supabase-admin";
 import {
@@ -346,6 +347,10 @@ async function perform(
       );
     });
   }
+  if (action === "checkSubmissionResult" || action === "stopSubmissionVerification") {
+    await checkSubmissionResult(userId, text(payload.applicationId, 100), action === "stopSubmissionVerification");
+    return;
+  }
   if (action === "approveSubmit")
     return mutateState(userId, (state) => {
       const app = findApp(state, text(payload.applicationId, 100), userId);
@@ -392,15 +397,16 @@ async function perform(
         transition(
           target,
           ["submitting"],
-          result.confirmed ? "submitted" : "uncertain",
+          result.confirmed ? "submitted" : result.verification ? "awaiting_verification" : "uncertain",
         );
         target.confirmation = result.evidence;
         target.submissionReceipt = result.receipt;
+        target.submissionVerification = result.verification;
         target.submissionAttemptedAt = app.submissionAttemptedAt;
         if (result.confirmed) target.submittedAt = new Date().toISOString();
         activity(
           current,
-          result.confirmed ? "Submission confirmed" : "Submission uncertain",
+          result.confirmed ? "Submission confirmed" : result.verification ? "Complete employer verification" : "Submission uncertain",
           result.evidence,
         );
       });
@@ -439,7 +445,7 @@ async function perform(
     const state = await loadState(userId);
     const app = findApp(state, appId, userId);
     if (
-      ["submitting", "submitted", "uncertain", "cancelled"].includes(app.status)
+      ["submitting", "awaiting_verification", "submitted", "uncertain", "cancelled"].includes(app.status)
     )
       throw new Error("This application can no longer be cancelled.");
     await mutateState(userId, (current) => {

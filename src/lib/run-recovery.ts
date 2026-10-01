@@ -15,7 +15,12 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
       app.error = "The agent paused while handling your answers. Your browser is saved; refresh the form before continuing.";
       continue;
     }
-    if (app.status === "submitting" && idle > 10 * 60 * 1000) {
+    if (expired && app.status === "awaiting_verification") {
+      closed.push(structuredClone(app));
+      transition(app, ["awaiting_verification"], "uncertain");
+      app.submissionVerification = app.submissionVerificationCheck = undefined;
+      app.confirmation = "The verification browser expired before confirmation. Check the employer receipt; no automatic retry will occur.";
+    } else if (app.status === "submitting" && idle > 10 * 60 * 1000) {
       closed.push(structuredClone(app));
       transition(app, ["submitting"], "uncertain");
       app.error = "The submit worker stopped before confirmation. Check the employer site; no automatic retry will occur.";

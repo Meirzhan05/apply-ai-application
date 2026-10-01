@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { Page } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { draftPacket } from "../src/lib/drafting";
-import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, cancelBrowser, fillApprovedBrowserAnswers } from "../src/lib/browser-runner";
+import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, checkBrowserSubmission, cancelBrowser, fillApprovedBrowserAnswers } from "../src/lib/browser-runner";
 import { browserQuestions, browserTakeoverReasons } from "../src/lib/browser-questions";
 import { approveBrowserAnswers } from "../src/lib/browser-question-approval";
 import { approveFill, approveSubmit, selectApplication, setFormSnapshot, setPacket } from "../src/lib/workflow";
@@ -44,6 +44,8 @@ const server = createServer((request, response) => {
     request.on("end", () => {
       response.setHeader("Content-Type", "text/html");
       if (scenario === "slow-confirmation") setTimeout(() => response.end("<h1>Application received</h1>"), 12000);
+      else if (scenario === "post-submit-captcha") response.end('<h1>Verify your application</h1><iframe src="/hcaptcha-enclave.html#frame=challenge" title="hCaptcha security challenge" style="width:320px;height:300px"></iframe><button type="button" onclick="document.body.innerHTML=\'<h1>Application received</h1>\'">Complete synthetic verification</button>');
+      else if (scenario === "long-confirmation") response.end(`<select>${Array.from({length:4000}, (_, i) => `<option>University ${i}</option>`).join("")}</select><p>${"Long response context ".repeat(200)}</p><h1>Application received</h1>`);
       else response.end(scenario === "uncertain" ? "<h1>Processing request</h1>" : "<h1>Application received</h1>");
     });
     return;
@@ -164,6 +166,37 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("post-submit-captcha keeps the approved attempt open for human verification", async () => {
+    const { state, app, result } = await fill("post-submit-captcha");
+    setFormSnapshot(app, result.form);
+    approveSubmit(app, state.profile.id, app.form!.hash);
+    const outcome = await submitBrowser(app);
+    assert.equal(outcome.confirmed, false);
+    assert.ok("verification" in outcome && outcome.verification, "A post-click challenge must be recoverable instead of closing as uncertain");
+    app.status = "awaiting_verification";
+    app.submissionVerification = outcome.verification;
+    assert.equal(pageFor(app).isClosed(), false);
+    assert.equal(submissions.get("post-submit-captcha"), 1);
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+    assert.equal((await checkBrowserSubmission(app)).confirmed, false);
+    assert.equal(submissions.get("post-submit-captcha"), 1);
+    await pageFor(app).getByRole("button", { name: "Complete synthetic verification" }).click();
+    const checked = await checkBrowserSubmission(app);
+    assert.equal(checked.confirmed, true);
+    assert.match(checked.receipt!.text, /Application received/);
+    assert.equal(checked.verification, undefined);
+    assert.equal(submissions.get("post-submit-captcha"), 1, "Checking must never resubmit");
+    await cancelBrowser(app);
+  });
+  await test("long-confirmation is found beyond native dropdown options and receipt limits", async () => {
+    const { state, app, result } = await fill("long-confirmation");
+    setFormSnapshot(app, result.form);
+    approveSubmit(app, state.profile.id, app.form!.hash);
+    const outcome = await submitBrowser(app);
+    assert.equal(outcome.confirmed, true);
+    assert.match(outcome.receipt!.text, /Application received/);
+    assert.equal(submissions.get("long-confirmation"), 1);
+  });
   await test("captcha-enclave: Lever's zero-height hCaptcha container is not a takeover challenge", async () => {
     const { app, result } = await fill("captcha-enclave");
     assert.equal(await pageFor(app).locator('.h-captcha').evaluate(element => element.getBoundingClientRect().height), 0);

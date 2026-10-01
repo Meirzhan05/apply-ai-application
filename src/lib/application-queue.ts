@@ -11,7 +11,7 @@ import type { AppState } from "@/lib/types";
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
     (["filling", "submitting"].includes(app.status) ||
-      (["final_review", "needs_user_action", "approved_to_submit"].includes(app.status) && Boolean(app.browserSessionId))));
+      (["final_review", "needs_user_action", "approved_to_submit", "awaiting_verification"].includes(app.status) && Boolean(app.browserSessionId))));
 }
 
 export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays") {

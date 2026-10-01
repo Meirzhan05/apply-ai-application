@@ -11,6 +11,8 @@ import { withPacketFiles } from "../src/lib/packet-files";
 import { issueControlledTestGrant } from "../src/lib/controlled-tests";
 import { queueApplicationRun } from "../src/lib/application-queue";
 import { cancelBrowser } from "../src/lib/browser-runner";
+import { checkSubmissionResult } from "../src/lib/submission-verification";
+import { chromium } from "playwright-core";
 
 async function main() {
   process.env.DEMO_MODE = "false";
@@ -37,7 +39,7 @@ async function main() {
       token = issued.token;
       job.url = job.applyUrl = `${origin}/api/internal/controlled-form?token=${token}`;
       app.jobSnapshot = { ...job };
-      app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0 };
+      app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, verification: process.env.TEST_CLOUD_VERIFICATION === "true" };
       const fact = profile.facts.find((item) => item.verified)!;
       setPacket(state, app, await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Synthetic cloud submission test", resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [], createdAt: new Date().toISOString(), model: "controlled-fixture", profileHash: packetProfileHash(profile) }));
       approveFill(app, userId, app.packetHash!, job.applyUrl);
@@ -82,6 +84,33 @@ async function main() {
     }
     assert.equal(result.status, "COMPLETED", "Cloud submit worker must complete");
     app = (await loadState(userId)).applications.find((item) => item.id === applicationId)!;
+    if (process.env.TEST_CLOUD_VERIFICATION === "true") {
+      assert.equal(app.status, "awaiting_verification");
+      assert.ok(app.submissionVerification);
+      assert.ok(app.submissionAttemptedAt);
+      assert.equal(app.controlledTest?.submissions, 1);
+      assert.equal(await remoteBrowserStatus(app), "active");
+      await checkSubmissionResult(userId, applicationId);
+      assert.equal((await loadState(userId)).applications.find(item => item.id === applicationId)!.status, "awaiting_verification");
+      const duplicate = await tasks.trigger("submit-application-form", payload);
+      assert.deepEqual((await runs.poll(duplicate.id, { pollIntervalMs: 1000 })).output, { skipped: true });
+      // This button simulates a human completing our controlled challenge.
+      // It is never used against an employer or a CAPTCHA provider.
+      const browser = await chromium.connectOverCDP(app.browserConnectUrl!);
+      try { await browser.contexts()[0].pages()[0].getByRole("button", { name: "Complete synthetic verification", exact: true }).click(); }
+      finally { await browser.close(); }
+      await checkSubmissionResult(userId, applicationId);
+      app = (await loadState(userId)).applications.find(item => item.id === applicationId)!;
+      assert.equal(app.status, "submitted");
+      assert.equal(app.controlledTest?.submissions, 1);
+      assert.equal(app.controlledTest?.verified, true);
+      assert.match(app.submissionReceipt?.text || "", /Application received/);
+      assert.ok(app.submissionReceipt?.screenshotPath);
+      assert.equal(app.submissionVerification, undefined);
+      assert.equal(await remoteBrowserStatus({ ...app, browserSessionId: reviewedSessionId }), "stopped");
+      console.log("PASS production worker post-submit verification: same cloud browser retained, duplicate submit skipped, observation does not resubmit, simulated human completion, confirmation saved, session released; no employer contacted");
+      return;
+    }
     if (process.env.TEST_CLOUD_CLOSED === "true") {
       assert.equal(app.status, "needs_user_action");
       assert.equal(app.controlledTest?.submissions, 0);

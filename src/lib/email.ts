@@ -74,7 +74,7 @@ export async function sendDigest(
     .sort((a, b) => compareRankedJobs(a, b, assessments, state.feedback, allJobs))
     .slice(0, 8);
   const pending = state.applications.filter((app) =>
-    ["draft_review", "needs_user_action", "final_review", "uncertain"].includes(
+    ["draft_review", "needs_user_action", "final_review", "awaiting_verification", "uncertain"].includes(
       app.status,
     ),
   );

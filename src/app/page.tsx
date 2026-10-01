@@ -151,7 +151,7 @@ export default function Dashboard() {
     (fact) => !fact.verified,
   ).length;
   const needsAction = applications.filter((app) =>
-    ["draft_review", "final_review", "needs_user_action", "uncertain"].includes(
+    ["draft_review", "final_review", "needs_user_action", "awaiting_verification", "uncertain"].includes(
       app.status,
     ),
   );
@@ -875,6 +875,24 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
+                    {activeApp.status === "awaiting_verification" && (
+                      <div className="warning-note verification-note" role="status">
+                        <CircleHelp size={20} />
+                        <div>
+                          <strong>Finish employer verification</strong>
+                          <p>The employer opened a CAPTCHA after your approved Submit click. Complete it in the browser below, then check the result. Do not click Submit again.</p>
+                          <div className="action-row">
+                            <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("checkSubmissionResult", { applicationId: activeApp.id })}>
+                              {busy === "checkSubmissionResult" ? "Checking confirmation…" : "I’m done · check result"}
+                            </button>
+                            {activeApp.browserLiveUrl && <a className="text-button" href={activeApp.browserLiveUrl} target="_blank" rel="noreferrer">Open verification browser ↗</a>}
+                            <button className="text-button" disabled={Boolean(busy)} onClick={() => act("stopSubmissionVerification", { applicationId: activeApp.id })}>Stop verification</button>
+                          </div>
+                          <p className="muted">Checking reads the existing attempt; it never submits again.{activeApp.browserSessionExpiresAt && ` Browser available until ${new Date(activeApp.browserSessionExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}</p>
+                          {activeApp.confirmation && !activeApp.confirmation.includes("opened a CAPTCHA") && <p>{activeApp.confirmation}</p>}
+                        </div>
+                      </div>
+                    )}
                     <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />
                     {activeApp.status === "filling" && (
                       <div className="step-card">
@@ -1093,6 +1111,7 @@ export default function Dashboard() {
                     {![
                       "submitted",
                       "submitting",
+                      "awaiting_verification",
                       "uncertain",
                       "cancelled",
                     ].includes(activeApp.status) && (
@@ -1522,6 +1541,7 @@ function statusLabel(status: Application["status"]) {
     final_review: "Review final form",
     approved_to_submit: "Ready to submit",
     submitting: "Submitting",
+    awaiting_verification: "Finish verification",
     submitted: "Submitted",
     uncertain: "Result uncertain",
     cancelled: "Cancelled",
@@ -1538,6 +1558,7 @@ function progressIndex(status: Application["status"]) {
     final_review: 3,
     approved_to_submit: 3,
     submitting: 3,
+    awaiting_verification: 3,
     submitted: 4,
     uncertain: 3,
     cancelled: 0,

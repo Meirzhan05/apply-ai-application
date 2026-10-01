@@ -11,14 +11,16 @@ export function LiveBrowser({ application }: { application: Application }) {
   useEffect(() => {
     if (history.current) history.current.scrollTop = history.current.scrollHeight;
   }, [latestAction]);
-  const active = ["filling", "needs_user_action", "final_review", "approved_to_submit", "submitting"].includes(application.status);
+  const verifying = application.status === "awaiting_verification";
+  const active = ["filling", "needs_user_action", "final_review", "approved_to_submit", "submitting", "awaiting_verification"].includes(application.status);
   if (!active || !application.browserLiveUrl) return null;
-  const mayControl = ["needs_user_action", "final_review"].includes(application.status);
+  const mayControl = ["needs_user_action", "final_review", "awaiting_verification"].includes(application.status);
   const interactive = mayControl && control;
   const labels: Record<string, string> = {
     filling: "Agent is filling the form", needs_user_action: "Waiting for your input",
     final_review: "Ready for your review", approved_to_submit: "Waiting for submission",
     submitting: "Submitting and checking confirmation",
+    awaiting_verification: "Complete employer verification",
   };
   return (
     <section className="live-browser" aria-label="Agent browser">
@@ -27,7 +29,7 @@ export function LiveBrowser({ application }: { application: Application }) {
         <span role="status">{labels[application.status]}</span>
       </header>
       <div className="live-browser-toolbar">
-        <p>{interactive ? "You have control. When finished, refresh the form for review." : "Watch the agent’s actions here. Submission requires your final approval."}</p>
+        <p>{verifying ? "Complete the CAPTCHA, then check the result above. Do not click Submit again." : interactive ? "You have control. When finished, refresh the form for review." : "Watch the agent’s actions here. Submission requires your final approval."}</p>
         <div className="action-row">
           {mayControl && <button type="button" className="outline-action" aria-pressed={interactive} onClick={() => setControl(!control)}>
             <MousePointer2 size={16} />{interactive ? "Return to watch mode" : "Take control"}

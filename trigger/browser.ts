@@ -52,10 +52,11 @@ export const submitApplicationForm = task({
         transition(
           target,
           ["submitting"],
-          result.confirmed ? "submitted" : "uncertain",
+          result.confirmed ? "submitted" : result.verification ? "awaiting_verification" : "uncertain",
         );
         target.confirmation = result.evidence;
         target.submissionReceipt = result.receipt;
+        target.submissionVerification = result.verification;
         target.submissionAttemptedAt = app.submissionAttemptedAt;
         if (result.confirmed) target.submittedAt = new Date().toISOString();
         current.activity.unshift({
@@ -63,11 +64,13 @@ export const submitApplicationForm = task({
           at: new Date().toISOString(),
           label: result.confirmed
             ? "Submission confirmed"
-            : "Submission uncertain",
+            : result.verification ? "Complete employer verification" : "Submission uncertain",
           detail: result.evidence,
         });
       });
-      return { confirmed: result.confirmed };
+      if (result.verification && process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+        await sendActionNeeded(await loadState(userId), "Complete employer verification in your saved browser").catch(() => undefined);
+      return { confirmed: result.confirmed, awaitingVerification: Boolean(result.verification) };
     } catch (error) {
       if (error instanceof ApplicationEligibilityError && !app.submissionAttemptedAt) {
         await cancelBrowser(app).catch(() => undefined);

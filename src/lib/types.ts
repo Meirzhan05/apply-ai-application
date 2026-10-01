@@ -9,6 +9,7 @@ export type ApplicationStatus =
   | "final_review"
   | "approved_to_submit"
   | "submitting"
+  | "awaiting_verification"
   | "submitted"
   | "needs_user_action"
   | "uncertain"
@@ -263,6 +264,16 @@ export interface Application {
   submissionStartedAt?: string;
   submissionWorkerClaimedAt?: string;
   submissionAttemptedAt?: string;
+  submissionVerification?: {
+    version: 1;
+    kind: "captcha";
+    sessionId: string;
+    targetUrl: string;
+    attemptedAt: string;
+    beforeHash: string;
+    beforeHadConfirmation: boolean;
+  };
+  submissionVerificationCheck?: { token: string; startedAt: string };
   manualSubmissionReport?: {
     reportedAt: string;
     source: "owner";
@@ -283,7 +294,7 @@ export interface Application {
   runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
-  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean };
+  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; verification?: boolean; verified?: boolean };
 }
 
 export interface ActivityEvent {

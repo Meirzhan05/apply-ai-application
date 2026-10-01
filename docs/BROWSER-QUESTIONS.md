@@ -36,6 +36,14 @@ Errors appear inside the dialog and leave the current answers available for corr
 
 The dialog scrolls within the viewport, including long mobile batches. At widths up to 600px its footer buttons occupy the full width. Native dialog focus behavior, visible focus outlines, labelled controls, status messages, and alert errors support keyboard use.
 
+## Employer verification after Submit
+
+An employer can open a visible CAPTCHA after the single approved Submit click. The runner retains that browser session and moves the application to `awaiting_verification`. The verification record binds the existing attempt time, session, and approved employer URL; only the application owner can check it. “Finish employer verification” directs the applicant to use “Take control” to complete the CAPTCHA manually, then select “I’m done · check result”. The agent does not solve the challenge or create provider response tokens.
+
+`checkSubmissionResult` observes the existing page without filling controls, clicking Submit, or navigating. It reads the complete rendered employer response before saving a bounded receipt, excluding hidden text and select-option noise so long option lists cannot hide the confirmation. Confirmation requires changed response text with a recognized confirmation message and no visible challenge. A pending result keeps the session available; a transient read failure allows another result check without resubmitting.
+
+“Stop verification”, session expiry, or a confirmed stopped browser ends verification as `uncertain`, preserving the submission attempt and any receipt. No automatic retry occurs. A browser already stopped by an earlier release cannot be restored by this flow. Completing a CAPTCHA alone does not prove acceptance; check the employer’s confirmation or receipt before taking further action.
+
 ## Verification and limits
 
 Release verification used:
@@ -49,11 +57,17 @@ node --import tsx scripts/test-browser-questions-ui.ts
 TEST_BROWSER_CASE='label extraction' npm run test:browser
 node --import tsx scripts/test-form-labels-ui.ts
 node --env-file=.data/production.env --import tsx scripts/test-cloud-questions.ts
+node --env-file=.env --import tsx scripts/test-submission-verification-ui.ts
+TEST_CLOUD_VERIFICATION=true node --env-file=.data/production.env --import tsx scripts/test-cloud-submit.ts
 ```
 
 The label repair passed 319 unit tests across 41 files, type checking, lint, and the full 39-case browser suite. Its Lever-structure regression verifies five exact employer headings and their separate options; it failed before the repair and passed afterward. Read-only inspection of a real public Palantir Lever page also verified those five headings without filling or submitting it.
 
 The CAPTCHA repair added the real Lever zero-height hCaptcha/enclave pattern and an invisible badge with a transparent challenge to browser coverage. Both reproduced false takeover warnings before the fix. The expanded suite passed 41 browser cases, and the strengthened background case verifies that revealing a challenge inside the invisible widget invalidates final approval without clicking Submit. The 319-unit suite, type checking, and lint passed. The fix deployed in worker `20261001.6`; read-only refresh of the existing owner browser removed the false CAPTCHA blocker and reached final review with zero remaining blockers and no submit click.
+
+The post-submit verification repair passed 331 unit tests, type checking, lint, and 43 browser cases. Its regression failed when the old runner closed a post-click challenge; it now verifies retention, repeated observation without another click, and confirmation after simulated human completion. A second regression verifies confirmation beyond 4,000 native select options and the receipt length limit. Desktop and mobile checks against the production alias verified guidance, live control, an unobscured result action, hidden submit/restart/cancel controls, and the transition to confirmation using mocked state/actions.
+
+Worker `20261001.7` passed a controlled production cloud test: the deployed worker filled the protected synthetic form, honored both approvals, retained the same browser after a simulated challenge, skipped a duplicate submit task, saved confirmation after simulated human verification, and released the session. The receiver counted one application attempt. Result checks invoked the same service function locally against the production database and browser; this did not exercise the authenticated Vercel result-check endpoint. No employer was contacted.
 
 The label UI script passed on desktop and mobile using the snapshot produced by actual browser inspection. Run the filtered label extraction browser case first: it writes `.data/label-debug/inspected-form.json`, which the UI script requires. The UI check covers blocked malformed snapshots, refresh, readable headings, exact options, and overflow. Set `TEST_DASHBOARD_URL` to select the dashboard for either UI script; their state and action routes use controlled fixtures. Earlier desktop and mobile question-dialog checks passed against the production alias and covered read-only AI confirmation, close/reopen, errors, long-batch scrolling, consent, takeover fallback, final review, and separate submission approval.
 
@@ -61,4 +75,4 @@ Production: [apply-ai-chi.vercel.app](https://apply-ai-chi.vercel.app). The earl
 
 Controlled tests do not establish compatibility with every employer form, nor do they perform a real employer submission. Production environment files and test credentials must remain private.
 
-Implementation: `src/app/browser-questions-dialog.tsx`, `src/app/globals.css`, `src/lib/browser-questions.ts`, `src/lib/browser-question-approval.ts`, `src/lib/browser-question-runs.ts`, `src/lib/browser-runner.ts`, and `src/lib/answer-policy.ts`.
+Implementation: `src/app/browser-questions-dialog.tsx`, `src/app/page.tsx`, `src/app/globals.css`, `src/lib/browser-questions.ts`, `src/lib/browser-question-approval.ts`, `src/lib/browser-question-runs.ts`, `src/lib/browser-runner.ts`, `src/lib/submission-verification.ts`, `src/lib/run-recovery.ts`, and `src/lib/answer-policy.ts`.

@@ -4,6 +4,19 @@ import { selectApplication } from "@/lib/workflow";
 import { recoverStaleRuns } from "@/lib/run-recovery";
 
 describe("stalled run recovery", () => {
+  it("expires post-submit verification without authorizing another attempt", () => {
+    const state = initialDemoState(); const now = Date.now();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "awaiting_verification"; app.browserSessionId = "saved-attempt";
+    app.browserSessionExpiresAt = new Date(now - 1).toISOString(); app.submissionAttemptedAt = new Date(now - 60_000).toISOString();
+    app.submissionReceipt = { version: 1, url: "https://example.org", text: "CAPTCHA", capturedAt: new Date(now).toISOString() };
+    expect(recoverStaleRuns(state, now)).toHaveLength(1);
+    expect(app.status).toBe("uncertain");
+    expect(app.submissionAttemptedAt).toBeTruthy();
+    expect(app.submissionReceipt?.text).toBe("CAPTCHA");
+    expect(app.browserSessionId).toBeUndefined();
+    expect(app.confirmation).toMatch(/no automatic retry/);
+  });
   it("keeps the same browser after a stopped question continuation and clears its lock", () => {
     const state = initialDemoState(); const now = Date.now();
     const app = selectApplication(state, state.jobs[0].id, state.profile.id);

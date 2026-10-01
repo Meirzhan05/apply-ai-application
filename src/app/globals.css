@@ -1191,6 +1191,12 @@ a {
   }
 }
 @media (max-width: 650px) {
+  .verification-note,
+  .verification-note button,
+  .verification-note a {
+    scroll-margin-block-start: 80px;
+    scroll-margin-block-end: 24px;
+  }
   .shell {
     display: block;
   }
