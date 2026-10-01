@@ -3,12 +3,13 @@ import type { BuildContext, BuildExtension } from "@trigger.dev/core/v3/build";
 import config from "../../trigger.config";
 
 const syncExtension = config.build!.extensions!.find((extension) => extension.name === "SyncEnvVarsExtension")!;
+const originGuardExtension = config.build!.extensions!.find((extension) => extension.name === "production-origin-guard")!;
 
-async function invokeSync(environment: string) {
+async function invokeExtension(extension: BuildExtension, environment: string, target: "deploy" | "dev" = "deploy") {
   const addLayer = vi.fn();
   const warnings: unknown[][] = [];
   const context = {
-    target: "deploy",
+    target,
     config,
     addLayer,
     logger: {
@@ -17,13 +18,33 @@ async function invokeSync(environment: string) {
     },
   } as unknown as BuildContext;
   const manifest = { environment, deploy: { env: {} } } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
-  await syncExtension.onBuildComplete!(context, manifest);
+  await extension.onBuildComplete!(context, manifest);
   return { addLayer, warnings };
 }
+
+const invokeSync = (environment: string, target?: "deploy" | "dev") => invokeExtension(syncExtension, environment, target);
+const invokeOriginGuard = (environment: string, target?: "deploy" | "dev") => invokeExtension(originGuardExtension, environment, target);
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe("production environment sync guard", () => {
+  it("rejects the Trigger production manifest value before syncEnvVars can swallow the error", async () => {
+    vi.stubEnv("APP_ORIGIN", "http://localhost:3000");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+
+    await expect(invokeOriginGuard("prod")).rejects.toThrow("set APP_ORIGIN and NEXT_PUBLIC_APP_URL to matching HTTPS production origins");
+  });
+
+  it("accepts the production manifest value and leaves development unguarded", async () => {
+    vi.stubEnv("APP_ORIGIN", "https://apply-ai-chi.vercel.app");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://apply-ai-chi.vercel.app/");
+    await expect(invokeOriginGuard("prod")).resolves.toBeDefined();
+
+    vi.stubEnv("APP_ORIGIN", "http://localhost:3000");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+    await expect(invokeOriginGuard("dev")).resolves.toBeDefined();
+  });
+
   it("syncs canonical production origins and keeps development loopback allowed", async () => {
     vi.stubEnv("APP_ORIGIN", "https://apply-ai-chi.vercel.app");
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://apply-ai-chi.vercel.app/");
