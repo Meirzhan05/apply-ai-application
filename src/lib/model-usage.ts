@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
+import { writeUsageLedger } from "@/lib/usage-ledger";
 
 export interface ModelUsageContext {
   userId: string;
@@ -103,16 +104,7 @@ export async function recordModelUsage(record: ModelUsageRecord): Promise<void> 
   record = normalizeModelUsageRecord(record);
   const file = localPath();
   if (file) {
-    const write = writes.then(async () => {
-      const records = await readLocal(file);
-      const previous = records.find((item) => item.id === record.id);
-      if (previous && previous.userId !== record.userId) throw new Error("Usage record belongs to another owner.");
-      const next = [...records.filter((item) => item.id !== record.id), previous ? mergeModelUsageRecord(previous, record) : record];
-      await mkdir(path.dirname(file), { recursive: true });
-      const temporary = `${file}.${randomUUID()}.tmp`;
-      await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
-      await rename(temporary, file);
-    });
+    const write = writes.then(() => writeUsageLedger({ file, record, merge: (previous, incoming) => previous ? mergeModelUsageRecord(previous, incoming) : incoming }));
     writes = write.catch(() => undefined);
     await write;
     return;

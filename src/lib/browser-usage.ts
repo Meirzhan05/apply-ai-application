@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import type { BrowserProvider } from "@/lib/types";
+import { writeUsageLedger } from "@/lib/usage-ledger";
 
 export type BrowserUsageEvent =
   | "created" | "connected" | "disconnected" | "status" | "stopped"
@@ -110,17 +110,9 @@ export async function recordBrowserUsage(record: BrowserUsageRecord): Promise<vo
     ? { ...record, report: { ...record.report, rate: BROWSER_USE_RATE } } : record;
   const file = localPath();
   if (file) {
-    const write = writes.then(async () => {
-      const records = await readLocal(file);
-      const previous = records.find((item) => item.id === normalized.id);
-      if (previous && previous.userId !== normalized.userId) throw new Error("Browser usage belongs to another owner.");
-      if (previous && (["provider", "sessionId", "event", "runId"] as const).some((key) => previous[key] !== normalized[key])) throw new Error("Browser usage identity cannot change.");
-      const next = [...records.filter((item) => item.id !== normalized.id), mergeBrowserUsageRecord(previous, normalized)];
-      await mkdir(path.dirname(file), { recursive: true });
-      const temporary = `${file}.${randomUUID()}.tmp`;
-      await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
-      await rename(temporary, file);
-    });
+    const write = writes.then(() => writeUsageLedger({ file, record: normalized, merge: mergeBrowserUsageRecord, validatePrevious: (previous, incoming) => {
+      if ((["provider", "sessionId", "event", "runId"] as const).some((key) => previous[key] !== incoming[key])) throw new Error("Browser usage identity cannot change.");
+    } }));
     writes = write.catch(() => undefined);
     await write;
     return;

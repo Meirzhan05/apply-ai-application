@@ -1,6 +1,7 @@
 import { canonicalJobUrl } from "@/lib/sources";
 import { hashJson, newId } from "@/lib/crypto";
 import { onboardingCompleteness } from "@/lib/onboarding";
+import { controlledFixtureAllowsJob, controlledFixtureScope, controlledReceiverUrl } from "@/lib/controlled-tests";
 import type {
   AppState,
   Application,
@@ -17,12 +18,11 @@ import type {
   PilotState,
   Profile,
 } from "@/lib/types";
+import { PILOT_CONSENT_TEXT, PILOT_CONSENT_VERSION } from "@/lib/pilot-constants";
 
-export const PILOT_CONSENT_VERSION = "pilot-consent-v1";
-export const PILOT_GATE_VERSION = "pilot-gate-v1";
+export { PILOT_CONSENT_TEXT, PILOT_CONSENT_VERSION, PILOT_GATE_VERSION } from "@/lib/pilot-constants";
+
 export const PILOT_CLASSIFIER_VERSION = "posting-cohort-v1";
-export const PILOT_CONSENT_TEXT =
-  "I agree to participate in the autonomy pilot. My applications may be measured for interruptions, outcomes, suitability, factual accuracy, and costs. Participation does not enable automation or public access, and I can withdraw from future pilot initiations.";
 
 export interface PilotMutationContext {
   actor?: PilotActor;
@@ -132,6 +132,23 @@ function evidenceText(job: Job): string {
   return [job.title, job.employmentType, job.description].map((value) => value.trim()).filter(Boolean).join(" | ").slice(0, 900);
 }
 
+function credentialFreePostingUrl(raw: string): string {
+  try {
+    const url = new URL(canonicalJobUrl(raw));
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    const safe = new URLSearchParams();
+    for (const [key, value] of url.searchParams) {
+      if (/^(?:gh_jid|job[_-]?id)$/i.test(key)) safe.set(key, value);
+    }
+    url.search = safe.toString();
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 export function classifyPilotCohort(job: Job): { cohort: PilotCohort; evidence?: string } {
   const title = job.title.toLowerCase();
   const type = job.employmentType.toLowerCase();
@@ -144,8 +161,13 @@ export function classifyPilotCohort(job: Job): { cohort: PilotCohort; evidence?:
     : { cohort: "new-grad", evidence: evidenceText(job).slice(0, 300) };
 }
 
-export function classifyPilotOrigin(job: Job, application?: Pick<Application, "controlledTest">): PilotOrigin {
-  if (job.source === "demo" || application?.controlledTest) return "controlled";
+export function classifyPilotOrigin(state: AppState, job: Job, application?: Application): PilotOrigin {
+  const fixtureScope = controlledFixtureScope(state, application?.userId ?? state.profile.id);
+  if (fixtureScope.controlled) {
+    return application?.controlledTest && controlledFixtureAllowsJob(state, application.userId, job) ? "controlled" : "unknown";
+  }
+  if (job.source === "demo") return "controlled";
+  if (controlledReceiverUrl(job.url) || controlledReceiverUrl(job.applyUrl)) return "unknown";
   if (isRecognizedRealSource(job)) return "real";
   return "unknown";
 }
@@ -156,7 +178,7 @@ function postingSnapshot(job: Job): PilotPostingSnapshot {
     jobId: job.id,
     source: job.source,
     sourceId: bounded(job.sourceId, 200),
-    canonicalUrl: bounded(url, 2048),
+    canonicalUrl: bounded(credentialFreePostingUrl(job.url), 2048),
     targetIdentityHash: hashJson({ url, applyUrl: canonicalJobUrl(job.applyUrl), source: job.source, sourceId: job.sourceId }),
     title: bounded(job.title, 240),
     company: bounded(job.company, 240),
@@ -195,7 +217,7 @@ function initiatedAttempt(state: AppState, application: Application): PilotAttem
   const job = application.jobSnapshot ?? state.jobs.find((item) => item.id === application.jobId);
   if (!job) return undefined;
   const cohort = classifyPilotCohort(job);
-  const origin = classifyPilotOrigin(job, application);
+  const origin = classifyPilotOrigin(state, job, application);
   const attempt: PilotAttempt = {
     version: 1,
     id: newId(),
@@ -232,6 +254,10 @@ export function attachPilotAttempt(state: AppState, application: Application): v
 function immutableAttemptProjection(attempt: PilotAttempt): unknown {
   const immutable = structuredClone(attempt) as Omit<PilotAttempt, "costEvidence"> & { costEvidence?: PilotAttempt["costEvidence"] };
   delete immutable.costEvidence;
+  delete immutable.currentEvidenceDigest;
+  delete immutable.submissionProfileSnapshot;
+  delete immutable.submissionEvidenceHash;
+  delete immutable.controlledExclusion;
   immutable.events = [];
   immutable.reviews = [];
   return immutable;
@@ -245,11 +271,20 @@ function appendOnly(previous: PilotAttempt, next: PilotAttempt): boolean {
   return true;
 }
 
-function statusEvidence(application: Application): { kind: PilotEventKind; outcome?: PilotEvent["outcome"]; evidenceHash?: string } | undefined {
-  if (application.status === "submitted" && application.submissionReceipt && application.submissionAttemptedAt) return { kind: "receipt-confirmed", outcome: "confirmed", evidenceHash: hashJson({ receipt: application.submissionReceipt, submittedAt: application.submittedAt, attemptedAt: application.submissionAttemptedAt, materials: application.submissionMaterials }) };
+function statusEvidence(application: Application, profile?: Profile): { kind: PilotEventKind; outcome?: PilotEvent["outcome"]; evidenceHash?: string } | undefined {
+  if (application.status === "submitted" && application.submissionReceipt && application.submissionAttemptedAt) return { kind: "receipt-confirmed", outcome: "confirmed", evidenceHash: hashJson({ receipt: application.submissionReceipt, submittedAt: application.submittedAt, attemptedAt: application.submissionAttemptedAt, materials: application.submissionMaterials, answers: application.packet?.answers, form: application.form, profile: profile ? profileSnapshot(profile) : undefined }) };
   if (application.status === "uncertain") return { kind: "outcome-uncertain", outcome: "uncertain" };
   if (application.status === "cancelled") return { kind: "cancelled", outcome: "cancelled" };
   return undefined;
+}
+
+function submittedEvidenceProjection(application: Application): unknown {
+  return {
+    submissionReceipt: application.submissionReceipt,
+    submissionMaterials: application.submissionMaterials,
+    answers: application.packet?.answers,
+    form: application.form,
+  };
 }
 
 /**
@@ -265,38 +300,51 @@ export function preparePilotMutation(previous: AppState, next: AppState, context
   }
   const previousEpisodes = previous.pilot?.episodes ?? [];
   const nextEpisodes = next.pilot?.episodes ?? [];
-  for (const episode of previousEpisodes) {
-    const current = nextEpisodes.find((item) => item.id === episode.id);
-    if (!current || hashJson({ ...episode, withdrawnAt: undefined }) !== hashJson({ ...current, withdrawnAt: undefined }) || (episode.withdrawnAt && episode.withdrawnAt !== current.withdrawnAt)) {
-      throw new Error("Pilot consent episodes are immutable.");
-    }
-  }
+  if (nextEpisodes.length < previousEpisodes.length || previousEpisodes.some((episode, index) => {
+    const current = nextEpisodes[index];
+    return !current || hashJson({ ...episode, withdrawnAt: undefined }) !== hashJson({ ...current, withdrawnAt: undefined }) || (episode.withdrawnAt && episode.withdrawnAt !== current.withdrawnAt);
+  })) throw new Error("Pilot consent episodes are immutable.");
   const previousApps = new Map(previous.applications.map((app) => [app.id, app]));
-  const nextAppIds = new Set(next.applications.map((app) => app.id));
-  for (const previousApp of previous.applications) if (previousApp.pilotAttempt && !nextAppIds.has(previousApp.id)) throw new Error("Pilot attempts cannot be removed.");
+  for (const previousApp of previous.applications) {
+    const current = next.applications.find((app) => app.id === previousApp.id);
+    if (previousApp.pilotAttempt && (!current || !current.pilotAttempt)) throw new Error("Pilot attempts cannot be removed or detached.");
+  }
+  const profileChanged = hashJson(profileSnapshot(previous.profile)) !== hashJson(profileSnapshot(next.profile));
   for (const app of next.applications) {
     const attempt = app.pilotAttempt;
     if (!attempt) continue;
     const oldApp = previousApps.get(app.id);
     const oldAttempt = oldApp?.pilotAttempt;
     if (oldAttempt && !appendOnly(oldAttempt, attempt)) throw new Error("Pilot evidence is immutable and append-only.");
+    if (oldAttempt?.submissionEvidenceHash && (oldAttempt.submissionEvidenceHash !== attempt.submissionEvidenceHash || hashJson(oldAttempt.submissionProfileSnapshot) !== hashJson(attempt.submissionProfileSnapshot)))
+      throw new Error("Submission-time profile evidence is immutable.");
+    if (oldApp?.submissionReceipt && hashJson(submittedEvidenceProjection(oldApp)) !== hashJson(submittedEvidenceProjection(app)))
+      throw new Error("Submitted evidence is immutable after the receipt is captured.");
     if (!oldAttempt) {
+      if (oldApp || !activePilotEpisode(previous) || app.userId !== previous.profile.id) throw new Error("Pilot attempts can only be attached when a new enrolled application is initiated.");
       for (const blocker of app.blockers ?? []) if (blocker.progress === "blocked" && blocker.reason !== "resource_hold") appendEvent(attempt, event("intervention-requested", serviceActor, blocker.message, { blockerId: blocker.id, blockerReason: blocker.reason, evidenceHash: hashJson(blocker) }));
+      if (app.controlledTest) appendEvent(attempt, event("controlled-excluded", serviceActor, "A controlled validation marker was observed at initiation."));
       continue;
     }
     attempt.costEvidence ??= { version: 1, status: "unknown", projectedUsd: 0, evidenceIds: [] };
+    if (actor.kind === "owner" && profileChanged && !["submitted", "uncertain", "cancelled"].includes(app.status)) appendEvent(attempt, event("owner-action", actor, context.action || "Profile or automation settings updated."));
     if (actor.kind === "owner" && oldApp && hashJson(applicationWithoutPilot(oldApp)) !== hashJson(applicationWithoutPilot(app))) appendEvent(attempt, event("owner-action", actor, context.action || "Application updated."));
     if (!oldApp?.manualSubmissionReport && app.manualSubmissionReport) appendEvent(attempt, event("owner-action", { kind: "owner", userId: app.userId }, "The owner reported an unconfirmed manual outcome.", { evidenceHash: hashJson({ reportedAt: app.manualSubmissionReport.reportedAt, outcome: app.manualSubmissionReport.outcome }) }));
     if ((app.autonomousHumanAnswers?.length ?? 0) > (oldApp?.autonomousHumanAnswers?.length ?? 0)) appendEvent(attempt, event("owner-action", { kind: "owner", userId: app.userId }, "The owner supplied a required application answer.", { evidenceHash: hashJson(app.autonomousHumanAnswers) }));
     const projectedUsd = [...(app.runs ?? [])].reduce((sum, run) => sum + run.projectedUsd, 0) + (app.budgetReservation?.projectedUsd ?? 0);
     if (projectedUsd !== attempt.costEvidence.projectedUsd) attempt.costEvidence = { ...attempt.costEvidence, projectedUsd };
+    const newSubmission = Boolean(app.submissionAttemptedAt && !oldApp?.submissionAttemptedAt);
+    if (newSubmission && !attempt.submissionEvidenceHash) {
+      attempt.submissionProfileSnapshot = profileSnapshot(next.profile);
+      attempt.submissionEvidenceHash = hashJson({ profile: attempt.submissionProfileSnapshot, evidence: submittedEvidenceProjection(app) });
+    }
     if (oldApp?.status !== app.status) {
-      const status = statusEvidence(app);
+      const status = statusEvidence(app, next.profile);
       if (status) appendEvent(attempt, event(status.kind, status.kind === "receipt-confirmed" ? serviceActor : actor, `Application status: ${app.status}.`, { outcome: status.outcome, evidenceHash: status.evidenceHash }));
     }
-    if (!oldApp?.submissionAttemptedAt && app.submissionAttemptedAt) appendEvent(attempt, event("submission-attempted", serviceActor, "The agent recorded one submission attempt.", { evidenceHash: hashJson({ attemptedAt: app.submissionAttemptedAt, materials: app.submissionMaterials, form: app.form?.hash }) }));
+    if (newSubmission) appendEvent(attempt, event("submission-attempted", serviceActor, "The agent recorded one submission attempt.", { evidenceHash: attempt.submissionEvidenceHash }));
     if (!oldApp?.submissionReceipt && app.submissionReceipt && app.submissionAttemptedAt) {
-      appendEvent(attempt, event("receipt-confirmed", serviceActor, "An agent-observed submission receipt was captured.", { outcome: "confirmed", evidenceHash: hashJson({ receipt: app.submissionReceipt, submittedAt: app.submittedAt, attemptedAt: app.submissionAttemptedAt, materials: app.submissionMaterials }) }));
+      appendEvent(attempt, event("receipt-confirmed", serviceActor, "An agent-observed submission receipt was captured.", { outcome: "confirmed", evidenceHash: hashJson({ receipt: app.submissionReceipt, submittedAt: app.submittedAt, attemptedAt: app.submissionAttemptedAt, materials: app.submissionMaterials, answers: app.packet?.answers, form: app.form, profile: profileSnapshot(next.profile) }) }));
     }
     if (!oldApp?.queuedRun && app.queuedRun) appendEvent(attempt, event("queued", serviceActor, `Queued ${app.queuedRun.kind} work.`));
     if (app.budgetReservation?.status === "release_pending" && oldApp?.budgetReservation?.status !== "release_pending") appendEvent(attempt, event("hold", serviceActor, "Service spend is held pending a later release."));

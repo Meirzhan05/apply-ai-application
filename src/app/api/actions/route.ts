@@ -154,14 +154,14 @@ async function perform(
       const authorization = activateAutomation(state.profile, text(payload.reason, 200));
       state.profile.updatedAt = new Date().toISOString();
       activity(state, "Automation enabled", `Authorization version ${authorization.version} is active.`);
-    });
+    }, ownerContext);
   }
   if (action === "pauseAutomation" || action === "pause") {
     return mutateState(userId, (state) => {
       pauseAutomation(state.profile);
       state.profile.updatedAt = new Date().toISOString();
       activity(state, "Automation paused", "New autonomous application work is paused until you resume it.");
-    });
+    }, ownerContext);
   }
   if (action === "automationSettings") {
     return mutateState(userId, (state) => {
@@ -180,7 +180,7 @@ async function perform(
       state.profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(state, "Automation settings updated", "Your saved filters and material preferences were updated.");
-    });
+    }, ownerContext);
   }
   if (action === "profile") {
     const verifiedEmail = isDemo()
@@ -260,7 +260,7 @@ async function perform(
         "Profile updated",
         "Search preferences and confirmed facts were saved.",
       );
-    });
+    }, ownerContext);
   }
   if (action === "feedback")
     return mutateState(userId, (state) => {
@@ -281,7 +281,7 @@ async function perform(
         kind === "saved" ? "Job saved" : "Job dismissed",
         state.jobs.find((job) => job.id === jobId)?.title ?? "",
       );
-    });
+    }, ownerContext);
   if (action === "labelMatch") return mutateState(userId, (state) => {
     const job = state.jobs.find((item) => item.id === text(payload.jobId, 200));
     if (!job) throw new Error("Job not found.");
@@ -290,12 +290,12 @@ async function perform(
     state.matchLabels = state.matchLabels.filter((item) => item.jobId !== job.id);
     state.matchLabels.push({ jobId: job.id, label, profile: structuredClone(state.profile), job: structuredClone(job), labeledAt: new Date().toISOString() });
     state.matchLabels = state.matchLabels.slice(-100);
-  });
+  }, ownerContext);
   if (action === "timeSaved") return mutateState(userId, (state) => {
     const app = findApp(state, text(payload.applicationId, 100), userId);
     if (app.status !== "submitted") throw new Error("Record time saved after a confirmed submission.");
     app.timeSavedMinutes = z.number().finite().min(0).max(240).parse(payload.minutes);
-  });
+  }, ownerContext);
   if (action === "import") {
     const pending = newImportedJob({ url: text(payload.url, 2048),
       company: text(payload.company, 120), title: text(payload.title, 160),
@@ -312,13 +312,13 @@ async function perform(
       state.importedJobs ??= [];
       state.importedJobs.unshift(job);
       activity(state, "Link imported", job.title);
-    });
+    }, ownerContext);
   }
   if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200), ownerContext);
   if (action === "preflightImportedPosting") {
     const jobId = text(payload.jobId, 200);
     const result = await runImportedPreflight(userId, jobId);
-    if (result.status === "reachable") await startAutonomousApplication(userId, jobId);
+    if (result.status === "reachable") await startAutonomousApplication(userId, jobId, ownerContext);
     return result;
   }
   if (action === "select")
@@ -327,7 +327,7 @@ async function perform(
       activity(state, "Job selected", findJob(state, app).title);
     }, ownerContext);
   if (action === "draft") {
-    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode));
+    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode), ownerContext);
     return;
   }
   if (action === "editPacket") {
@@ -352,7 +352,7 @@ async function perform(
       assertMaterialReviewCurrent(current, target, expected);
       setPacket(current, target, packet);
       activity(current, "Packet revised", packet.summary);
-    });
+    }, ownerContext);
   }
   if (action === "confirmEssay") {
     const state = await loadState(userId);
@@ -373,7 +373,7 @@ async function perform(
       assertMaterialReviewCurrent(current, target, expected);
       setPacket(current, target, packet);
       activity(current, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
-    });
+    }, ownerContext);
   }
   if (action === "addCoverLetter") {
     const state = await loadState(userId);
@@ -400,7 +400,7 @@ async function perform(
       target.needsCoverLetter = false;
       setPacket(current, target, packet);
       activity(current, "Cover letter added", "Review the revised packet and approve it before a new form fill.");
-    });
+    }, ownerContext);
   }
   if (action === "approveFill")
     return mutateState(userId, (state) => {
@@ -417,14 +417,14 @@ async function perform(
         "Fill approved",
         "The approved packet may now be entered on the target form.",
       );
-    });
+    }, ownerContext);
   if (action === "startBrowser") {
-    await queueApplicationRun(userId, text(payload.applicationId, 100), "fill");
+    await queueApplicationRun(userId, text(payload.applicationId, 100), "fill", undefined, ownerContext);
     return;
   }
   if (action === "answerBrowserQuestions") {
     const answers = z.array(z.object({ questionId: z.string().max(5000), value: z.string().max(4000).optional(), confirmEssay: z.boolean().optional(), answerHash: z.string().max(100).optional() }).strict()).min(1).max(20).parse(payload.answers);
-    await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers);
+    await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers, ownerContext);
     return;
   }
   if (action === "draftBrowserEssays") {
@@ -468,7 +468,7 @@ async function perform(
         "Form refreshed",
         "Review the latest fields before approving submission.",
       );
-    });
+    }, ownerContext);
   }
   if (action === "checkSubmissionResult" || action === "stopSubmissionVerification") {
     await checkSubmissionResult(userId, text(payload.applicationId, 100), action === "stopSubmissionVerification");
@@ -481,7 +481,7 @@ async function perform(
       if (app.packet) validatePacket(state.profile, app.packet);
       approveSubmit(app, userId, text(payload.formHash, 100));
       activity(state, "Final form approved", findJob(state, app).title);
-    });
+    }, ownerContext);
   if (action === "submit") {
     const appId = text(payload.applicationId, 100);
     await mutateState(userId, (state) => {
@@ -492,7 +492,7 @@ async function perform(
         throw new Error("The current form needs final approval.");
       transition(app, ["approved_to_submit"], "submitting");
       app.submissionStartedAt = new Date().toISOString();
-    });
+    }, ownerContext);
     if (!isDemo()) {
       try {
         await tasks.trigger<typeof submitApplicationForm>(
@@ -580,7 +580,7 @@ async function perform(
       validatePacket(current.profile, app.packet);
       reopenManualAttempt(app, userId, confirmed);
       activity(current, "Manual attempt reviewed", "You confirmed the employer did not accept the application. Review and approve the saved packet before a new fill run.");
-    });
+    }, ownerContext);
     await cancelBrowser(before);
     return;
   }
@@ -596,7 +596,7 @@ async function perform(
       target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
       target.error = undefined;
       activity(current, "Browser closed", "Review and approve the packet again to start a new session.");
-    });
+    }, ownerContext);
     await cancelBrowser(app);
     return;
   }

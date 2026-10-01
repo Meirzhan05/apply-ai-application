@@ -9,6 +9,7 @@ import { packetProfileHash } from "@/lib/drafting";
 import { reserveServiceBudget } from "@/lib/budget";
 import { setFormSnapshot, transition } from "@/lib/workflow";
 import type { AppState } from "@/lib/types";
+import type { PilotMutationContext } from "@/lib/pilot";
 
 function find(state: AppState, userId: string, applicationId: string) {
   const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
@@ -62,7 +63,7 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
   }
 }
 
-export async function answerBrowserQuestions(userId: string, applicationId: string, formHash: string, inputs: BrowserAnswerInput[]) {
+export async function answerBrowserQuestions(userId: string, applicationId: string, formHash: string, inputs: BrowserAnswerInput[], context?: PilotMutationContext) {
   const token = newId();
   const approvals = await mutateState(userId, (state) => {
     const app = find(state, userId, applicationId);
@@ -73,7 +74,7 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
     app.error = undefined;
     transition(app, ["needs_user_action"], "filling");
     return records;
-  });
+  }, context);
   try {
     const state = await loadState(userId);
     const app = find(state, userId, applicationId);
@@ -94,7 +95,7 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
       target.browserQuestionDrafts = undefined;
       setFormSnapshot(target, form);
       current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: form.readyToSubmit === false ? "More input needed" : "Form ready for review", detail: job.title });
-    });
+    }, context);
   } catch (error) {
     await mutateState(userId, (current) => {
       const target = find(current, userId, applicationId);
@@ -103,7 +104,7 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
         transition(target, ["filling"], "needs_user_action");
         target.error = error instanceof Error ? error.message : "The agent paused. Refresh the form to continue.";
       }
-    });
+    }, context);
     throw error;
   }
 }
