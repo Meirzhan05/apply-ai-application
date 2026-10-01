@@ -1,5 +1,5 @@
-import { adminSupabase } from "@/lib/supabase-admin";
 import { mutateState, loadState, isDemo } from "@/lib/repository";
+import { readAllAppStateOwners } from "@/lib/app-state-owners";
 import { newId } from "@/lib/crypto";
 import { sendActionNeeded } from "@/lib/email";
 import { recoverStaleRuns } from "@/lib/run-recovery";
@@ -12,8 +12,9 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_TASK_SECRET;
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Unauthorized", { status: 401 });
-  const { data, error } = isDemo() ? { data: [{ user_id: "demo-user" }], error: null } : await adminSupabase().from("app_states").select("user_id").limit(1000);
-  if (error) return Response.json({ error: error.message }, { status: 500 });
+  let data: Array<{ user_id: string }>;
+  try { data = isDemo() ? [{ user_id: "demo-user" }] : await readAllAppStateOwners("user_id"); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Reconcile owner scan failed." }, { status: 500 }); }
   let marked = 0;
   for (const row of data ?? []) {
     const closed = await mutateState(row.user_id, (current) => {
