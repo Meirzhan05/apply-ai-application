@@ -3,6 +3,15 @@ import { verifyControlledTestGrant } from "@/lib/controlled-tests";
 import { loadState, mutateState } from "@/lib/repository";
 import { hasSubmissionApproval } from "@/lib/workflow";
 import { sameOrigin } from "@/lib/request-security";
+import { hasBoundSubmissionAttempt } from "@/lib/autonomous-policy";
+import type { AppState, Application } from "@/lib/types";
+
+function authorizedAttempt(state: AppState, app: Application) {
+  if (app.autonomousAuthorization) return hasBoundSubmissionAttempt(app, state.profile, state.jobs.find((job) => job.id === app.jobId));
+  // Existing review approvals remain required. The durable attempt marker does
+  // not invalidate the receiver's check of the approvals that authorized it.
+  return hasSubmissionApproval({ ...app, submissionAttemptedAt: undefined }) && app.status === "submitting" && Boolean(app.submissionWorkerClaimedAt);
+}
 
 export const runtime = "nodejs";
 
@@ -46,7 +55,7 @@ export async function POST(request: Request) {
     });
     return verified ? html("<h1>Application received</h1><p>The existing synthetic attempt was verified. No employer was contacted.</p>") : new Response("Verification already handled", { status: 409 });
   }
-  if (!context || !hasSubmissionApproval(context.app) || context.app.status !== "submitting" || !context.app.submissionWorkerClaimedAt) return new Response("Approved test run required", { status: 403 });
+  if (!context || !authorizedAttempt(context.state, context.app)) return new Response("Authorized test attempt required", { status: 403 });
   const size = Number(request.headers.get("content-length") || "0");
   if (size > 2_000_000) return new Response("Test file too large", { status: 413 });
   const data = await request.formData();
@@ -61,7 +70,7 @@ export async function POST(request: Request) {
   }
   const accepted = await mutateState(context.grant.userId, (state) => {
     const app = state.applications.find((item) => item.id === context.grant.applicationId);
-    if (!app?.controlledTest || app.controlledTest.submissions !== 0 || !hasSubmissionApproval(app) || app.status !== "submitting") return false;
+    if (!app?.controlledTest || app.controlledTest.submissions !== 0 || !authorizedAttempt(state, app)) return false;
     app.controlledTest.submissions = 1;
     return true;
   });

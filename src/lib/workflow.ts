@@ -162,6 +162,8 @@ export function hasAutonomousAuthorization(
   profileVersion: number,
   targetUrl: string | undefined,
 ): boolean {
+  // Metadata identity only. Consequential actions use the complete, current
+  // profile/job/material/form policy in assertAutonomous.
   const authorization = application.autonomousAuthorization;
   return Boolean(
     authorization &&
@@ -210,8 +212,7 @@ function supportedApproval(approval: Approval): boolean {
   return approval.version === 1 || approval.version === undefined;
 }
 
-export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined, profileVersion?: number): boolean {
-  if (profileVersion !== undefined && hasAutonomousAuthorization(application, userId, profileVersion, targetUrl)) return true;
+export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined): boolean {
   return Boolean(targetUrl && application.userId === userId && application.packet &&
     (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 || (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact)) &&
     application.packetHash === hashJson(application.packet) &&
@@ -221,15 +222,14 @@ export function hasFillApproval(application: Application, userId: string, target
       approval.reviewHash === application.packetHash && approval.targetUrl === targetUrl));
 }
 
-export function hasSubmissionApproval(application: Application, profileVersion?: number): boolean {
+export function hasSubmissionApproval(application: Application): boolean {
   return (
     ["approved_to_submit", "submitting"].includes(application.status) &&
     Boolean(
       application.form && application.form.readyToSubmit !== false && application.packet &&
       application.packetHash === hashJson(application.packet) &&
       !application.submissionAttemptedAt &&
-      hasFillApproval(application, application.userId, application.jobSnapshot?.applyUrl, profileVersion) &&
-      (profileVersion !== undefined && hasAutonomousAuthorization(application, application.userId, profileVersion, application.form?.url) ||
+      hasFillApproval(application, application.userId, application.jobSnapshot?.applyUrl) &&
         application.approvals.some(
           (approval) =>
             supportedApproval(approval) && approval.kind === "submit" &&
@@ -237,7 +237,7 @@ export function hasSubmissionApproval(application: Application, profileVersion?:
             approval.applicationId === application.id &&
             approval.targetUrl === application.form?.url &&
             approval.reviewHash === application.form?.hash,
-        )),
+        ),
     )
   );
 }

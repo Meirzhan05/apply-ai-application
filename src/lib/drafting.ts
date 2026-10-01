@@ -50,14 +50,14 @@ export async function draftPacket(
   profile: Profile,
   job: Job,
   previous?: ApplicationPacket,
-  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean },
+  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; beforeModelCall?: () => Promise<void> },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
   if (facts.length === 0)
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
     );
-  const resumeDocument = options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline) : undefined;
+  const resumeDocument = options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
   if (options?.preserveResume && previous) validatePacket(profile, previous);
   let selected = facts.slice(0, 4);
   let answers: ScreeningAnswer[] = [
@@ -133,7 +133,7 @@ export async function draftPacket(
   if (options?.regenerateEssays) answers = answers.map((answer) => answerOwner(answer.question) === "ai" ? { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "ai" } : answer);
   const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&
     (!previous.coverLetterContext || previous.coverLetter === `Dear Hiring Team,\n\nI am applying for the ${previous.coverLetterContext.title} role at ${previous.coverLetterContext.company}.\n\n${previous.coverLetterFactIds.map((id) => facts.find((fact) => fact.id === id)!.text).join("\n")}\n\nThank you for considering my application.\n\nSincerely,\n${profile.name}`);
-  answers = await draftEssayAnswers(profile, job, answers, options?.deadline);
+  answers = options?.knownAnswersOnly ? [] : await draftEssayAnswers(profile, job, answers, options?.deadline);
   return withPacketFiles(profile, {
     schemaVersion: resumeDocument ? 2 : 1,
     ...(resumeDocument ? { resumeDocument } : {}),

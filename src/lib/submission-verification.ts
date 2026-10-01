@@ -7,7 +7,7 @@ import { withBrowserUsageContext } from "@/lib/browser-usage";
 import type { Application } from "@/lib/types";
 
 function awaiting(app: Application | undefined, userId: string): asserts app is Application {
-  if (!app || app.userId !== userId || app.status !== "awaiting_verification" || !app.submissionVerification ||
+  if (!app || app.userId !== userId || !["awaiting_verification", "uncertain"].includes(app.status) || !app.submissionVerification ||
     app.browserSessionId !== app.submissionVerification.sessionId || app.submissionAttemptedAt !== app.submissionVerification.attemptedAt)
     throw new Error("No active verification belongs to this application.");
 }
@@ -35,17 +35,17 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
       target.error = undefined;
       if (result?.receipt) target.submissionReceipt = result.receipt;
       if (result?.confirmed) {
-        transition(target, ["awaiting_verification"], "submitted");
+        transition(target, ["awaiting_verification", "uncertain"], "submitted");
         target.submittedAt = new Date().toISOString();
         target.confirmation = result.evidence;
         target.submissionVerification = undefined;
-      } else if (result) {
+      } else if (result?.verification) {
         target.confirmation = result.evidence;
         target.updatedAt = new Date().toISOString();
         return;
       } else {
-        transition(target, ["awaiting_verification"], "uncertain");
-        target.confirmation = expired ? "The verification browser expired before confirmation. Check the employer receipt before taking further action." : "Verification was stopped before confirmation. Check the employer receipt before taking further action.";
+        transition(target, ["awaiting_verification", "uncertain"], "uncertain");
+        target.confirmation = result?.evidence || (expired ? "The verification browser expired before confirmation. Check the employer receipt before taking further action." : "Verification was stopped before confirmation. Check the employer receipt before taking further action.");
         target.submissionVerification = undefined;
       }
       target.browserSessionId = target.browserLiveUrl = target.browserConnectUrl = undefined;
@@ -61,7 +61,7 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
       target.submissionVerificationCheck = undefined;
       target.error = "The result could not be checked. No additional Submit click was made.";
       if (stopped) {
-        transition(target, ["awaiting_verification"], "uncertain");
+        transition(target, ["awaiting_verification", "uncertain"], "uncertain");
         target.confirmation = "The verification browser ended before confirmation. Check the employer receipt before taking further action.";
         target.submissionVerification = undefined;
         target.browserSessionId = target.browserLiveUrl = target.browserConnectUrl = undefined;

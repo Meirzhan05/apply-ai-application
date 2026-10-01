@@ -4,6 +4,7 @@ import type {
   submitApplicationForm,
 } from "../../../../trigger/browser";
 import { queueMatchAssessment } from "@/lib/match-queue";
+import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
 import { newId } from "@/lib/crypto";
 import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
@@ -19,7 +20,6 @@ import { adminSupabase } from "@/lib/supabase-admin";
 import {
   refreshBrowserSnapshot,
   repairEducationFields,
-  submitBrowser,
   cancelBrowser,
 } from "@/lib/browser-runner";
 import {
@@ -284,6 +284,7 @@ async function perform(
       activity(state, "Link imported", job.title);
     });
   }
+  if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200));
   if (action === "select")
     return mutateState(userId, (state) => {
       const app = selectApplication(state, text(payload.jobId, 200), userId);
@@ -472,68 +473,19 @@ async function perform(
         throw error;
       }
     }
-    const state = await loadState(userId);
-    const app = findApp(state, appId, userId);
-    try {
-      const result = await submitBrowser(app);
-      return mutateState(userId, (current) => {
-        const target = findApp(current, appId, userId);
-        transition(
-          target,
-          ["submitting"],
-          result.confirmed ? "submitted" : result.verification ? "awaiting_verification" : "uncertain",
-        );
-        target.confirmation = result.evidence;
-        target.submissionReceipt = result.receipt;
-        target.submissionVerification = result.verification;
-        target.submissionAttemptedAt = app.submissionAttemptedAt;
-        if (result.confirmed) target.submittedAt = new Date().toISOString();
-        activity(
-          current,
-          result.confirmed ? "Submission confirmed" : result.verification ? "Complete employer verification" : "Submission uncertain",
-          result.evidence,
-        );
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "FORM_CHANGED") {
-        const form = await refreshBrowserSnapshot(app);
-        return mutateState(userId, (current) => {
-          const target = findApp(current, appId, userId);
-          target.submissionStartedAt = undefined;
-          target.submissionWorkerClaimedAt = undefined;
-          setFormSnapshot(target, form);
-          activity(
-            current,
-            "Form changed",
-            "Review the new form state and approve again.",
-          );
-        });
-      }
-      await mutateState(userId, (current) => {
-        const target = findApp(current, appId, userId);
-        transition(target, ["submitting"], "uncertain");
-        target.error =
-          error instanceof Error ? error.message : "Submission result unknown.";
-        target.submissionAttemptedAt = app.submissionAttemptedAt;
-        activity(
-          current,
-          "Submission needs review",
-          "The result is uncertain. No automatic retry will occur.",
-        );
-      });
-      throw error;
-    }
+    return (await import("@/lib/application-submission")).runSubmission({ userId, applicationId: appId });
   }
   if (action === "cancel") {
     const appId = text(payload.applicationId, 100);
     const state = await loadState(userId);
     const app = findApp(state, appId, userId);
     if (
-      ["submitting", "awaiting_verification", "submitted", "uncertain", "cancelled"].includes(app.status)
+      ["awaiting_verification", "submitted", "uncertain", "cancelled"].includes(app.status) || (app.status === "submitting" && (!app.autonomousAuthorization || app.submissionAttemptedAt))
     )
       throw new Error("This application can no longer be cancelled.");
     await mutateState(userId, (current) => {
       const target = findApp(current, appId, userId);
+      if (target.submissionAttemptedAt) throw new Error("A submission was already attempted; its outcome must be observed.");
       target.queuedRun = undefined;
       transition(
         target,
@@ -546,6 +498,7 @@ async function perform(
           "final_review",
           "approved_to_submit",
           "needs_user_action",
+          ...(target.autonomousAuthorization ? ["submitting" as const] : []),
         ],
         "cancelled",
       );

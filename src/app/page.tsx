@@ -1,4 +1,5 @@
 "use client";
+import { AutonomousApplicationStatus, autonomousOutcome } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
@@ -516,7 +517,7 @@ export default function Dashboard() {
                                 Boolean(busy) || match?.category === "excluded"
                               }
                               onClick={async () => {
-                                const next = await act("select", {
+                                const next = await act(data.automation.enabled ? "startAutonomous" : "select", {
                                   jobId: job.id,
                                 });
                                 if (next) {
@@ -530,7 +531,7 @@ export default function Dashboard() {
                                 }
                               }}
                             >
-                              Prepare application
+                              {data.automation.enabled ? "Apply automatically" : "Prepare application"}
                             </button>
                           )}
                           <a
@@ -599,11 +600,10 @@ export default function Dashboard() {
         )}
         {section === "applications" && (
           <main className="wide-panel">
-            <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>
+            {!applications.some((app) => app.autonomousAuthorization) && <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>}
             <h1>Your applications</h1>
             <p className="subheading">
-              Review the details before the agent enters a form, then review the
-              exact form before submission.
+              {applications.some((app) => app.autonomousAuthorization) ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
             <div className="app-layout">
               <div className="app-list">
@@ -625,7 +625,7 @@ export default function Dashboard() {
                         <span>
                           <strong>{job?.title ?? "Application"}</strong>
                           <small>
-                            {job?.company} · {statusLabel(app.status)}
+                            {job?.company} · {app.autonomousAuthorization ? autonomousOutcome(app) : statusLabel(app.status)}
                           </small>
                         </span>
                         <ArrowRight size={16} />
@@ -657,10 +657,10 @@ export default function Dashboard() {
                         </p>
                       </div>
                       <span className="status-pill">
-                        {statusLabel(activeApp.status)}
+                        {activeApp.autonomousAuthorization ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
-                    <div className="progress">
+                    {!activeApp.autonomousAuthorization && <div className="progress">
                       {[
                         "Selected",
                         "Packet",
@@ -682,7 +682,8 @@ export default function Dashboard() {
                           {item}
                         </span>
                       ))}
-                    </div>
+                    </div>}
+                    {activeApp.autonomousAuthorization && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
                     {activeApp.queuedRun && (
                       <div className="step-card" role="status">
                         <h3>Application run queued</h3>
@@ -690,7 +691,7 @@ export default function Dashboard() {
                       </div>
                     )}
                     {activeApp.status === "drafting" && <p role="status">Preparing your packet from confirmed facts…</p>}
-                    {activeApp.status === "selected" && !activeApp.queuedRun && (
+                    {!activeApp.autonomousAuthorization && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Prepare your application packet</h3>
                         <p>
@@ -711,7 +712,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
-                    {activeApp.packet &&
+                    {!activeApp.autonomousAuthorization && activeApp.packet &&
                       [
                         "draft_review",
                         "authorized_to_fill",
@@ -872,7 +873,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    {activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
+                    {!activeApp.autonomousAuthorization && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
                         <p>
@@ -916,7 +917,7 @@ export default function Dashboard() {
                         form…
                       </div>
                     )}
-                    {activeApp.status === "needs_user_action" && (
+                    {!activeApp.autonomousAuthorization && activeApp.status === "needs_user_action" && (
                       <>
                       {activeApp.browserSessionId && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
@@ -965,7 +966,7 @@ export default function Dashboard() {
                       </div>
                       </>
                     )}
-                    {activeApp.form &&
+                    {!activeApp.autonomousAuthorization && activeApp.form &&
                       [
                         "final_review",
                         "approved_to_submit",
@@ -1100,7 +1101,7 @@ export default function Dashboard() {
                             The previous browser run has stopped. No new form fill has started.
                             Your saved packet and confirmed essays are available for review.
                           </p>}
-                          {canReopenManualAttempt(activeApp) && <>
+                          {!activeApp.autonomousAuthorization && canReopenManualAttempt(activeApp) && <>
                             <p>Check the employer page or confirmation email first. Missing email alone does not confirm that an application failed.</p>
                             <label className="checkline">
                               <input type="checkbox" checked={confirmedUnacceptedId === activeApp.id} onChange={(event) => setConfirmedUnacceptedId(event.target.checked ? activeApp.id : null)} />
@@ -1130,7 +1131,7 @@ export default function Dashboard() {
                       "awaiting_verification",
                       "uncertain",
                       "cancelled",
-                    ].includes(activeApp.status) && (
+                    ].includes(activeApp.status) || (activeApp.autonomousAuthorization && activeApp.status === "submitting" && !activeApp.submissionAttemptedAt) ? (
                       <button
                         className="subtle-danger"
                         onClick={() =>
@@ -1139,7 +1140,7 @@ export default function Dashboard() {
                       >
                         Cancel this application
                       </button>
-                    )}
+                    ) : null}
                   </>
                 ) : (
                   <div className="empty">

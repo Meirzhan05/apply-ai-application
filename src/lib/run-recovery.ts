@@ -21,15 +21,23 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
       app.submissionVerification = app.submissionVerificationCheck = undefined;
       app.confirmation = "The verification browser expired before confirmation. Check the employer receipt; no automatic retry will occur.";
     } else if (app.status === "submitting" && idle > 10 * 60 * 1000) {
+      if (app.submissionAttemptedAt && app.submissionVerification && app.browserSessionId && !expired) {
+        transition(app, ["submitting"], "awaiting_verification");
+        app.error = "The worker stopped after claiming the existing attempt. Check its saved result; no additional Submit click is allowed.";
+        continue;
+      }
       closed.push(structuredClone(app));
       transition(app, ["submitting"], "uncertain");
       app.error = "The submit worker stopped before confirmation. Check the employer site; no automatic retry will occur.";
+    } else if (expired && app.status === "uncertain" && app.submissionVerification) {
+      closed.push(structuredClone(app));
+      app.submissionVerification = app.submissionVerificationCheck = undefined;
     } else if (["drafting", "filling"].includes(app.status) && idle > (app.status === "drafting" ? 12 : 10) * 60 * 1000) {
       closed.push(structuredClone(app));
       const previous = app.status;
-      transition(app, ["drafting", "filling"], previous === "drafting" ? (app.packet ? "draft_review" : "selected") : "authorized_to_fill");
+      transition(app, ["drafting", "filling"], app.autonomousAuthorization ? "needs_user_action" : previous === "drafting" ? (app.packet ? "draft_review" : "selected") : "authorized_to_fill");
       app.runDispatch = undefined;
-      app.error = "The worker stopped before review. You can request a new run.";
+      app.error = app.autonomousAuthorization ? "Automatic processing stopped. This request is blocked; no submission will be retried." : "The worker stopped before review. You can request a new run.";
     } else if (expired && ["final_review", "approved_to_submit", "needs_user_action"].includes(app.status)) {
       closed.push(structuredClone(app));
       transition(app, ["final_review", "approved_to_submit", "needs_user_action"], "needs_user_action");

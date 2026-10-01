@@ -1,4 +1,6 @@
 import { tasks } from "@trigger.dev/sdk";
+import { assertAutonomous } from "@/lib/autonomous-policy";
+import { dispatchAutonomousSubmissions } from "@/lib/autonomous-application";
 import { newId } from "@/lib/crypto";
 import { reserveServiceBudget } from "@/lib/budget";
 import { isDemo, loadState, mutateState } from "@/lib/repository";
@@ -11,7 +13,7 @@ import type { AppState } from "@/lib/types";
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
     (["filling", "submitting"].includes(app.status) ||
-      (["final_review", "needs_user_action", "approved_to_submit", "awaiting_verification"].includes(app.status) && Boolean(app.browserSessionId))));
+      (["final_review", "needs_user_action", "approved_to_submit", "awaiting_verification", "uncertain"].includes(app.status) && Boolean(app.browserSessionId))));
 }
 
 export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays") {
@@ -40,7 +42,7 @@ export async function dispatchUserQueue(userId: string) {
   const state = await loadState(userId);
   // Retrying the handoff uses the original provider idempotency key. It does
   // not recreate a run or reserve its budget again after an ambiguous timeout.
-  let dispatched = 0;
+  let dispatched = await dispatchAutonomousSubmissions(userId);
   if (!isDemo()) for (const app of state.applications) {
     if (app.runDispatch && !app.runDispatch.confirmedAt && !app.runWorkerClaimedAt && ["drafting", "filling"].includes(app.status)) {
       if (await handoff(userId, app.id, app.runDispatch.kind, app.runDispatch.token, app.runDispatch.draftMode)) dispatched++;
@@ -50,6 +52,10 @@ export async function dispatchUserQueue(userId: string) {
   for (const pendingApp of pending) {
     const queued = pendingApp.queuedRun!;
     const latest = await loadState(userId);
+    if (pendingApp.autonomousAuthorization) {
+      try { const app = latest.applications.find((item) => item.id === pendingApp.id)!; assertAutonomous(app, latest.profile, latest.jobs.find((item) => item.id === app.jobId), queued.kind); }
+      catch (error) { await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.queuedRun?.id === queued.id) { target.queuedRun = undefined; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; } }); continue; }
+    }
     if (queued.kind === "fill" && hasActiveBrowser(latest, pendingApp.id)) {
       await mutateState(userId, (current) => { const target = current.applications.find((app) => app.id === pendingApp.id); if (target?.queuedRun?.id === queued.id) target.queuedRun.reason = "active_run"; });
       continue;
@@ -64,6 +70,10 @@ export async function dispatchUserQueue(userId: string) {
       if (target?.queuedRun?.id !== queued.id) return false;
       if (queued.kind === "fill" && hasActiveBrowser(current, target.id)) { target.queuedRun.reason = "active_run"; return false; }
       const job = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
+      if (target.autonomousAuthorization) {
+        try { assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), queued.kind); }
+        catch (error) { target.queuedRun = undefined; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; return false; }
+      }
       if (!job?.active) { target.queuedRun = undefined; target.error = "This queued listing closed before the run started."; return false; }
       const conflict = explicitConflict(current.profile, job);
       if (conflict) { target.queuedRun = undefined; target.error = conflict; return false; }
@@ -106,7 +116,7 @@ async function handoff(userId: string, applicationId: string, kind: "draft" | "f
     await tasks.trigger(kind === "fill" ? "fill-application-form" : "draft-application-packet", { userId, applicationId, runToken: token, ...(draftMode ? { draftMode } : {}) }, { idempotencyKey: token });
     await mutateState(userId, (state) => {
       const app = state.applications.find((item) => item.id === applicationId);
-      if (app?.runDispatch?.token === token) { app.runDispatch.confirmedAt = new Date().toISOString(); app.error = undefined; }
+      if (app?.runDispatch?.token === token) { app.runDispatch.confirmedAt = new Date().toISOString(); if (!app.autonomousAuthorization || ["drafting", "filling"].includes(app.status)) app.error = undefined; }
     });
     return true;
   } catch {
