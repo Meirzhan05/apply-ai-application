@@ -36,6 +36,13 @@ import {
 import { canonicalJobUrl } from "@/lib/sources";
 import { newImportedJob, refreshImportedJobs } from "@/lib/import-jobs";
 import {
+  activateAutomation,
+  bumpAutomationVersion,
+  pauseAutomation,
+  saveOnboarding,
+  updateAutomationSettings,
+} from "@/lib/onboarding";
+import {
   approveFill,
   approveSubmit,
   canSubmit,
@@ -83,6 +90,68 @@ async function perform(
   action: string,
   payload: Record<string, unknown>,
 ) {
+  if (action === "onboarding") {
+    return mutateState(userId, (state) => {
+      const questionnaire = z
+        .object({
+          workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
+          requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
+          availability: z.string().max(200).optional(),
+          graduationYear: z.string().max(20).optional(),
+        })
+        .parse(payload.questionnaire ?? payload);
+      const facts = payload.facts === undefined
+        ? undefined
+        : z
+            .array(
+              z.object({
+                id: z.string(),
+                text: z.string().min(1).max(500),
+                verified: z.boolean(),
+                source: z.enum(["resume", "user"]),
+              }),
+            )
+            .max(80)
+            .parse(payload.facts);
+      saveOnboarding(state.profile, { questionnaire, facts });
+      state.profile.updatedAt = new Date().toISOString();
+      state.matchCache = {};
+      activity(state, "Onboarding saved", "Your questionnaire and confirmed facts were saved.");
+    });
+  }
+  if (action === "activateAutomation" || action === "activate") {
+    return mutateState(userId, (state) => {
+      const authorization = activateAutomation(state.profile, text(payload.reason, 200));
+      state.profile.updatedAt = new Date().toISOString();
+      activity(state, "Automation enabled", `Authorization version ${authorization.version} is active.`);
+    });
+  }
+  if (action === "pauseAutomation" || action === "pause") {
+    return mutateState(userId, (state) => {
+      pauseAutomation(state.profile);
+      state.profile.updatedAt = new Date().toISOString();
+      activity(state, "Automation paused", "New autonomous application work is paused until you resume it.");
+    });
+  }
+  if (action === "automationSettings") {
+    return mutateState(userId, (state) => {
+      const settings = z
+        .object({
+          resumeTailoring: z.boolean().optional(),
+          coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
+          essayMode: z.literal("automatic-truthful").optional(),
+          preferredTitles: z.array(z.string().max(120)).max(30).optional(),
+          preferredLocations: z.array(z.string().max(120)).max(30).optional(),
+          remoteOnly: z.boolean().optional(),
+          strictLocations: z.boolean().optional(),
+        })
+        .parse(payload.settings ?? payload);
+      updateAutomationSettings(state.profile, settings);
+      state.profile.updatedAt = new Date().toISOString();
+      state.matchCache = {};
+      activity(state, "Automation settings updated", "Your saved filters and material preferences were updated.");
+    });
+  }
   if (action === "profile") {
     const verifiedEmail = isDemo()
       ? null
@@ -125,8 +194,7 @@ async function perform(
         new Intl.DateTimeFormat("en-US", { timeZone });
         profile.timeZone = timeZone;
       }
-      if ("facts" in payload)
-        profile.facts = z
+      const facts = "facts" in payload ? z
           .array(
             z.object({
               id: z.string(),
@@ -136,9 +204,25 @@ async function perform(
             }),
           )
           .max(80)
-          .parse(payload.facts);
+          .parse(payload.facts) : undefined;
+      if (facts) profile.facts = facts;
       if ("sensitiveAnswers" in payload)
         profile.sensitiveAnswers = z.record(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
+      const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
+      const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
+        workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
+        requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
+        availability: z.string().max(200).optional(),
+        graduationYear: z.string().max(20).optional(),
+      }).parse(questionnaire);
+      const settings = payload.automationSettings && typeof payload.automationSettings === "object" ? z.object({
+        resumeTailoring: z.boolean().optional(),
+        coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
+        essayMode: z.literal("automatic-truthful").optional(),
+      }).parse(payload.automationSettings) : undefined;
+      if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
+      if (settings) updateAutomationSettings(profile, settings);
+      if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(

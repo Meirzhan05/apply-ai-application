@@ -22,6 +22,44 @@ export interface VerifiedFact {
   source: "resume" | "user";
 }
 
+export type FactualDeclaration = "yes" | "no" | "unknown";
+export type CoverLetterMode = "disabled" | "required-only" | "enabled";
+export type EssayMode = "automatic-truthful";
+
+export interface OnboardingQuestionnaire {
+  workAuthorization?: FactualDeclaration;
+  requiresSponsorship?: FactualDeclaration;
+  availability?: string;
+  graduationYear?: string;
+}
+
+export interface OnboardingProfile {
+  questionnaire: OnboardingQuestionnaire;
+  completedAt?: string;
+}
+
+export interface AutomationSettings {
+  version: number;
+  resumeTailoring: boolean;
+  coverLetterMode: CoverLetterMode;
+  essayMode: EssayMode;
+}
+
+export interface AutomationAuthorization {
+  version: number;
+  status: "enabled" | "paused";
+  reason: string;
+  authorizedAt: string;
+  pausedAt?: string;
+}
+
+export interface ResumeSource {
+  storageKey?: string;
+  sha256: string;
+  size: number;
+  mimeType: "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -41,6 +79,11 @@ export interface Profile {
   sensitiveAnswers: Record<string, string>;
   resumeFileName?: string;
   resumeText?: string;
+  resumeSource?: ResumeSource;
+  onboarding?: OnboardingProfile;
+  automationSettings?: AutomationSettings;
+  automationAuthorization?: AutomationAuthorization;
+  automationVersion: number;
   demo: boolean;
   updatedAt: string;
 }
@@ -244,6 +287,13 @@ export interface Application {
   packetHash?: string;
   form?: FormSnapshot;
   approvals: Approval[];
+  autonomousAuthorization?: {
+    version: 1;
+    userId: string;
+    profileVersion: number;
+    targetUrl: string;
+    authorizedAt: string;
+  };
   browserSessionId?: string;
   browserProvider?: BrowserProvider;
   browserSessionExpiresAt?: string;

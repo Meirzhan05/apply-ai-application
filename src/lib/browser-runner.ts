@@ -12,6 +12,7 @@ import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
+import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
 import { browserQuestions } from "@/lib/browser-questions";
 import { answerOwner } from "@/lib/answer-responsibility";
@@ -292,7 +293,8 @@ function allowedValues(
     email: profile.email,
     phone: profile.phone,
     school: profile.school,
-    graduation_date: profile.graduationYear,
+    graduation_date: profile.onboarding?.questionnaire.graduationYear || profile.graduationYear,
+    availability: profile.onboarding?.questionnaire.availability || "",
     cover_letter: application.packet?.coverLetter || "",
   };
   application.packet?.answers.forEach((answer, index) => {
@@ -302,7 +304,7 @@ function allowedValues(
     )
       values[`answer_${index}`] = answer.answer;
   });
-  Object.entries(profile.sensitiveAnswers).forEach(([key, value]) => {
+  Object.entries(reusableFactualAnswers(profile)).forEach(([key, value]) => {
     values[`saved_${key}`] = value;
   });
   return values;
@@ -324,6 +326,7 @@ function deterministicKey(
   if (/e.?mail/.test(label) || field.kind === "email") return "email";
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
   if (/school|university|college/.test(label)) return "school";
+  if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
   if (/sponsor/.test(label)) return "saved_requiresSponsorship";
   if (/authorized.*work|work.*authoriz/.test(label)) return "saved_workAuthorization";

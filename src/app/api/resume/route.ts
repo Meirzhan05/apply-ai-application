@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { PDFParse } from "pdf-parse";
 import mammoth from "mammoth";
 import { newId } from "@/lib/crypto";
@@ -6,6 +7,7 @@ import { adminSupabase } from "@/lib/supabase-admin";
 import { currentUserId, isDemo, mutateState } from "@/lib/repository";
 import { sameOrigin } from "@/lib/request-security";
 import { suggestResumeFacts } from "@/lib/resume-facts";
+import { bumpAutomationVersion } from "@/lib/onboarding";
 
 export const runtime = "nodejs";
 export async function POST(request: Request) {
@@ -45,6 +47,8 @@ export async function POST(request: Request) {
         "This resume has no readable text. Add facts manually in your profile.",
       );
     const suggestions = suggestResumeFacts(extracted);
+    const sha256 = createHash("sha256").update(buffer).digest("hex");
+    let storageKey: string | undefined;
     if (!isDemo()) {
       const client = adminSupabase();
       const key = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`;
@@ -57,10 +61,20 @@ export async function POST(request: Request) {
           upsert: false,
         });
       if (error) throw error;
+      storageKey = key;
     }
     await mutateState(userId, (state) => {
       state.profile.resumeFileName = name;
       state.profile.resumeText = extracted;
+      state.profile.resumeSource = {
+        ...(storageKey ? { storageKey } : {}),
+        sha256,
+        size: buffer.byteLength,
+        mimeType: pdf
+          ? "application/pdf"
+          : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      };
+      bumpAutomationVersion(state.profile);
       const existing = new Set(
         state.profile.facts.map((fact) => fact.text.toLowerCase()),
       );

@@ -27,7 +27,7 @@ const DraftSchema = z.object({
 });
 
 export function packetProfileHash(profile: Profile): string {
-  return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills, facts: profile.facts.filter((fact) => fact.verified), sensitiveAnswers: profile.sensitiveAnswers });
+  return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills, facts: profile.facts.filter((fact) => fact.verified), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion, automationSettings: profile.automationSettings });
 }
 
 function relevantFacts(profile: Profile, job: Job): VerifiedFact[] {
