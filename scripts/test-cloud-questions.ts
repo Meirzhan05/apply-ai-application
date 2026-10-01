@@ -11,7 +11,7 @@ import { queueApplicationRun } from "../src/lib/application-queue";
 import { cancelBrowser } from "../src/lib/browser-runner";
 import { browserQuestions } from "../src/lib/browser-questions";
 import { remoteBrowserStatus } from "../src/lib/browser-provider";
-import { answerBrowserQuestions, writeBrowserQuestionEssays } from "../src/lib/browser-question-runs";
+import { writeBrowserQuestionEssays } from "../src/lib/browser-question-runs";
 
 async function main() {
   process.env.DEMO_MODE = "false";
@@ -68,20 +68,9 @@ async function main() {
       return { status: response.status, body: await response.json() };
     };
     const foreign = await action(1, app!.form!.hash);
-    if (foreign.body.error === "This private beta account has not been invited yet.") {
-      // Keep the production invite list unchanged. Exercise the same service
-      // against production Postgres/browser for these disposable test owners.
-      assert.equal(foreign.status, 400);
-      assert.equal((await action(0, app!.form!.hash)).status, 400);
-      await assert.rejects(() => answerBrowserQuestions(users[1].id, applicationId, app!.form!.hash, answers), /Application not found/);
-      await assert.rejects(() => answerBrowserQuestions(owner.id, applicationId, "stale-form", answers), /changed/);
-      await answerBrowserQuestions(owner.id, applicationId, app!.form!.hash, answers);
-      console.log("PASS deployed API invite gate: disposable accounts refused; production invite list preserved. Continuation service verified against real production services.");
-    } else {
-      assert.equal(foreign.status, 400); assert.equal(foreign.body.error, "Application not found.");
-      const stale = await action(0, "stale-form"); assert.equal(stale.status, 400); assert.match(stale.body.error, /changed/);
-      const result = await action(0, app!.form!.hash); assert.equal(result.status, 200, result.body.error);
-    }
+    assert.equal(foreign.status, 400); assert.equal(foreign.body.error, "Application not found.");
+    const stale = await action(0, "stale-form"); assert.equal(stale.status, 400); assert.match(stale.body.error, /changed/);
+    const result = await action(0, app!.form!.hash); assert.equal(result.status, 200, result.body.error);
     app = (await loadState(owner.id)).applications.find(item => item.id === applicationId)!;
     assert.equal(app.status, "final_review", app.error); assert.equal(app.browserSessionId, sessionId);
     assert.equal(app.controlledTest!.submissions, 0); assert.equal(app.submissionAttemptedAt, undefined);

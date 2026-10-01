@@ -19,6 +19,8 @@ function request(path: string, expired = true) {
 
 beforeEach(() => {
   calls.length = 0;
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("BETA_ALLOWED_EMAILS", user.email);
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "synthetic-publishable-key");
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
@@ -69,4 +71,17 @@ it("leaves signed-out visits alone without calling Auth or sending email", async
   const response = await proxy(new NextRequest("https://apply.example/login"));
   expect(response.headers.get("location")).toBeNull();
   expect(calls).toEqual([]);
+});
+
+it("opens the workspace for a signed-in account regardless of the obsolete invitation list", async () => {
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("BETA_ALLOWED_EMAILS", "invited@example.com");
+  const response = await proxy(request("/login", false));
+  expect(response.headers.get("location")).toBe("https://apply.example/");
+});
+
+it("opens the workspace for a signed-in account without a production invitation list", async () => {
+  vi.stubEnv("BETA_ALLOWED_EMAILS", "");
+  const response = await proxy(request("/login", false));
+  expect(response.headers.get("location")).toBe("https://apply.example/");
 });

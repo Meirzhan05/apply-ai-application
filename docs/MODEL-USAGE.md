@@ -1,6 +1,6 @@
 # Model usage
 
-`/usage` shows the signed-in owner's model reports, including failed requests and work whose application is now cancelled. An invited account explicitly listed in the server-only `USAGE_OPERATOR_USER_IDS` setting can inspect another owner's view with `/usage?userId=<owner Auth UUID>`. A client role flag grants no access. The API uses verified sign-in identity, never user metadata, and responses are not cached.
+`/usage` shows the signed-in owner's model reports, including failed requests and work whose application is now cancelled. A signed-in account explicitly listed in the server-only `USAGE_OPERATOR_USER_IDS` setting can inspect another owner's view with `/usage?userId=<owner Auth UUID>`. A client role flag grants no access. The API uses verified sign-in identity, never user metadata, and responses are not cached.
 
 The independent `model_usage_records` ledger records an invocation before calling OpenAI, then publishes its provider response identity, usage and outcome. Only server workers can access the table/RPC. Owner-state compare-and-swap callbacks do not contain provider or ledger calls. Replayed invocation reports update the original row; report reading deduplicates repeated provider response identities and prefers fuller measurements. A provider retry that returns a new response remains a separate invocation. SDK retries are disabled so hidden retries cannot silently evade attribution.
 

@@ -15,9 +15,6 @@ export async function currentUserId(): Promise<string> {
   const client = await serverSupabase();
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) throw new Error("AUTH_REQUIRED");
-  const allowed = (process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
-  if (process.env.NODE_ENV === "production" && allowed.length === 0) throw new Error("PRIVATE_BETA_NOT_CONFIGURED");
-  if (allowed.length && !allowed.includes(data.user.email?.toLowerCase() || "")) throw new Error("This private beta account has not been invited yet.");
   return data.user.id;
 }
 

@@ -184,6 +184,24 @@ export default function Dashboard() {
         {error ? (
           <div className="errorbox">
             {error} <a href="/login">Sign in</a>
+            <button
+              className="signout"
+              disabled={busy === "signout"}
+              onClick={async () => {
+                setBusy("signout");
+                try {
+                  const { error: signOutError } = await browserSupabase().auth.signOut({ scope: "local" });
+                  if (signOutError) throw signOutError;
+                  router.replace("/login");
+                  router.refresh();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Could not sign out. Please try again.");
+                  setBusy("");
+                }
+              }}
+            >
+              {busy === "signout" ? "Signing out…" : "Use another account"}
+            </button>
           </div>
         ) : (
           <p>Opening your workspace…</p>
