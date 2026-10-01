@@ -9,6 +9,20 @@ import { appendDiscoveryEvent, enqueueStrongMatch } from "../src/lib/discovery";
 import { queueMatchAssessment } from "../src/lib/match-queue";
 import { controlledFixtureAllowsJob } from "../src/lib/controlled-tests";
 
+class MatchingContextChanged extends Error {
+  constructor(readonly reason: "profile_changed" | "authorization_changed" | "job_closed" | "job_changed" | "controlled_scope_changed") {
+    super(reason);
+  }
+}
+
+function authorizationContext(profile: Awaited<ReturnType<typeof loadState>>["profile"]): string {
+  return JSON.stringify({
+    status: profile.automationAuthorization?.status ?? null,
+    version: profile.automationAuthorization?.version ?? null,
+    facts: profile.facts.map((fact) => ({ id: fact.id, text: fact.text, verified: fact.verified })),
+  });
+}
+
 function pendingJobs(state: Awaited<ReturnType<typeof loadState>>) {
   return state.jobs
     .filter((job) => job.active && controlledFixtureAllowsJob(state, state.profile.id, job) && !state.matchCache?.[matchKey(state.profile, job)] && assessMatchLocally(state.profile, job).category !== "excluded")
@@ -35,6 +49,7 @@ export const assessUserMatches = task({
       });
     }
     const profileVersion = state.profile.updatedAt;
+    const initialAuthorizationContext = authorizationContext(state.profile);
     const pending = pendingJobs(state).slice(0, 12);
     let assessed = 0;
     let budgetExhausted = false;
@@ -48,7 +63,30 @@ export const assessUserMatches = task({
         0.005,
       );
       if (!allowed) { budgetExhausted = true; break; }
-      const assessment = await withModelUsageContext({ userId, runId, jobId: job.id, backgroundJobId: `matching:${job.id}` }, () => assessMatch(state.profile, job));
+      let assessment;
+      try {
+        assessment = await withModelUsageContext({ userId, runId, jobId: job.id, backgroundJobId: `matching:${job.id}` }, () => assessMatch(state.profile, job, {
+          // This runs after the usage ledger's started record is persisted and
+          // immediately before the provider request. Keep the recommendation
+          // matcher available for profiles that were already paused, while
+          // stopping a pause/revocation or posting change that arrived during
+          // this paid operation's setup.
+          beforeModelCall: async () => {
+            const current = await loadState(userId);
+            if (current.profile.updatedAt !== profileVersion || authorizationContext(current.profile) !== initialAuthorizationContext)
+              throw new MatchingContextChanged(current.profile.updatedAt !== profileVersion ? "profile_changed" : "authorization_changed");
+            const currentJob = current.jobs.find((item) => item.id === job.id);
+            if (!currentJob?.active) throw new MatchingContextChanged("job_closed");
+            if (matchKey(current.profile, currentJob) !== matchKey(state.profile, job))
+              throw new MatchingContextChanged("job_changed");
+            if (!controlledFixtureAllowsJob(current, userId, currentJob))
+              throw new MatchingContextChanged("controlled_scope_changed");
+          },
+        }));
+      } catch (error) {
+        if (error instanceof MatchingContextChanged) return { assessed, stopped: error.reason };
+        throw error;
+      }
       try {
         const saved = await mutateState(userId, (current) => {
           if (current.profile.updatedAt !== profileVersion) return false;

@@ -43,6 +43,28 @@ it("keeps failed and retried background matching calls without inventing an appl
   expect(report.incompleteCostCalls).toBe(2);
 });
 
+it("runs the matching freshness guard after the started usage record is persisted", async () => {
+  const state = initialDemoState();
+  const userId = randomUUID();
+  state.profile.id = userId;
+  state.profile.workAuthorization = "Authorized to work in the US";
+  const job = state.jobs[0];
+  parse.mockResolvedValueOnce({ id: "guarded-match", model: "gpt-6-luna", service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: { category: "strong", score: 90, evidence: [{ jobQuote: job.title, factIds: [state.profile.facts[0].id] }], gaps: [], uncertainty: [] } });
+  let recordsBeforeProvider = 0;
+  const result = await assessMatch(state.profile, job, { beforeModelCall: async () => { recordsBeforeProvider = (await readModelUsage(userId)).records.length; } });
+  expect(recordsBeforeProvider).toBe(1);
+  expect(result.model).toBe("gpt-6-luna");
+  expect(parse).toHaveBeenCalledOnce();
+});
+
+it("does not turn a failed matching freshness guard into a cached fallback", async () => {
+  const state = initialDemoState();
+  state.profile.id = randomUUID();
+  await expect(assessMatch(state.profile, state.jobs[0], { beforeModelCall: () => { throw new Error("matching context changed"); } })).rejects.toThrow("matching context changed");
+  expect(parse).not.toHaveBeenCalled();
+  expect((await readModelUsage(state.profile.id)).records[0].status).toBe("failed");
+});
+
 it("keeps an unknown failed replay shaped with nullable fields", async () => {
   const userId = randomUUID();
   const id = randomUUID();
