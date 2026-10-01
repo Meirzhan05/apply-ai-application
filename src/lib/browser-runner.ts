@@ -12,7 +12,7 @@ import { reviewedPacketFile } from "@/lib/packet-files";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
-import { assertAutonomous, exactApplicationUrl } from "@/lib/autonomous-policy";
+import { assertAutonomous, autonomyProfileHash, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
 import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
@@ -360,6 +360,23 @@ function deterministicKey(
 
 function sensitiveQuestion(label: string): boolean {
   return /authoriz|sponsor|visa|citizenship|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
+}
+
+// Owner-confirmed screening values are separate from AI essay authorization.
+// They may only be applied when the fresh page exposes the same control and
+// option set at the same authorized destination.
+function humanAnswerForField(field: InspectedField, application: Application, profile: Profile, targetUrl: string) {
+  return application.autonomousHumanAnswers?.find((answer) =>
+    answer.userId === application.userId &&
+    answer.applicationId === application.id &&
+    answer.profileHash === autonomyProfileHash(profile) &&
+    answer.targetUrl === targetUrl &&
+    answer.question.identifier === field.identifier &&
+    answer.question.kind === field.kind &&
+    answer.question.label === field.label &&
+    answer.question.options.length === field.options.length &&
+    answer.question.options.every((option, index) => option === field.options[index])
+  );
 }
 
 function matchingOption(label: string, value: string, options: string[]): string | undefined {
@@ -771,8 +788,11 @@ export async function prepareBrowser(
         if (!field.required && !field.value.trim()) continue;
         throw new Error("The authorized essay control changed before writing.");
       }
+      const humanAnswer = application.autonomousAuthorization
+        ? humanAnswerForField(field, application, profile, page.url())
+        : undefined;
       const key = deterministicKey(field, application) ?? ai.get(field.index);
-      const value = key ? values[key] : undefined;
+      const value = humanAnswer?.value ?? (key ? values[key] : undefined);
       if (field.kind === "radio") {
         if (handledRadioGroups.has(field.identifier)) continue;
         handledRadioGroups.add(field.identifier);
@@ -1044,7 +1064,15 @@ export async function submitBrowser(application: Application, options?: { profil
     if ((clicked && !keepSession) || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (clicked && !keepSession) {
       if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await cancelBrowser(application);
+      try { await cancelBrowser(application, { strict: true }); }
+      catch (error) {
+        if (application.browserSessionId) application.browserReleasePending = {
+          sessionId: application.browserSessionId,
+          requestedAt: new Date().toISOString(),
+          attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
+          lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
+        };
+      }
     }
   }
 }
@@ -1069,12 +1097,20 @@ export async function checkBrowserSubmission(application: Application): Promise<
     if (finished || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (finished) {
       if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await cancelBrowser(application);
+      try { await cancelBrowser(application, { strict: true }); }
+      catch (error) {
+        if (application.browserSessionId) application.browserReleasePending = {
+          sessionId: application.browserSessionId,
+          requestedAt: new Date().toISOString(),
+          attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
+          lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
+        };
+      }
     }
   }
 }
 
-export async function cancelBrowser(application: Application): Promise<void> {
+export async function cancelBrowser(application: Application, options?: { strict?: boolean }): Promise<void> {
   if (!application.browserSessionId) return;
   const local = localBrowsers.get(application.browserSessionId);
   if (local) {
@@ -1083,5 +1119,10 @@ export async function cancelBrowser(application: Application): Promise<void> {
   }
   const owner = { userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.runToken ?? application.browserQuestionRun?.token ?? application.id };
   const release = () => releaseRemoteBrowser(application);
-  await (browserUsageContext() ? release() : withBrowserUsageContext(owner, release)).catch(() => undefined);
+  try {
+    const report = await (browserUsageContext() ? release() : withBrowserUsageContext(owner, release));
+    if (options?.strict && report && report.status !== "stopped") throw new Error("The browser provider did not confirm the session stopped.");
+  } catch (error) {
+    if (options?.strict) throw error;
+  }
 }

@@ -4,6 +4,7 @@ import { publicState } from "@/lib/public-state";
 import { compareRankedJobs } from "@/lib/ranking";
 import { dedupeJobs } from "@/lib/sources";
 import { digestDay } from "@/lib/digest-time";
+import { activeApplicationBlockers } from "@/lib/application-blockers";
 
 async function send(to: string, subject: string, html: string, idempotencyKey: string): Promise<void> {
   const key = process.env.RESEND_API_KEY;
@@ -85,10 +86,14 @@ export async function sendDigest(
         `<li><a href="${escape(job.url)}">${escape(job.title)}</a> at ${escape(job.company)} · ${escape(job.location)} · ${{ strong: "Strong match", possible: "Possible match", uncertain: "Uncertain", excluded: "Excluded" }[assessments.get(job.id)!.category]}</li>`,
     )
     .join("");
+  const blockerItems = state.applications
+    .flatMap((app) => activeApplicationBlockers(app).map((blocker) => `<li>${escape(blocker.message)}</li>`))
+    .slice(0, 12)
+    .join("");
   await send(
     state.profile.email,
     `Apply: ${matches.length ? `${matches.length} new role${matches.length === 1 ? "" : "s"}${pending.length ? ", " : ""}` : ""}${pending.length ? `${pending.length} action${pending.length === 1 ? "" : "s"} needed` : ""}`,
-    `${matches.length ? `<h2>New opportunities</h2><ul>${items}</ul>` : ""}${pending.length ? `<p>${pending.length} application${pending.length === 1 ? " needs" : "s need"} your review.</p>` : ""}<p><a href="${escape(appUrl())}">Open Apply</a></p>`,
+    `${matches.length ? `<h2>New opportunities</h2><ul>${items}</ul>` : ""}${pending.length ? `<p>${pending.length} application${pending.length === 1 ? " needs" : "s need"} your review.</p>` : ""}${blockerItems ? `<h2>Blocked applications</h2><ul>${blockerItems}</ul>` : ""}<p><a href="${escape(appUrl())}">Open Apply</a></p>`,
     `digest:${state.profile.id}:${digestDay(asOf)}`,
   );
   return true;

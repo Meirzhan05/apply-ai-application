@@ -35,6 +35,8 @@ import {
 } from "@/lib/repository";
 import { canonicalJobUrl } from "@/lib/sources";
 import { newImportedJob, refreshImportedJobs } from "@/lib/import-jobs";
+import { resumeBlockedApplication } from "@/lib/application-blockers";
+import { recordApplicationBlocker } from "@/lib/application-blockers";
 import {
   activateAutomation,
   bumpAutomationVersion,
@@ -407,6 +409,20 @@ async function perform(
     await writeBrowserQuestionEssays(userId, text(payload.applicationId, 100), text(payload.formHash, 100));
     return;
   }
+  if (action === "resolveBlocker" || action === "resumeBlocked") {
+    const answer = payload.answer === undefined ? undefined : z.object({
+      question: z.object({
+        identifier: z.string().min(1).max(200),
+        label: z.string().min(1).max(500),
+        kind: z.string().min(1).max(40),
+        options: z.array(z.string().max(300)).max(100),
+      }),
+      value: z.string().min(1).max(500),
+    }).parse(payload.answer);
+    const freshReconstruct = payload.freshReconstruct === undefined ? false : z.boolean().parse(payload.freshReconstruct);
+    await resumeBlockedApplication(userId, text(payload.applicationId, 100), text(payload.blockerId, 100), answer, { freshReconstruct });
+    return;
+  }
   if (action === "resumeBrowser") {
     const appId = text(payload.applicationId, 100);
     const state = await loadState(userId);
@@ -487,6 +503,13 @@ async function perform(
       const target = findApp(current, appId, userId);
       if (target.submissionAttemptedAt) throw new Error("A submission was already attempted; its outcome must be observed.");
       target.queuedRun = undefined;
+      for (const blocker of target.blockers ?? []) {
+        if (blocker.progress === "blocked" || blocker.progress === "resuming") {
+          blocker.progress = "resolved";
+          blocker.resolvedAt = new Date().toISOString();
+          blocker.updatedAt = blocker.resolvedAt;
+        }
+      }
       transition(
         target,
         [
@@ -508,7 +531,21 @@ async function perform(
         findJob(current, target).title,
       );
     });
-    await cancelBrowser(app);
+    let released = true;
+    const releaseApp = { ...app, browserSessionId: app.browserSessionId ?? app.browserReleasePending?.sessionId };
+    try { await cancelBrowser(releaseApp, { strict: true }); }
+    catch { released = false; }
+    await mutateState(userId, (current) => {
+      const target = findApp(current, appId, userId);
+      if (released) {
+        target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
+        target.browserReleasePending = undefined;
+      } else if (releaseApp.browserSessionId) {
+        target.browserSessionId = releaseApp.browserSessionId;
+        target.browserReleasePending = { sessionId: releaseApp.browserSessionId, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the browser release." };
+        recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The cancelled application will remain held until this session is stopped.", { sessionId: releaseApp.browserSessionId });
+      }
+    });
     return;
   }
   if (action === "reviewManualFailure") {
@@ -581,7 +618,7 @@ export async function POST(request: Request) {
               : app?.status === "uncertain"
                 ? "Check an uncertain application result"
                 : null;
-      if (message)
+      if (message && !app?.autonomousAuthorization)
         await sendActionNeeded(state, message).catch(() => undefined);
     }
     if (action === "cancel" || action === "submit") await dispatchUserQueue(userId);

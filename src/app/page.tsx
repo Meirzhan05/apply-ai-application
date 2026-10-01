@@ -70,6 +70,7 @@ export default function Dashboard() {
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerDraft, setAnswerDraft] = useState<ScreeningAnswer[]>([]);
+  const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -168,6 +169,9 @@ export default function Dashboard() {
     .filter((event) => event.kind === "arrived" || event.kind === "matched" || event.kind === "queued")
     .slice(-3)
     .reverse();
+  const blockers = applications.flatMap((app) => (app.blockers ?? [])
+    .filter((blocker) => (blocker.progress === "blocked" || blocker.progress === "resuming" || (blocker.reviewOnly && blocker.progress === "expired")) && blocker.userId === data?.profile.id)
+    .map((blocker) => ({ blocker, app })));
 
   if (!data)
     return (
@@ -642,6 +646,39 @@ export default function Dashboard() {
             <p className="subheading">
               {applications.some((app) => app.autonomousAuthorization) ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
+            {blockers.length > 0 && (
+              <section className="next-action" aria-label="Blocked applications" aria-live="polite">
+                <div className="next-icon"><CircleHelp size={20} /></div>
+                <div>
+                  <strong>{blockers.length} blocker{blockers.length === 1 ? "" : "s"} need your attention</strong>
+                  <div className="blocker-list">
+                    {blockers.map(({ blocker, app }) => {
+                      const jobTitle = jobs.find((job) => job.id === app.jobId)?.title ?? "Application";
+                      const question = blocker.context?.observedQuestion;
+                      const draft = blockerAnswers[blocker.id] ?? "";
+                      const canAnswer = Boolean(question) && !blocker.reviewOnly && blocker.reason === "missing_answer";
+                      const handoff = ["login", "verification", "unfamiliar_control"].includes(blocker.reason);
+                      return <div className="blocker-row" key={blocker.id}>
+                        <div className="blocker-copy">
+                          <strong>{jobTitle}</strong>
+                          <span className="blocker-reason">{blocker.reviewOnly ? "review only" : blocker.reason.replaceAll("_", " ")}</span>
+                          <span>{blocker.message}</span>
+                          {question && <small>Observed {question.kind} control “{question.label}”{question.options.length ? ` · options: ${question.options.join(", ")}` : ""}</small>}
+                        </div>
+                        {!blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
+                          {question!.options.length ? <select aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))}>
+                            <option value="">Choose an answer</option>
+                            {question!.options.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select> : <input aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))} placeholder="Your confirmed answer" />}
+                          <button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming" || !draft.trim()} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, answer: { question: { identifier: question!.identifier, label: question!.label, kind: question!.kind, options: question!.options }, value: draft } })}>Save answer and resume</button>
+                          <button className="text-button" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, freshReconstruct: true })}>Refresh question</button>
+                        </div> : handoff ? <span className="blocker-handoff">Continue with browser takeover</span> : !blocker.reviewOnly && blocker.reason !== "resource_hold" ? <button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id })}>Resolve and resume</button> : null}
+                      </div>;
+                    })}
+                  </div>
+                </div>
+              </section>
+            )}
             <div className="app-layout">
               <div className="app-list">
                 {applications.length ? (

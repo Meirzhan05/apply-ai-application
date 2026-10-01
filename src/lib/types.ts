@@ -256,6 +256,24 @@ export interface BrowserQuestion {
   value: string;
 }
 
+/** An applicant-confirmed value bound to one observed employer control. */
+export interface AutonomousHumanAnswer {
+  version: 1;
+  userId: string;
+  applicationId: string;
+  targetUrl: string;
+  profileHash: string;
+  formHash: string;
+  question: {
+    identifier: string;
+    label: string;
+    kind: string;
+    options: string[];
+  };
+  value: string;
+  confirmedAt: string;
+}
+
 export interface BrowserAnswerApproval {
   version: 1;
   userId: string;
@@ -295,6 +313,46 @@ export interface Approval {
 
 export type BrowserProvider = "browser-use" | "browserbase";
 
+export type ApplicationBlockerReason =
+  | "missing_answer"
+  | "login"
+  | "verification"
+  | "disabled_material"
+  | "unfamiliar_control"
+  | "upload_failure"
+  | "navigation"
+  | "resource_hold"
+  | "other";
+
+export type ApplicationBlockerProgress = "blocked" | "resolved" | "resuming" | "expired";
+
+export interface ApplicationBlocker {
+  id: string;
+  applicationId: string;
+  userId: string;
+  reason: ApplicationBlockerReason;
+  message: string;
+  progress: ApplicationBlockerProgress;
+  createdAt: string;
+  updatedAt: string;
+  context?: {
+    formHash?: string;
+    packetHash?: string;
+    targetUrl?: string;
+    sessionId?: string;
+    fieldIdentifiers?: string[];
+    observedQuestion?: {
+      identifier: string;
+      label: string;
+      kind: string;
+      options: string[];
+      value: string;
+    };
+  };
+  resolvedAt?: string;
+  reviewOnly?: boolean;
+}
+
 export interface Application {
   id: string;
   userId: string;
@@ -330,12 +388,21 @@ export interface Application {
   browserAnswerApprovals?: BrowserAnswerApproval[];
   browserQuestionRun?: { token: string; startedAt: string; kind: "answers" | "essays" };
   browserSessionCreatedAt?: string;
+  browserReleasePending?: {
+    sessionId: string;
+    requestedAt: string;
+    attempts: number;
+    lastError?: string;
+  };
   browserConnectUrl?: string;
   browserLiveUrl?: string;
   needsCoverLetter?: boolean;
   confirmation?: string;
   submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string };
   error?: string;
+  blockers?: ApplicationBlocker[];
+  /** Separate from packet answers and essay authorization. */
+  autonomousHumanAnswers?: AutonomousHumanAnswer[];
   createdAt: string;
   updatedAt: string;
   submittedAt?: string;
@@ -382,7 +449,7 @@ export interface Application {
   runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
-  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; essayOnly?: boolean; verification?: boolean; verified?: boolean };
+  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean; factualOnly?: boolean; essayOnly?: boolean; verification?: boolean; verified?: boolean };
 }
 
 export interface ActivityEvent {

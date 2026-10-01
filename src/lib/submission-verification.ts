@@ -5,6 +5,7 @@ import { mutateState } from "@/lib/repository";
 import { transition } from "@/lib/workflow";
 import { withBrowserUsageContext } from "@/lib/browser-usage";
 import type { Application } from "@/lib/types";
+import { recordReviewOnlyBlocker } from "@/lib/application-blockers";
 
 function awaiting(app: Application | undefined, userId: string): asserts app is Application {
   if (!app || app.userId !== userId || !["awaiting_verification", "uncertain"].includes(app.status) || !app.submissionVerification ||
@@ -25,7 +26,11 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
   try {
     const expired = Boolean(app.browserSessionExpiresAt && Date.parse(app.browserSessionExpiresAt) <= Date.now());
     const result = stop || expired ? undefined : await checkBrowserSubmission(app);
-    if (!result) await cancelBrowser(app).catch(() => undefined);
+    let released = true;
+    if (!result || !result.verification) {
+      try { await cancelBrowser(app, { strict: true }); }
+      catch { released = false; }
+    }
     await mutateState(userId, (state) => {
       const target = state.applications.find(item => item.id === applicationId && item.userId === userId);
       awaiting(target, userId);
@@ -48,7 +53,11 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
         target.confirmation = result?.evidence || (expired ? "The verification browser expired before confirmation. Check the employer receipt before taking further action." : "Verification was stopped before confirmation. Check the employer receipt before taking further action.");
         target.submissionVerification = undefined;
       }
-      target.browserSessionId = target.browserLiveUrl = target.browserConnectUrl = undefined;
+      if (released) target.browserSessionId = target.browserLiveUrl = target.browserConnectUrl = undefined;
+      else {
+        target.browserReleasePending = { sessionId: app.browserSessionId!, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the verification browser release." };
+        recordReviewOnlyBlocker(target, "resource_hold", "The verification browser release is still pending. Review the saved receipt; no submission retry will occur.", { sessionId: app.browserSessionId, targetUrl: app.form?.url });
+      }
       state.activity.unshift({ id: newId(), at: new Date().toISOString(), label: result?.confirmed ? "Submission confirmed" : "Verification ended", detail: target.confirmation! });
     });
   } catch {

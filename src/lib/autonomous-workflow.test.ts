@@ -2,7 +2,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
-const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), submit: vi.fn(), cancel: vi.fn(), parse: vi.fn() }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), budget: true, beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
   return { ...fs, writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
@@ -20,19 +20,20 @@ vi.mock("@/lib/repository", () => ({ isDemo: () => false, currentUserId: async (
 vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => fixture.budget, reserveQueuedBudget: async (_user: string, app: string, queued: string, projected: number) => fixture.budget ? { queuedId: queued, reservationId: `queued:${queued}`, month: "2026-10", ownerId: "owner", applicationId: app, projectedUsd: projected } : null, releaseQueuedBudget: async () => true, markQueuedBudgetClaimed: async () => true, markQueuedBudgetTerminal: async () => true }));
 vi.mock("openai", () => ({ default: class { responses = { parse: fixture.parse }; } }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-controlled"), source: "controlled compiler" }) }));
-vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: vi.fn(), repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
+vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
 import { initialDemoState } from "@/lib/demo-data";
 import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { POST } from "@/app/api/actions/route";
+import { recordApplicationBlocker } from "@/lib/application-blockers";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
 async function step() { const next = fixture.pending.shift()!; if (next.task === "draft-application-packet") await runDraft(next.payload); else if (next.task === "fill-application-form") await runFill(next.payload); else if (next.task === "submit-application-form") await runSubmission(next.payload); return next; }
 async function progress() { while (fixture.pending.length) await step(); }
 beforeEach(() => {
-  vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.beforeUsageStart = undefined;
+  vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.beforeUsageStart = undefined;
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
   saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
@@ -50,6 +51,199 @@ it("completes a known-answer application from one action without legacy approval
   expect(app.submissionReceipt?.text).toBe("Application received");
   expect(app.autonomousAuthorization).toMatchObject({ profileVersion: fixture.state!.profile.automationVersion, targetUrl: fixture.state!.jobs[0].applyUrl, packetHash: app.packetHash, formHash: app.form?.hash });
   expect(app.packet?.answers).toEqual([]);
+});
+it("keeps a confirmed receipt and visible release hold when provider stop is still active", async () => {
+  fixture.submit.mockImplementationOnce(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => {
+    const baseline = { version: 1 as const, kind: "captcha" as const, sessionId: app.browserSessionId!, targetUrl: app.form!.url, attemptedAt: new Date().toISOString(), beforeHash: "baseline", beforeHadConfirmation: false };
+    expect(await options.beforeAttempt(baseline)).toBe(true);
+    app.browserReleasePending = { sessionId: app.browserSessionId!, requestedAt: new Date().toISOString(), attempts: 1, lastError: "provider still active" };
+    return { confirmed: true, evidence: "Application received", receipt: { version: 1, url: app.form!.url, text: "Application received", capturedAt: new Date().toISOString() } };
+  });
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  expect(app.status).toBe("submitted");
+  expect(app.submissionReceipt?.text).toBe("Application received");
+  expect(app.browserReleasePending?.sessionId).toBe(app.browserSessionId);
+  expect(app.blockers?.some((item) => item.reason === "resource_hold" && item.progress === "blocked")).toBe(true);
+  expect(fixture.submit).toHaveBeenCalledTimes(1);
+});
+it("resolves a missing-answer blocker through the public action and rebuilds the same application", async () => {
+  fixture.budget = false;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const app = fixture.state!.applications[0];
+  app.status = "needs_user_action";
+  app.queuedRun = undefined;
+  const blocker = recordApplicationBlocker(app, "missing_answer", "Provide the missing graduation year");
+  fixture.state!.profile.graduationYear = "2027";
+  fixture.budget = true;
+  const response = await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id });
+  expect(response.status).toBe(200);
+  await progress();
+  expect(fixture.state!.applications[0].id).toBe(app.id);
+  expect(fixture.state!.applications[0].status).toBe("submitted");
+  expect(fixture.state!.applications[0].approvals).toEqual([]);
+  expect(fixture.state!.applications[0].blockers?.find((item) => item.id === blocker.id)?.progress).toBe("resolved");
+});
+it("lets the owner answer an observed required select and resumes the same application", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    result.needsAction = true;
+    result.form.readyToSubmit = false;
+    result.form.fields.push({ label: "Favorite snack", identifier: "snack", kind: "select", required: true, value: "", options: ["Tea", "Coffee"], valid: false });
+    result.form.blockers = ["Correct or complete the field: Favorite snack"];
+    return result;
+  });
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    const answer = args[0].autonomousHumanAnswers?.find((item: { question: { identifier: string } }) => item.question.identifier === "snack");
+    if (answer) {
+      result.form.fields.push({ label: "Favorite snack", identifier: "snack", kind: "select", required: true, value: answer.value, options: ["Tea", "Coffee"], valid: true });
+    }
+    return result;
+  });
+  fixture.budget = true;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  const blocker = app.blockers?.find((item) => item.reason === "missing_answer");
+  expect(blocker?.context?.observedQuestion).toMatchObject({ identifier: "snack", options: ["Tea", "Coffee"] });
+  const response = await action("resolveBlocker", {
+    applicationId: app.id,
+    blockerId: blocker!.id,
+    answer: { question: { identifier: "snack", label: "Favorite snack", kind: "select", options: ["Tea", "Coffee"] }, value: "Coffee" },
+  });
+  expect(response.status).toBe(200);
+  await progress();
+  expect(fixture.state!.applications[0].id).toBe(app.id);
+  expect(fixture.state!.applications[0].autonomousHumanAnswers?.[0].value).toBe("Coffee");
+  expect(fixture.state!.applications[0].status).toBe("submitted");
+  expect(fixture.state!.applications[0].approvals).toEqual([]);
+});
+it("refreshes a stale observed question under current authorization before accepting a new answer", async () => {
+  fixture.budget = false;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const app = fixture.state!.applications[0];
+  app.status = "needs_user_action";
+  app.queuedRun = undefined;
+  app.form = { version: 1, url: fixture.state!.jobs[0].applyUrl, fields: [{ identifier: "snack", label: "Favorite snack", kind: "select", value: "", options: ["Tea", "Coffee"], required: true, valid: false }], attachments: [], capturedAt: new Date().toISOString(), hash: "old-question", readyToSubmit: false };
+  const blocker = recordApplicationBlocker(app, "missing_answer", "Correct or complete the field: Favorite snack", { formHash: "old-question", targetUrl: app.form.url, observedQuestion: { identifier: "snack", label: "Favorite snack", kind: "select", options: ["Tea", "Coffee"], value: "" } });
+  fixture.state!.profile.name = "Current applicant";
+  fixture.budget = true;
+  const response = await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, freshReconstruct: true });
+  expect(response.status).toBe(200);
+  expect(app.id).toBe(fixture.state!.applications[0].id);
+  expect(app.form).toBeUndefined();
+  expect(app.autonomousHumanAnswers).toBeUndefined();
+  expect(["drafting", "filling", "authorized_to_fill", "needs_user_action"]).toContain(fixture.state!.applications[0].status);
+});
+it("discards a previously bound answer when fresh reconstruction follows a profile change", async () => {
+  fixture.budget = false;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const app = fixture.state!.applications[0];
+  app.status = "needs_user_action";
+  app.queuedRun = undefined;
+  app.form = { version: 1, url: fixture.state!.jobs[0].applyUrl, fields: [{ identifier: "snack", label: "Favorite snack", kind: "select", value: "Coffee", options: ["Tea", "Coffee"], required: true, valid: true }], attachments: [], capturedAt: new Date().toISOString(), hash: "old-question", readyToSubmit: false };
+  app.autonomousHumanAnswers = [{ version: 1, userId: app.userId, applicationId: app.id, targetUrl: app.form.url, profileHash: app.autonomousAuthorization!.profileHash!, formHash: "old-question", question: { identifier: "snack", label: "Favorite snack", kind: "select", options: ["Tea", "Coffee"] }, value: "Coffee", confirmedAt: new Date().toISOString() }];
+  const blocker = recordApplicationBlocker(app, "missing_answer", "Correct or complete the field: Favorite snack", { formHash: "old-question", targetUrl: app.form.url, observedQuestion: { identifier: "snack", label: "Favorite snack", kind: "select", options: ["Tea", "Coffee"], value: "Coffee" } });
+  const normal = fixture.prepare.getMockImplementation()!;
+  fixture.state!.profile.name = "Current applicant";
+  fixture.budget = true;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    expect(args[0].autonomousHumanAnswers).toBeUndefined();
+    const result = await normal(...args);
+    result.needsAction = true;
+    result.form.readyToSubmit = false;
+    result.form.fields.push({ label: "Favorite snack", identifier: "snack", kind: "select", required: true, value: "", options: ["Tea", "Coffee"], valid: false });
+    result.form.blockers = ["Correct or complete the field: Favorite snack"];
+    return result;
+  });
+  expect((await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, freshReconstruct: true })).status).toBe(200);
+  await progress();
+  expect(app.autonomousHumanAnswers).toBeUndefined();
+  expect(app.blockers?.find((item) => item.id === blocker.id)?.context?.observedQuestion?.value).toBe("");
+  expect(app.status).toBe("needs_user_action");
+});
+it("parks a pre-click form drift in actionable review instead of leaving submitting", async () => {
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await step();
+  await step();
+  const app = fixture.state!.applications[0];
+  fixture.submit.mockRejectedValueOnce(new Error("FORM_CHANGED"));
+  fixture.refresh.mockResolvedValue({ ...app.form!, readyToSubmit: false, blockers: ["The employer form changed before Submit."] });
+  await step();
+  expect(app.status).toBe("needs_user_action");
+  expect(app.submissionAttemptedAt).toBeUndefined();
+  expect(app.submissionDispatch).toBeUndefined();
+  expect(app.blockers?.some((item) => /form changed/i.test(item.message))).toBe(true);
+});
+it("keeps the owner slot held when a blocked browser release is not confirmed", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    result.needsAction = true;
+    result.form.readyToSubmit = false;
+    result.form.blockers = ["Sign in to continue"];
+    return result;
+  });
+  fixture.cancel.mockRejectedValueOnce(new Error("provider release timeout"));
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  expect(app.status).toBe("needs_user_action");
+  expect(app.browserSessionId).toBe("session");
+  expect(app.browserReleasePending?.sessionId).toBe("session");
+  expect(app.blockers?.some((item) => item.reason === "resource_hold")).toBe(true);
+  expect(fixture.cancel).toHaveBeenCalledTimes(1);
+});
+it("retains an allocated session when cancellation wins before the form is durably saved", async () => {
+  const known = fixture.prepare.getMockImplementation()!;
+  fixture.prepare.mockImplementationOnce(async (...args) => {
+    const result = await known(...args);
+    fixture.state!.applications[0].status = "cancelled";
+    return result;
+  });
+  fixture.cancel.mockRejectedValueOnce(new Error("provider release timeout"));
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  await progress();
+  const app = fixture.state!.applications[0];
+  expect(app.status).toBe("cancelled");
+  expect(app.browserSessionId).toBe("session");
+  expect(app.browserReleasePending?.sessionId).toBe("session");
+  expect(app.blockers?.some((item) => item.reason === "resource_hold")).toBe(true);
+});
+it("rejects public blocker resume during a release hold, then resumes after confirmed stop", async () => {
+  fixture.budget = false;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const app = fixture.state!.applications[0];
+  app.status = "needs_user_action";
+  app.queuedRun = undefined;
+  app.browserSessionId = "remote-session";
+  app.browserReleasePending = { sessionId: "remote-session", requestedAt: new Date().toISOString(), attempts: 1 };
+  const blocker = recordApplicationBlocker(app, "missing_answer", "Provide the missing graduation year");
+  expect((await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id })).status).toBe(400);
+  expect(app.browserSessionId).toBe("remote-session");
+  expect(fixture.pending).toHaveLength(0);
+  app.browserSessionId = undefined;
+  app.browserReleasePending = undefined;
+  fixture.budget = true;
+  expect((await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id })).status).toBe(200);
+  await progress();
+  expect(app.status).toBe("submitted");
+});
+it("does not enqueue a fresh reconstruction while an allocated browser ref is awaiting release", async () => {
+  fixture.budget = false;
+  await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  const app = fixture.state!.applications[0];
+  app.status = "needs_user_action";
+  app.queuedRun = undefined;
+  app.browserSessionId = "remote-session";
+  const blocker = recordApplicationBlocker(app, "missing_answer", "Provide the missing graduation year");
+  expect((await action("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, freshReconstruct: true })).status).toBe(400);
+  expect(app.browserSessionId).toBe("remote-session");
+  expect(app.browserReleasePending).toBeUndefined();
+  expect(fixture.pending).toHaveLength(0);
 });
 it("deduplicates concurrent starts and aliased postings, and ignores replayed workers", async () => {
   const state = fixture.state!; const alias = { ...state.jobs[0], id: "alias", url: `${state.jobs[0].url}?utm_source=controlled` }; state.jobs.push(alias);
@@ -402,4 +596,54 @@ it("renders an essay-only owned receiver and accepts only the exact authorized e
     return { confirmed: true, evidence: "Application received", receipt: { version: 1, url, text: "Application received", capturedAt: new Date().toISOString() } };
   });
   await progress(); expect(state.applications[0].status).toBe("submitted"); expect(state.applications[0].controlledTest!.submissions).toBe(1);
+});
+it("renders a factual-only receiver and accepts the exact known fields once", async () => {
+  vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-signer");
+  const state = fixture.state!;
+  state.profile.id = "00000000-0000-4000-8000-000000000002";
+  state.profile.email = "cloud-submit-00000000-0000-4000-8000-000000000001@example.com";
+  const { selectApplication, setPacket, approveFill, setFormSnapshot, approveSubmit, transition } = await import("@/lib/workflow");
+  const { packetProfileHash } = await import("@/lib/drafting");
+  const { withPacketFiles } = await import("@/lib/packet-files");
+  const { issueControlledTestGrant } = await import("@/lib/controlled-tests");
+  const job = { ...state.jobs[0], url: "https://apply.example/api/internal/controlled-form", applyUrl: "https://apply.example/api/internal/controlled-form" };
+  state.jobs = [job];
+  const app = selectApplication(state, job.id, state.profile.id);
+  const issued = issueControlledTestGrant(state.profile.id, app.id);
+  const url = `${job.applyUrl}?token=${issued.token}`;
+  job.url = job.applyUrl = url;
+  app.jobSnapshot = structuredClone(job);
+  app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, factualOnly: true };
+  const fact = state.profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(state.profile, { schemaVersion: 1, version: 1, summary: "Synthetic factual receiver test", resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [], createdAt: new Date().toISOString(), model: "controlled-fixture", profileHash: packetProfileHash(state.profile) });
+  setPacket(state, app, packet);
+  approveFill(app, state.profile.id, app.packetHash!, job.applyUrl);
+  const resumeHash = createHash("sha256").update("controlled-resume").digest("hex");
+  setFormSnapshot(app, { version: 1, url, fields: [
+    { identifier: "resume", label: "Resume", kind: "file", value: "controlled-resume.pdf", required: true, valid: true, fileHashes: [`controlled-resume.pdf:17:${resumeHash}`] },
+    { identifier: "firstName", label: "First name", kind: "text", value: "Synthetic", required: true, valid: true },
+    { identifier: "lastName", label: "Last name", kind: "text", value: "Applicant", required: true, valid: true },
+    { identifier: "email", label: "Email", kind: "email", value: state.profile.email, required: true, valid: true },
+    { identifier: "sponsorship", label: "Will you now or in the future require visa sponsorship?", kind: "radio", value: "No", checked: true, required: true, valid: true },
+    { identifier: "snack", label: "Favorite snack", kind: "select", value: "Chips", options: ["Chips", "Fruit"], required: true, valid: true },
+  ], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: url, method: "post" } });
+  approveSubmit(app, state.profile.id, app.form!.hash);
+  transition(app, ["approved_to_submit"], "submitting");
+  app.submissionWorkerClaimedAt = new Date().toISOString();
+  const receiver = await import("@/app/api/internal/controlled-form/route");
+  const rendered = await (await receiver.GET(new Request(url))).text();
+  expect(rendered).toContain("Will you now or in the future require visa sponsorship?");
+  expect(rendered).toContain("Favorite snack");
+  expect(rendered).not.toContain("Why are you excited to join us?");
+  const body = (snack: string) => {
+    const data = new FormData();
+    data.set("resume", new File(["controlled-resume"], "controlled-resume.pdf", { type: "application/pdf" }));
+    data.set("firstName", "Synthetic"); data.set("lastName", "Applicant"); data.set("email", state.profile.email);
+    data.set("sponsorship", "No"); data.set("snack", snack);
+    return data;
+  };
+  expect((await receiver.POST(new Request(url, { method: "POST", headers: { Origin: "https://apply.example" }, body: body("Fruit") }))).status).toBe(409);
+  expect((await receiver.POST(new Request(url, { method: "POST", headers: { Origin: "https://apply.example" }, body: body("Chips") }))).status).toBe(200);
+  expect((await receiver.POST(new Request(url, { method: "POST", headers: { Origin: "https://apply.example" }, body: body("Chips") }))).status).toBe(409);
+  expect(state.applications[0].controlledTest!.submissions).toBe(1);
 });

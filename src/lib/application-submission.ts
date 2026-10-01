@@ -11,6 +11,32 @@ import { hasSubmissionApproval, setFormSnapshot, transition } from "@/lib/workfl
 import { validatePacket } from "@/lib/drafting";
 
 import { assertAutonomous } from "@/lib/autonomous-policy";
+import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
+import type { Application } from "@/lib/types";
+
+async function releaseSubmissionBrowser(userId: string, application: Application): Promise<boolean> {
+  const sessionId = application.browserSessionId ?? application.browserReleasePending?.sessionId;
+  if (!sessionId) return true;
+  try {
+    await cancelBrowser({ ...application, browserSessionId: sessionId }, { strict: true });
+    return true;
+  } catch (error) {
+    await mutateState(userId, (current) => {
+      const target = current.applications.find((item) => item.id === application.id && item.userId === userId);
+      if (!target) return;
+      target.browserSessionId = sessionId;
+      target.browserProvider = application.browserProvider;
+      target.browserReleasePending = {
+        sessionId,
+        requestedAt: target.browserReleasePending?.requestedAt ?? new Date().toISOString(),
+        attempts: (target.browserReleasePending?.attempts ?? 0) + 1,
+        lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
+      };
+      recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. This application remains held until the session is stopped.", { sessionId, packetHash: target.packetHash, targetUrl: target.form?.url });
+    });
+    return false;
+  }
+}
 
 export async function runSubmission({ userId, applicationId, submissionToken }: { userId: string; applicationId: string; submissionToken?: string }) {
     const claimed = await mutateState(userId, (current) => {
@@ -18,7 +44,12 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
       if (!target || target.status !== "submitting" || target.submissionWorkerClaimedAt || target.submissionAttemptedAt || (target.autonomousAuthorization ? !target.submissionDispatch?.token || target.submissionDispatch.token !== submissionToken : !hasSubmissionApproval(target))) return false;
       if (target.autonomousAuthorization) {
         try { assertAutonomous(target, current.profile, current.jobs.find((job) => job.id === target.jobId), "submit"); }
-        catch (error) { transition(target, ["submitting"], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; return false; }
+        catch (error) {
+          transition(target, ["submitting"], "needs_user_action");
+          target.error = error instanceof Error ? error.message : "Automation blocked.";
+          recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: target.form?.url });
+          return false;
+        }
       }
       target.submissionWorkerClaimedAt = new Date().toISOString();
       return true;
@@ -26,8 +57,8 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
     if (!claimed) {
       const blocked = (await loadState(userId)).applications.find((item) => item.id === applicationId && item.userId === userId);
       if (blocked?.autonomousAuthorization && blocked.status === "needs_user_action" && blocked.browserSessionId && !blocked.submissionAttemptedAt) {
-        await cancelBrowser(blocked).catch(() => undefined);
-        await mutateState(userId, (current) => { const app = current.applications.find((item) => item.id === applicationId); if (app?.status === "needs_user_action" && app.browserSessionId === blocked.browserSessionId) app.browserSessionId = app.browserConnectUrl = app.browserLiveUrl = undefined; });
+        const released = await releaseSubmissionBrowser(userId, blocked);
+        if (released) await mutateState(userId, (current) => { const app = current.applications.find((item) => item.id === applicationId); if (app?.status === "needs_user_action" && app.browserSessionId === blocked.browserSessionId) app.browserSessionId = app.browserConnectUrl = app.browserLiveUrl = undefined; });
       }
       return { skipped: true };
     }
@@ -72,8 +103,16 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
         if (result.confirmed) target.submissionVerification = undefined;
         else if (result.verification) target.submissionVerification = result.verification;
         else {
-          target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
+          if (app.browserReleasePending) {
+            target.browserSessionId = app.browserSessionId;
+            target.browserReleasePending = app.browserReleasePending;
+          } else target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
           target.submissionVerification = undefined;
+        }
+        if (app.browserReleasePending) {
+          target.browserSessionId = app.browserSessionId;
+          target.browserReleasePending = app.browserReleasePending;
+          recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The submission result is preserved while this session remains held.", { sessionId: app.browserReleasePending.sessionId, packetHash: target.packetHash, targetUrl: target.form?.url });
         }
         target.submissionAttemptedAt ??= app.submissionAttemptedAt;
         if (result.confirmed) target.submittedAt = new Date().toISOString();
@@ -86,38 +125,27 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
           detail: result.evidence,
         });
       });
-      if (result.verification && process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+      if (result.verification && !app.autonomousAuthorization && process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
         await sendActionNeeded(await loadState(userId), "Complete employer verification in your saved browser").catch(() => undefined);
       return { confirmed: result.confirmed, awaitingVerification: Boolean(result.verification) };
     } catch (error) {
       const latest = (await loadState(userId)).applications.find((item) => item.id === applicationId);
-      if (!latest?.submissionAttemptedAt && (app.autonomousAuthorization || error instanceof ApplicationEligibilityError)) {
-        await cancelBrowser(app).catch(() => undefined);
-        await mutateState(userId, (current) => {
-          const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
-          if (!target || target.status !== "submitting") return;
-          transition(target, ["submitting"], "needs_user_action");
-          target.error = `${error instanceof Error ? error.message : "Automation blocked."} No submission was attempted.`;
-          target.approvals = target.approvals.filter((approval) => approval.kind !== "submit");
-          target.form = undefined;
-          target.submissionStartedAt = target.submissionWorkerClaimedAt = undefined;
-          target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
-          current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Submission paused", detail: target.error });
-        });
-        if (process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
-          await sendActionNeeded(await loadState(userId), "A listing or required rule changed before submission").catch(() => undefined);
-        return { blocked: true, reason: error instanceof Error ? error.message : "Automation blocked." };
-      }
       if (error instanceof Error && error.message === "FORM_CHANGED") {
         const form = await refreshBrowserSnapshot(app);
+        const released = await releaseSubmissionBrowser(userId, app);
         await mutateState(userId, (current) => {
           const target = current.applications.find(
             (item) => item.id === applicationId && item.userId === userId,
           );
           if (!target || target.status !== "submitting") return;
+          transition(target, ["submitting"], "needs_user_action");
           target.submissionStartedAt = undefined;
           target.submissionWorkerClaimedAt = undefined;
+          target.submissionDispatch = undefined;
           setFormSnapshot(target, form);
+          target.error = "The employer form changed before Submit. Review the refreshed form; no click was attempted.";
+          if (target.autonomousAuthorization) recordApplicationBlocker(target, "other", target.error, { formHash: target.form?.hash, packetHash: target.packetHash, targetUrl: target.form?.url, sessionId: released ? undefined : app.browserSessionId });
+          if (released) target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
           current.activity.unshift({
             id: newId(),
             at: new Date().toISOString(),
@@ -126,6 +154,25 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
           });
         });
         return { formChanged: true };
+      }
+      if (!latest?.submissionAttemptedAt && (app.autonomousAuthorization || error instanceof ApplicationEligibilityError)) {
+        const released = await releaseSubmissionBrowser(userId, app);
+        await mutateState(userId, (current) => {
+          const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
+          if (!target || target.status !== "submitting") return;
+          transition(target, ["submitting"], "needs_user_action");
+          target.error = `${error instanceof Error ? error.message : "Automation blocked."} No submission was attempted.`;
+          if (target.autonomousAuthorization) recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: target.form?.url });
+          target.approvals = target.approvals.filter((approval) => approval.kind !== "submit");
+          target.form = undefined;
+          target.submissionStartedAt = target.submissionWorkerClaimedAt = undefined;
+          target.submissionDispatch = undefined;
+          if (released) target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
+          current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Submission paused", detail: target.error });
+        });
+        if (!app.autonomousAuthorization && process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+          await sendActionNeeded(await loadState(userId), "A listing or required rule changed before submission").catch(() => undefined);
+        return { blocked: true, reason: error instanceof Error ? error.message : "Automation blocked." };
       }
       await mutateState(userId, (current) => {
         const target = current.applications.find(
@@ -146,7 +193,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
           });
         }
       });
-      if (process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+      if (!app.autonomousAuthorization && process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
         await sendActionNeeded(
           await loadState(userId),
           "Check an uncertain application result",

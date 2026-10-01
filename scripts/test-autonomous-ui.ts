@@ -17,9 +17,18 @@ async function main() {
     for (const [device, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]] as const) {
       const page = await browser.newPage({ viewport: { width, height } }); const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       await page.route("**/api/state", (route) => route.fulfill({ json: publicState(state) })); await page.route("**/api/status", (route) => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
+      await page.route("**/api/actions", async (route) => {
+        if (route.request().method() === "POST") {
+          const body = route.request().postDataJSON() as { action?: string; payload?: { answer?: { value?: string } } };
+          assert.equal(body.action, "resolveBlocker");
+          assert.equal(body.payload?.answer?.value, "Coffee");
+        }
+        await route.fulfill({ json: { ok: true } });
+      });
       for (const [status, outcome] of [["selected", "Queued"], ["drafting", "Processing"], ["needs_user_action", "Blocked"], ["submitted", "Submitted"], ["uncertain", "Uncertain"], ["cancelled", "Cancelled"]] as Array<[ApplicationStatus, string]>) {
         app.status = status; app.queuedRun = status === "selected" ? { id: "saved", kind: "draft", reason: "waiting", requestedAt: new Date().toISOString() } : undefined;
         app.error = status === "needs_user_action" ? "This form requires a cover letter, but your cover-letter setting is disabled." : undefined;
+        app.blockers = status === "needs_user_action" ? [{ id: "blocker-ui", applicationId: app.id, userId: app.userId, reason: "missing_answer", message: "Correct or complete the field: Favorite snack", progress: "blocked", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), context: { formHash: "form-ui", targetUrl: state.jobs[0].applyUrl, observedQuestion: { identifier: "snack", label: "Favorite snack", kind: "select", options: ["Tea", "Coffee"], value: "" } } }] : [];
         app.confirmation = status === "submitted" ? "Confirmation visible at the controlled receiver" : undefined;
         app.submissionMaterials = status === "submitted" ? { resumeMode: "original", coverLetterMode: "required-only", capturedAt: new Date().toISOString(), files: [
           { kind: "resume", filename: "My original résumé.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 2468, sha256: "a".repeat(64), factIds: [] },
@@ -30,6 +39,10 @@ async function main() {
         await page.getByLabel("Automatic application outcome").waitFor(); assert.equal(await page.locator(".status-pill").innerText(), outcome);
         assert.equal(await page.getByRole("button", { name: /Approve|Submit application|Generate cover letter/ }).count(), 0, "Automatic outcomes must not require review approvals");
         if (status === "needs_user_action") assert.equal(await page.getByText(app.error!, { exact: true }).isVisible(), true);
+        if (status === "needs_user_action") {
+          await page.getByLabel("Answer Favorite snack for Junior Product Analyst").selectOption("Coffee");
+          await page.getByRole("button", { name: "Save answer and resume", exact: true }).click();
+        }
         if (status === "submitted") {
           await page.getByText("View materials used for this attempt", { exact: true }).click();
           assert.equal(await page.getByText("Original uploaded résumé · Cover letters: required-only", { exact: true }).isVisible(), true);

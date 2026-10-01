@@ -3,7 +3,7 @@ import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
 import { withPacketFiles } from "@/lib/packet-files";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
-import { dispatchUserQueue, queueApplicationRun } from "@/lib/application-queue";
+import { dispatchUserQueue, hasActiveBrowser, queueApplicationRun } from "@/lib/application-queue";
 
 const mocks = vi.hoisted(() => ({ state: undefined as unknown as AppState, budget: true, release: vi.fn(), claim: vi.fn(), terminal: vi.fn(), trigger: vi.fn(), draft: vi.fn(), fill: vi.fn(), queue: Promise.resolve() }));
 vi.mock("@/lib/repository", () => ({
@@ -90,5 +90,18 @@ describe("durable application queue", () => {
     expect(mocks.release).toHaveBeenCalledWith(expect.objectContaining({ queuedId: "terminal", month: "2026-10" }));
     expect(app.budgetReservation?.status).toBe("released");
     expect(mocks.trigger).not.toHaveBeenCalled();
+  });
+  it("keeps a provider release hold counted even after cancellation", () => {
+    const held = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
+    held.status = "cancelled";
+    held.browserSessionId = "remote-session";
+    held.browserReleasePending = { sessionId: "remote-session", requestedAt: new Date().toISOString(), attempts: 1 };
+    expect(hasActiveBrowser(mocks.state, "other")).toBe(true);
+  });
+  it("keeps an orphan release tombstone counted until reconcile confirms stop", () => {
+    const held = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
+    held.status = "cancelled";
+    held.browserReleasePending = { sessionId: "orphaned-session", requestedAt: new Date().toISOString(), attempts: 2 };
+    expect(hasActiveBrowser(mocks.state, "other")).toBe(true);
   });
 });
