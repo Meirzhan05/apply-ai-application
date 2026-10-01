@@ -3,6 +3,7 @@ import { cancelBrowser, checkBrowserSubmission } from "@/lib/browser-runner";
 import { remoteBrowserStatus } from "@/lib/browser-provider";
 import { mutateState } from "@/lib/repository";
 import { transition } from "@/lib/workflow";
+import { withBrowserUsageContext } from "@/lib/browser-usage";
 import type { Application } from "@/lib/types";
 
 function awaiting(app: Application | undefined, userId: string): asserts app is Application {
@@ -53,7 +54,7 @@ export async function checkSubmissionResult(userId: string, applicationId: strin
   } catch {
     // A transient read failure does not authorize another Submit click or
     // destroy an otherwise active browser. Only a known stopped session ends it.
-    const stopped = app.browserSessionId?.startsWith("local-") ? false : await remoteBrowserStatus(app).then(status => status === "stopped").catch(() => false);
+    const stopped = app.browserSessionId?.startsWith("local-") ? false : await withBrowserUsageContext({ userId, applicationId, jobId: app.jobId, runId: app.runToken ?? app.browserQuestionRun?.token ?? token }, () => remoteBrowserStatus(app)).then(status => status === "stopped").catch(() => false);
     await mutateState(userId, (state) => {
       const target = state.applications.find(item => item.id === applicationId && item.userId === userId);
       if (target?.submissionVerificationCheck?.token !== token) return;

@@ -23,13 +23,20 @@ describe("Browser Use Cloud session lifecycle", () => {
     expect(await createRemoteBrowser("https://employer.example/apply")).toMatchObject({ captchaSolving: false });
     expect(JSON.parse(fetch.mock.calls[0][1].body).solveCaptchas).toBe(false);
   });
+  it("preserves explicit provider zeroes and leaves omitted usage fields unknown", async () => {
+    setup(); const fetch = vi.fn().mockResolvedValue(Response.json({ ...session, proxyUsedMb: "0", proxyCost: "0", browserCost: "0" })); vi.stubGlobal("fetch", fetch);
+    const result = await createRemoteBrowser("https://employer.example/apply");
+    expect(result.providerReport).toMatchObject({ proxyUsedMb: 0, proxyCostUsd: 0, browserCostUsd: 0 });
+    setup(); const missing = vi.fn().mockResolvedValue(Response.json(session)); vi.stubGlobal("fetch", missing);
+    expect((await createRemoteBrowser("https://employer.example/apply")).providerReport).toMatchObject({ proxyUsedMb: undefined, proxyCostUsd: undefined, browserCostUsd: undefined });
+  });
   it("explicitly stops Browser Use sessions even when Browserbase keys also exist", async () => {
-    setup(); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key"); const fetch = vi.fn().mockResolvedValue(Response.json({ ...session, status: "stopped" })); vi.stubGlobal("fetch", fetch);
+    setup(); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key"); const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped", finishedAt: "2026-10-01T00:30:00Z", browserCost: "0.01" })); vi.stubGlobal("fetch", fetch);
     await releaseRemoteBrowser({ browserProvider: "browser-use", browserSessionId: id });
     expect(fetch.mock.calls[0][1].method).toBe("PATCH"); expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: "stop" }); expect(legacy.update).not.toHaveBeenCalled();
   });
   it("releases legacy Browserbase records using their provider rather than the new default", async () => {
-    setup(); legacy.update.mockResolvedValue({}); await releaseRemoteBrowser({ browserSessionId: "legacy-session" });
+    setup(); legacy.update.mockResolvedValue({}); legacy.retrieve.mockResolvedValue({ status: "REQUEST_RELEASE" }); await releaseRemoteBrowser({ browserSessionId: "legacy-session" });
     expect(applicationBrowserProvider({})).toBe("browserbase"); expect(legacy.update).toHaveBeenCalledWith("legacy-session", expect.objectContaining({ status: "REQUEST_RELEASE" }));
   });
   it("returns actionable quota errors without leaking provider response data or retrying", async () => {
@@ -41,8 +48,8 @@ describe("Browser Use Cloud session lifecycle", () => {
     await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("No automatic session retry"); expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("releases sessions with unsafe connection or viewer URLs", async () => {
-    setup(); const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...session, liveUrl: "https://evil.example" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })); vi.stubGlobal("fetch", fetch);
-    await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("invalid session connection"); expect(fetch).toHaveBeenCalledTimes(2); expect(fetch.mock.calls[1][1].method).toBe("PATCH");
+    setup(); const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...session, liveUrl: "https://evil.example" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })); vi.stubGlobal("fetch", fetch);
+    await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("invalid session connection"); expect(fetch).toHaveBeenCalledTimes(3); expect(fetch.mock.calls[1][1].method).toBe("PATCH");
   });
   it("validates identifiers before sending API requests", async () => {
     setup(); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);

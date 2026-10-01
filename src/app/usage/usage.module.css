@@ -12,6 +12,8 @@
 .summary dt { color: var(--muted); margin-bottom: 8px; }
 .summary dd { margin: 0; font-size: 20px; font-variant-numeric: tabular-nums; }
 .explanation { margin: 20px 0 34px; color: var(--muted); }
+.browserSection { margin-bottom: 38px; }
+.browserSection .summary { margin-bottom: 24px; }
 .sheet h2 { font-size: 20px; margin: 0 0 18px; font-weight: 600; }
 .tableScroll { overflow-x: auto; scrollbar-color: var(--forest) var(--paper); }
 .table { border-collapse: collapse; width: 100%; text-align: left; font-size: 13px; }

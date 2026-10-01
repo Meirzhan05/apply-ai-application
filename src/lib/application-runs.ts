@@ -7,6 +7,7 @@ import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { sendActionNeeded } from "@/lib/email";
 import { writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { browserQuestions } from "@/lib/browser-questions";
+import { recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
@@ -63,7 +64,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     if (!job?.active || !app.packet) throw new Error("The job or approved packet is unavailable.");
     assertJobEligible(state.profile, job);
     validatePacket(state.profile, app.packet);
-    session = await prepareBrowser(app, job, state.profile, async (opened) => mutateState(userId, (current) => {
+    session = await withBrowserUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareBrowser(app, job, state.profile, async (opened) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       validatePacket(current.profile, target.packet!);
@@ -81,7 +82,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       target.browserActions = [...(target.browserActions || []), { at: new Date().toISOString(), label }].slice(-60);
       return true;
-    }));
+    })));
     const result = session;
     const saved = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
@@ -103,7 +104,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       return true;
     });
     if (!saved) {
-      await cancelBrowser({ ...app, browserSessionId: result.sessionId, browserProvider: result.provider });
+      await withBrowserUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => cancelBrowser({ ...app, browserSessionId: result.sessionId, browserProvider: result.provider }));
       return { cancelled: true };
     }
     if (browserQuestions({ ...result.form, hash: formDigest(result.form) }).some((question) => question.owner === "ai"))
@@ -111,7 +112,8 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     if (process.env.EMAIL_FROM) await sendActionNeeded(await loadState(userId), session.needsAction ? "Your browser run needs your help" : "A filled application is ready for review").catch(() => undefined);
     return { needsAction: session.needsAction };
   } catch (error) {
-    if (session) await cancelBrowser({ ...app, browserSessionId: session.sessionId, browserProvider: session.provider });
+    await withBrowserUsageContext({ userId, applicationId, jobId: job?.id, runId: runToken ?? app.runToken ?? newId() }, () => recordBrowserUsageEvent({ userId, applicationId, jobId: job?.id, runId: runToken ?? app.runToken ?? newId(), provider: app.browserProvider ?? (process.env.BROWSER_PROVIDER === "browser-use" ? "browser-use" : "browserbase"), sessionId: session?.sessionId ?? null, event: "failed", report: null, failure: "allocation_failed", orphanedSessionId: null })).catch(() => undefined);
+    if (session) await withBrowserUsageContext({ userId, applicationId, jobId: job?.id, runId: runToken ?? app.runToken ?? newId() }, () => cancelBrowser({ ...app, browserSessionId: session!.sessionId, browserProvider: session!.provider }));
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (target?.status === "filling" && target.runToken === runToken) {
