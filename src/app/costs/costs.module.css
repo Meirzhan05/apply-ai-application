@@ -1,0 +1,106 @@
+.actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+}
+
+.actions a,
+.actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.actions button {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.filters {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.filters label,
+.invoiceForm label {
+  display: grid;
+  gap: 6px;
+}
+
+.filters input[type="month"],
+.invoiceForm input,
+.invoiceForm select {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+
+.checkboxLabel {
+  display: flex !important;
+  align-items: center;
+  grid-auto-flow: column;
+  gap: 10px !important;
+  min-height: 44px;
+}
+
+.checkboxLabel input {
+  width: 20px;
+  height: 20px;
+}
+
+.invoiceForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+}
+
+.invoiceForm button {
+  align-self: end;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--forest);
+  border-radius: 6px;
+  background: var(--forest);
+  color: var(--paper);
+  font: inherit;
+}
+
+.actions button:hover,
+.invoiceForm button:hover {
+  background: var(--tint);
+  color: var(--forest);
+}
+
+@media (max-width: 640px) {
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .filters {
+    align-items: stretch;
+  }
+
+  .filters label,
+  .filters input[type="month"] {
+    width: 100%;
+  }
+
+  .checkboxLabel {
+    width: auto !important;
+  }
+}

@@ -1,9 +1,10 @@
 "use client";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import type { CostReport, ServiceCostCategory, AllocationMethod } from "@/lib/service-costs";
 import styles from "../usage/usage.module.css";
+import costStyles from "./costs.module.css";
 
 const money = (value: number | null) => value === null ? "Unknown" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 }).format(value);
 const label = (value: string) => value.replaceAll("-", " ").replaceAll("_", " ");
@@ -13,18 +14,38 @@ export default function CostsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [importMessage, setImportMessage] = useState("");
-  const refresh = useCallback(async () => {
+  const [period, setPeriod] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("period") || "");
+  const [serviceScope, setServiceScope] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("scope") === "service");
+  const requestSequence = useRef(0);
+  const refresh = useCallback(async (search = window.location.search) => {
+    const requestId = ++requestSequence.current;
     setLoading(true); setError("");
-    try { const response = await fetch(`/api/costs${window.location.search}`, { cache: "no-store" }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Costs could not be loaded. Try again."); setReport(data); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Costs could not be loaded. Try again."); }
-    finally { setLoading(false); }
+    setReport(null);
+    try {
+      const response = await fetch(`/api/costs${search}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Costs could not be loaded. Try again.");
+      if (requestId !== requestSequence.current) return;
+      setReport(data);
+    } catch (cause) {
+      if (requestId !== requestSequence.current) return;
+      setReport(null);
+      setError(cause instanceof Error ? cause.message : "Costs could not be loaded. Try again.");
+    } finally {
+      if (requestId === requestSequence.current) setLoading(false);
+    }
   }, []);
   const setFilter = (changes: { period?: string; service?: boolean }) => {
     const params = new URLSearchParams(window.location.search);
-    if (changes.period) params.set("period", changes.period); else params.delete("period");
-    if (changes.service) params.set("scope", "service"); else params.delete("scope");
-    window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
-    void refresh();
+    const nextPeriod = changes.period ?? period;
+    const nextServiceScope = changes.service ?? serviceScope;
+    if (nextPeriod) params.set("period", nextPeriod); else params.delete("period");
+    if (nextServiceScope) params.set("scope", "service"); else params.delete("scope");
+    const search = params.toString() ? `?${params}` : "";
+    setPeriod(nextPeriod);
+    setServiceScope(nextServiceScope);
+    window.history.replaceState({}, "", `${window.location.pathname}${search}`);
+    void refresh(search);
   };
   const importLine = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setImportMessage("");
@@ -37,11 +58,20 @@ export default function CostsPage() {
     try { const response = await fetch("/api/costs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(record) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Invoice line could not be imported."); setImportMessage("Invoice line imported."); formElement.reset(); void refresh(); }
     catch (cause) { setImportMessage(cause instanceof Error ? cause.message : "Invoice line could not be imported."); }
   };
-  useEffect(() => { const initial = setTimeout(() => { void refresh(); }, 0); return () => clearTimeout(initial); }, [refresh]);
+  useEffect(() => {
+    const initialSearch = window.location.search;
+    const initial = setTimeout(() => { void refresh(initialSearch); }, 0);
+    return () => clearTimeout(initial);
+  }, [refresh]);
+  const csvParams = new URLSearchParams();
+  if (period) csvParams.set("period", period);
+  if (serviceScope) csvParams.set("scope", "service");
+  csvParams.set("format", "csv");
+  const csvHref = `/api/costs?${csvParams}`;
   return <main className={styles.sheet}>
-    <nav className={styles.navigation} aria-label="Cost navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><div><Link href="/usage">Usage detail</Link>{report && <a href={typeof window === "undefined" ? "/api/costs?format=csv" : `/api/costs${window.location.search}${window.location.search ? "&" : "?"}format=csv`}>Download CSV</a>}<button onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh costs"}</button></div></nav>
+    <nav className={styles.navigation} aria-label="Cost navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><div className={costStyles.actions}><Link href="/usage">Usage detail</Link>{report && <a href={csvHref}>Download CSV</a>}<button onClick={() => void refresh(window.location.search)} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh costs"}</button></div></nav>
     <header className={styles.heading}><h1>Service costs</h1><p>Projected reservations, measured estimates, reconciled charges and unknown evidence stay visible as separate operational signals.</p></header>
-    <div className={styles.navigation} aria-label="Cost filters"><label>Period <input type="month" defaultValue={typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("period") || ""} onChange={(event) => setFilter({ period: event.target.value, service: report?.scope === "service" })} /></label>{report?.operator && <label><input type="checkbox" checked={report.scope === "service"} onChange={(event) => setFilter({ period: report.period, service: event.target.checked })} /> Service totals</label>}</div>
+    <div className={costStyles.filters} aria-label="Cost filters"><label>Period <input type="month" value={period} onChange={(event) => setFilter({ period: event.target.value })} /></label>{report?.operator && <label className={costStyles.checkboxLabel}><input type="checkbox" checked={serviceScope} onChange={(event) => setFilter({ service: event.target.checked })} /> Service totals</label>}</div>
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {loading && !report && <p role="status">Loading cost evidence…</p>}
     {report && <>
@@ -60,7 +90,7 @@ export default function CostsPage() {
       <p className={styles.explanation}>{report.heldRequests} request{report.heldRequests === 1 ? " is" : "s are"} paused for the service spend ceiling. The request remains saved for later dispatch; initiated applications are not removed.</p>
       <p className={styles.explanation}>Active users include accounts with an initiated application or attempted model or browser work in this period, including cancelled and failed attempts. Cost per active user divides the known combined total by that count.</p>
       {report.unknownComponents > 0 && <p className={styles.explanation}>Unknown evidence remains unresolved ({report.unknownComponents} component{report.unknownComponents === 1 ? "" : "s"}); it is excluded from the known combined total rather than treated as zero.</p>}
-      {report.operator && <section className={styles.reservations} aria-labelledby="import-heading"><h2 id="import-heading">Import an invoice line</h2><p>Use provider invoice identities and choose whether a fixed cost is allocated to one owner. Group allocation methods require explicit server-side allocations through the API.</p><form onSubmit={importLine}><div className={styles.summary}><label>Provider <input name="provider" required /></label><label>Invoice <input name="invoiceId" required /></label><label>Line <input name="lineId" required /></label><label>Period <input name="period" type="month" required defaultValue={report.period || ""} /></label><label>Category <select name="category" defaultValue="hosting"><option value="model">Model</option><option value="browser">Browser</option><option value="hosting">Hosting</option><option value="runtime">Runtime</option><option value="database">Database</option><option value="storage">Storage</option><option value="email">Email</option></select></label><label>Amount USD <input name="amountUsd" type="number" min="0" step="0.01" required /></label><label>Allocation <select name="allocationMethod" defaultValue="none"><option value="none">Service total</option><option value="direct-owner">Direct owner</option></select></label><label>Owner ID (for owner allocation) <input name="userId" /></label><button type="submit">Import line</button></div></form>{importMessage && <p role="status">{importMessage}</p>}</section>}
+      {report.operator && <section className={styles.reservations} aria-labelledby="import-heading"><h2 id="import-heading">Import an invoice line</h2><p>Record provider, invoice, line, period, category and amount. Choose Service total or Direct owner, and provide an owner ID for direct-owner allocation.</p><form onSubmit={importLine}><div className={costStyles.invoiceForm}><label>Provider <input name="provider" required /></label><label>Invoice <input name="invoiceId" required /></label><label>Line <input name="lineId" required /></label><label>Period <input name="period" type="month" required defaultValue={report.period || ""} /></label><label>Category <select name="category" defaultValue="hosting"><option value="model">Model</option><option value="browser">Browser</option><option value="hosting">Hosting</option><option value="runtime">Runtime</option><option value="database">Database</option><option value="storage">Storage</option><option value="email">Email</option></select></label><label>Amount USD <input name="amountUsd" type="number" min="0" step="0.01" required /></label><label>Allocation <select name="allocationMethod" defaultValue="none"><option value="none">Service total</option><option value="direct-owner">Direct owner</option></select></label><label>Owner ID (for owner allocation) <input name="userId" /></label><button type="submit">Import line</button></div></form>{importMessage && <p role="status">{importMessage}</p>}</section>}
       <section aria-labelledby="invoice-heading"><h2 id="invoice-heading">Reconciled invoice lines</h2>
         {!report.invoiceLines.length ? <div className={styles.empty}><h3>No operator invoice lines yet</h3><p>Imported provider charges appear here once their period, category and allocation method are recorded.</p></div> : <div className={styles.tableScroll} tabIndex={0} role="region" aria-label="Reconciled invoice lines"><table className={styles.table}><caption className={styles.srOnly}>Operator-entered or imported provider invoice lines</caption><thead><tr><th scope="col">Provider / invoice</th><th scope="col">Period</th><th scope="col">Category</th><th scope="col">Charge</th><th scope="col">Allocation</th><th scope="col">Evidence replaced</th></tr></thead><tbody>{report.invoiceLines.map((line) => <tr key={line.id}><td><strong>{line.provider}</strong><span className={styles.identifier}>{line.invoiceId} · {line.lineId}</span></td><td>{line.period}</td><td>{label(line.category)}</td><td className={styles.numeric}>{money(line.allocatedUsd ?? line.amountUsd)}</td><td>{label(line.allocationMethod)}<span>{line.allocationMethod === "none" ? "Service total" : "Owner allocation stated"}</span></td><td className={styles.numeric}>{line.reconciles.length ? line.reconciles.length : "None"}</td></tr>)}</tbody></table></div>}
       </section>
