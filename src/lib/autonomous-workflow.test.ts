@@ -135,6 +135,7 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
   expect(app.blockers?.[0].message).toContain("Confirm whether revenue increased and provide the measured amount");
   expect(fixture.prepare).not.toHaveBeenCalled();
   expect(fixture.pending).toEqual([]);
+});
 it("replaces a manual tailored artifact with the uploaded original after the saved preference changes", async () => {
   const profile = fixture.state!.profile;
   const bytes = Buffer.from("%PDF original after preference change\n");
