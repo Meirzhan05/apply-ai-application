@@ -13,6 +13,11 @@ function isLoopback(hostname: string): boolean {
   return normalized === "localhost" || normalized === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 
+function isProductionEnvironment(environment: string): boolean {
+  const normalized = environment.trim().toLowerCase();
+  return normalized === "prod" || normalized === "production";
+}
+
 function assertProductionOrigins(): void {
   const values = [process.env.APP_ORIGIN?.trim(), process.env.NEXT_PUBLIC_APP_URL?.trim()];
   if (!values[0] || !values[1]) throw new Error(productionOriginError);
@@ -44,8 +49,15 @@ export default defineConfig({
             deploy: { env: latexEnv } });
         },
       },
+      {
+        name: "production-origin-guard",
+        onBuildComplete(context, manifest) {
+          if (context.target === "dev") return;
+          if (isProductionEnvironment(manifest.environment)) assertProductionOrigins();
+        },
+      },
       syncEnvVars(({ environment }) => {
-        if (environment.toLowerCase() === "production") assertProductionOrigins();
+        if (isProductionEnvironment(environment)) assertProductionOrigins();
         return syncedEnvironmentNames.flatMap((name) => process.env[name] ? [{ name, value: process.env[name]!, isSecret: /KEY|SECRET/.test(name) }] : []).concat([
         { name: "DEMO_MODE", value: "false", isSecret: false },
         ...Object.entries(latexEnv).map(([name, value]) => ({ name, value, isSecret: false })),
