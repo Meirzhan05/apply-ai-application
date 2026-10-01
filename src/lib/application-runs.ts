@@ -55,6 +55,29 @@ async function currentAutonomousRun(userId: string, applicationId: string, runTo
   });
 }
 
+async function currentDraftRun(userId: string, applicationId: string, runToken: string | undefined, expected: {
+  claimedAt?: string;
+  profileHash: string;
+  jobHash: string;
+  packetHash?: string;
+  packetContentHash: string;
+  autonomous: boolean;
+}) {
+  await mutateState(userId, (state) => {
+    const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
+    if (!app || app.status !== "drafting" || app.runToken !== runToken || app.runWorkerClaimedAt !== expected.claimedAt)
+      throw new Error("The application draft was cancelled or changed before provider work.");
+    const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
+    if (!job?.active) throw new Error("The job is closed or unavailable.");
+    const eligibilityJob = importedAutonomyJob(app, job);
+    if (Boolean(app.autonomousAuthorization) !== expected.autonomous || hashJson(state.profile) !== expected.profileHash ||
+      hashJson(eligibilityJob) !== expected.jobHash || app.packetHash !== expected.packetHash || hashJson(app.packet ?? null) !== expected.packetContentHash)
+      throw new Error("The profile, job, or prior packet changed before provider work. Start a new draft.");
+    assertJobEligible(state.profile, eligibilityJob);
+    if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");
+  });
+}
+
 async function claimRun(userId: string, applicationId: string, runToken: string | undefined, status: "drafting" | "filling") {
   return mutateState(userId, (state) => {
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
@@ -77,8 +100,16 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     const eligibilityJob = importedAutonomyJob(app, job);
     assertJobEligible(state.profile, eligibilityJob);
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");
-    const beforeModelCall = app.autonomousAuthorization ? () => currentAutonomousRun(userId, applicationId, runToken, "draft") : undefined;
-    if (beforeModelCall) await beforeModelCall();
+    const expectedRunInputs = {
+      claimedAt: app.runWorkerClaimedAt,
+      profileHash: hashJson(state.profile),
+      jobHash: hashJson(eligibilityJob),
+      packetHash: app.packetHash,
+      packetContentHash: hashJson(app.packet ?? null),
+      autonomous: Boolean(app.autonomousAuthorization),
+    };
+    const beforeModelCall = () => currentDraftRun(userId, applicationId, runToken, expectedRunInputs);
+    await beforeModelCall();
     const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, eligibilityJob, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);

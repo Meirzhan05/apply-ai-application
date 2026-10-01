@@ -172,12 +172,13 @@ export async function resumeBlockedApplication(userId: string, applicationId: st
       throw new Error("The previous browser session is still attached. Resume will be available after it is confirmed stopped and released.");
     if (blocker.progress === "resuming") return false;
     if (blocker.progress !== "blocked") throw new Error("This blocker is already resolved or expired.");
-    if (!options.freshReconstruct && blocker.context?.formHash && application.form?.hash !== blocker.context.formHash)
-      throw new Error("This form question is stale. Refresh the application before resuming it.");
-    if (!options.freshReconstruct && blocker.context?.targetUrl && application.form?.url !== blocker.context.targetUrl)
-      throw new Error("The application destination changed. Refresh the application before resuming it.");
     const job = state.jobs.find((item) => item.id === application.jobId) ?? application.jobSnapshot;
     if (!job) throw new Error("Job not found.");
+    if (!options.freshReconstruct && blocker.context?.formHash && application.form?.hash !== blocker.context.formHash)
+      throw new Error("This form question is stale. Refresh the application before resuming it.");
+    const currentTargetUrl = application.form?.url ?? job.applyUrl;
+    if (!options.freshReconstruct && blocker.context?.targetUrl && currentTargetUrl !== blocker.context.targetUrl)
+      throw new Error("The application destination changed. Refresh the application before resuming it.");
     const confirmedAnswer = answer ? validateAutonomousHumanAnswer(application, blocker, state.profile, answer) : undefined;
     if (blocker.context?.observedQuestion && !confirmedAnswer && !options.freshReconstruct)
       throw new Error("Confirm the observed question before resuming this application.");

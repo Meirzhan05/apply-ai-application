@@ -150,6 +150,11 @@ export interface ResumeEntry {
   bullets: ResumeBullet[];
 }
 export type ResumeClaimOutcome = "supported" | "unsupported" | "uncertain" | "contradiction";
+export interface ResumeDraftAttempts {
+  writerAttempts: number;
+  checkerAttempts: number;
+  repairAttempts: number;
+}
 export interface ResumeGroundingFinding {
   claimId: string;
   affectedText: string;
@@ -158,19 +163,13 @@ export interface ResumeGroundingFinding {
   evidenceFactIds: string[];
   requiredInformation?: string;
 }
-export interface ResumeGroundingSnapshot {
+export interface ResumeGroundingSnapshot extends ResumeDraftAttempts {
   version: 1;
-  writerAttempts: number;
-  checkerAttempts: number;
-  repairAttempts: number;
   findings: ResumeGroundingFinding[];
 }
-export interface ResumeDraftDiagnostics {
+export interface ResumeDraftDiagnostics extends ResumeDraftAttempts {
   version: 1;
   outcome: "grounded" | "needs_information" | "technical_failure";
-  writerAttempts: number;
-  checkerAttempts: number;
-  repairAttempts: number;
   findings: ResumeGroundingFinding[];
   requiredInformation: string[];
   technicalFailure?: "provider" | "malformed_response" | "deadline" | "renderer" | "other";

@@ -76,7 +76,8 @@ describe("autonomous blocker review", () => {
     app.packetHash = "previous-valid-packet";
     app.resumeDraftDiagnostics = { version: 1, outcome: "needs_information", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2, findings: [], requiredInformation: ["Confirm the missing date."] };
     const previous = structuredClone(app.packet);
-    const blocker = recordApplicationBlocker(app, "missing_answer", "Confirm the missing date.");
+    const blocker = recordApplicationBlocker(app, "missing_answer", "Confirm the missing date.", { targetUrl: fixture.state.jobs[0].applyUrl });
+    expect(app.form).toBeUndefined();
     await resumeBlockedApplication(app.userId, app.id, blocker.id);
     expect(app.packet).toEqual(previous);
     expect(app.packetHash).toBe("previous-valid-packet");

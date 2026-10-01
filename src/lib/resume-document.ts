@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { hashJson } from "@/lib/crypto";
-import type { Job, Profile, ResumeDocument, ResumeEntry, ResumeField, ResumeDraftDiagnostics, ResumeGroundingFinding } from "@/lib/types";
+import type { Job, Profile, ResumeDocument, ResumeEntry, ResumeField, ResumeDraftAttempts, ResumeDraftDiagnostics, ResumeGroundingFinding } from "@/lib/types";
 
 const Field = z.object({ text: z.string().max(500), factIds: z.array(z.string()).max(80) });
 const Bullet = Field.extend({ relevance: z.number().int().min(0).max(100) });
@@ -124,21 +124,47 @@ function prepareWriterOutput(profile: Profile, parsed: unknown): ResumeDocument 
   return doc;
 }
 
-function repairPreservesExperience(previous: ResumeDocument, revised: ResumeDocument, findings: ResumeGroundingFinding[]): boolean {
-  const removable = new Set(findings.filter((finding) => finding.outcome !== "supported").map((finding) => finding.affectedText));
-  return previous.experience.every((entry) => {
-    const matching = revised.experience.find((candidate) => candidate.heading.text === entry.heading.text && candidate.heading.factIds.join("\0") === entry.heading.factIds.join("\0"));
-    if (!matching) return false;
-    const retained = new Set([...matching.bullets.map((bullet) => bullet.text), ...revised.omitted.map((field) => field.text)]);
-    return entry.bullets.every((bullet) => retained.has(bullet.text) || removable.has(bullet.text));
-  });
+function normalizedResumeText(text: string): string { return text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim(); }
+function originalResumeContainsClaim(originalResumeText: string, claimText: string): boolean {
+  const source = normalizedResumeText(originalResumeText);
+  const claim = normalizedResumeText(claimText);
+  return Boolean(claim && source.includes(claim));
 }
 
-function malformed(counts: { writerAttempts: number; checkerAttempts: number; repairAttempts: number }, message?: string): ResumeDraftError {
+type RepairPreservation = "preserved" | "original_claim_removed" | "experience_changed";
+function repairPreservation(previous: ResumeDocument, revised: ResumeDocument, findings: ResumeGroundingFinding[], originalResumeText: string): RepairPreservation {
+  const unsupported = new Set(findings.filter((finding) => finding.outcome !== "supported").map((finding) => finding.affectedText));
+  const originalUnsupported = new Set([...unsupported].filter((text) => originalResumeContainsClaim(originalResumeText, text)));
+  let removedOriginalClaim = false;
+  const preserved = previous.experience.every((entry) => {
+    const matching = revised.experience.find((candidate) => candidate.heading.text === entry.heading.text && candidate.heading.factIds.join("\0") === entry.heading.factIds.join("\0"));
+    if (!matching) {
+      if (entry.bullets.some((bullet) => originalUnsupported.has(bullet.text))) removedOriginalClaim = true;
+      return false;
+    }
+    const retained = new Set([...matching.bullets.map((bullet) => bullet.text), ...revised.omitted.map((field) => field.text)]);
+    const previousBulletText = new Set(entry.bullets.map((bullet) => normalizedResumeText(bullet.text)));
+    return entry.bullets.every((bullet) => {
+      if (originalUnsupported.has(bullet.text)) {
+        const corrected = matching.bullets.some((candidate) => candidate.text &&
+          normalizedResumeText(candidate.text) !== normalizedResumeText(bullet.text) &&
+          !previousBulletText.has(normalizedResumeText(candidate.text)) &&
+          candidate.factIds.some((id) => bullet.factIds.includes(id)));
+        if (!corrected) removedOriginalClaim = true;
+        return corrected;
+      }
+      return retained.has(bullet.text) || unsupported.has(bullet.text);
+    });
+  });
+  if (preserved) return "preserved";
+  return removedOriginalClaim ? "original_claim_removed" : "experience_changed";
+}
+
+function malformed(counts: ResumeDraftAttempts, message?: string): ResumeDraftError {
   return new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "malformed_response" }, message);
 }
 
-function providerFailure(counts: { writerAttempts: number; checkerAttempts: number; repairAttempts: number }, deadline: number): ResumeDraftError {
+function providerFailure(counts: ResumeDraftAttempts, deadline: number): ResumeDraftError {
   const technicalFailure = Date.now() >= deadline ? "deadline" : "provider";
   return new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure });
 }
@@ -159,19 +185,19 @@ function validatedFindings(parsed: unknown, claims: ResumeClaim[], verifiedIds: 
   return seen.size === byId.size ? findings : undefined;
 }
 
-function groundedSummary(counts: { writerAttempts: number; checkerAttempts: number; repairAttempts: number }, findings: ResumeGroundingFinding[]): ResumeDraftDiagnostics {
+function groundedSummary(counts: ResumeDraftAttempts, findings: ResumeGroundingFinding[]): ResumeDraftDiagnostics {
   return { version: 1, outcome: "grounded", ...counts, findings, requiredInformation: [] };
 }
 
 function requiresRepair(findings: ResumeGroundingFinding[]): boolean { return findings.some((finding) => finding.outcome !== "supported"); }
 
-function exhausted(findings: ResumeGroundingFinding[], counts: { writerAttempts: number; checkerAttempts: number; repairAttempts: number }): ResumeDraftError {
+function exhausted(findings: ResumeGroundingFinding[], counts: ResumeDraftAttempts): ResumeDraftError {
   const requiredInformation = [...new Set(findings.filter((finding) => finding.outcome !== "supported").map((finding) => finding.requiredInformation!).filter(Boolean))];
   return new ResumeDraftError({ version: 1, outcome: "needs_information", ...counts, findings, requiredInformation });
 }
 
 export async function draftResumeDocument(profile: Profile, job: Job, deadline: number, beforeModelCall?: () => Promise<void>): Promise<ResumeDocument> {
-  const counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
+  const counts: ResumeDraftAttempts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
   if (!process.env.OPENAI_API_KEY) throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "provider" }, "Resume drafting is unavailable. Configure OpenAI, then retry; your existing packet is preserved.");
   const facts = profile.facts.filter((fact) => fact.verified).map(({ id, text }) => ({ id, text }));
   if (!facts.length) throw new Error("Confirm resume facts in your profile before drafting.");
@@ -193,15 +219,16 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     }
   };
   const callWriter = async (request: unknown, repair: boolean): Promise<ResumeDocument> => {
-    if (repair) counts.repairAttempts++;
-    counts.writerAttempts++;
+    await verifyCurrentRun();
+    const timeout = remaining();
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
       result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, repair ? "resume-repair" : "resume-generation", "gpt-6-sol", async () => {
-        await verifyCurrentRun();
+        if (repair) counts.repairAttempts++;
+        counts.writerAttempts++;
         return client.responses.parse({ model: "gpt-6-sol", service_tier: "default", store: false,
           input: [{ role: "system", content: repair ? `${writerPrompt} This is a repair of the supplied currentDraft. Use the exact findings to correct, simplify, or remove only the unsupported wording they identify. Do not invent facts, turn original resume text into evidence, change unrelated supported claims, or delete existing employment experience. Keep the same employer associations and preserve facts and qualifiers.` : writerPrompt }, { role: "user", content: JSON.stringify(request) }],
-          text: { format: zodTextFormat(ResumeDraftSchema, "structured_resume") } }, { timeout: remaining() });
+          text: { format: zodTextFormat(ResumeDraftSchema, "structured_resume") } }, { timeout });
       });
     } catch (error) { if (error instanceof ResumeDraftError) throw error; throw providerFailure(counts, deadline); }
     try { return prepareWriterOutput(profile, result.output_parsed); }
@@ -213,15 +240,16 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     }
   };
   const callAudit = async (doc: ResumeDocument): Promise<ResumeGroundingFinding[]> => {
-    counts.checkerAttempts++;
+    await verifyCurrentRun();
+    const timeout = remaining();
     const claims = claimManifest(doc);
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
       result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", "gpt-6-luna", async () => {
-        await verifyCurrentRun();
+        counts.checkerAttempts++;
         return client.responses.parse({ model: "gpt-6-luna", service_tier: "default", store: false,
           input: [{ role: "system", content: auditPrompt }, { role: "user", content: JSON.stringify({ ...context, claims }) }],
-          text: { format: zodTextFormat(Check, "resume_grounding_audit") } }, { timeout: remaining() });
+          text: { format: zodTextFormat(Check, "resume_grounding_audit") } }, { timeout });
       });
     } catch (error) { if (error instanceof ResumeDraftError) throw error; throw providerFailure(counts, deadline); }
     const findings = validatedFindings(result.output_parsed, claims, new Set(facts.map((fact) => fact.id)));
@@ -241,7 +269,9 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     }
     if (repairAttempt === 2) throw exhausted(findings, counts);
     const next = await callWriter({ ...context, currentDraft: doc, findings }, true);
-    if (!repairPreservesExperience(doc, next, findings)) throw malformed(counts, "A resume repair changed or removed existing experience outside the claims that need correction. The previous packet is preserved; retry after reviewing your confirmed facts.");
+    const preservation = repairPreservation(doc, next, findings, profile.resumeText ?? "");
+    if (preservation === "original_claim_removed") throw exhausted(findings, counts);
+    if (preservation !== "preserved") throw malformed(counts, "A resume repair changed or removed existing experience outside the claims that need correction. The previous packet is preserved; retry after reviewing your confirmed facts.");
     doc = next;
   }
   throw exhausted([], counts);

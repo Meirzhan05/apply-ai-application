@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { AppState, Job } from "@/lib/types";
+import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 
 type Row = { user_id: string; data: Partial<AppState>; revision: number };
 const fixture = vi.hoisted(() => ({
@@ -132,7 +133,7 @@ vi.mock("openai", () => ({ default: class { responses = { parse: async (input: {
   if (name === "structured_resume") return { output_parsed: { education: [], experience: [{ heading: { text: "Synthetic project", factIds: ["fact-python"] }, subheading: { text: "Analyst", factIds: ["fact-python"] }, dates: { text: "", factIds: [] }, location: { text: "", factIds: [] }, bullets: [{ text: "Built a Python project to analyze survey data", factIds: ["fact-python"], relevance: 90 }] }], projects: [], skills: [{ text: "Python", factIds: ["fact-python"] }], links: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
   if (name === "resume_grounding_audit") {
     const request = JSON.parse(input.input?.[1]?.content ?? "{}") as { claims: Array<{ claimId: string; factIds: string[] }> };
-    return { output_parsed: { findings: request.claims.map((claim) => ({ claimId: claim.claimId, outcome: "supported", reason: "The confirmed synthetic profile fact supports this résumé claim.", evidenceFactIds: claim.factIds, requiredInformation: null })) }, usage: { input_tokens: 10, output_tokens: 10 } };
+    return { output_parsed: resumeGroundingOutput(request.claims, [], "The confirmed synthetic profile fact supports this résumé claim."), usage: { input_tokens: 10, output_tokens: 10 } };
   }
   if (name === "application_draft") return { output_parsed: { selectedFactIds: ["fact-python"], answers: [] }, usage: { input_tokens: 10, output_tokens: 10 } };
   return { output_parsed: { category: "strong", score: 95, evidence: [{ jobQuote: "Product Analyst", factIds: ["fact-python"] }], gaps: [], uncertainty: [] }, usage: { input_tokens: 10, output_tokens: 10 } };

@@ -3,6 +3,7 @@ import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandof
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
+import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
@@ -837,7 +838,9 @@ export default function Dashboard() {
                             <h3>Application packet</h3>
                             <span>Version {activeApp.packet.version}</span>
                           </div>
-                          {activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
+                          {activeApp.packet.resumeMode === "original" ? (
+                            <OriginalResumeInspection packet={activeApp.packet} applicationId={activeApp.id} />
+                          ) : activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
                             <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
                           ) : <>
                           <p className="muted">

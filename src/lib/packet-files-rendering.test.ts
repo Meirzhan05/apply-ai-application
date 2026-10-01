@@ -1,23 +1,32 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { latexFixture } from "@/lib/latex-fixture";
-
-const compiler = vi.hoisted(() => ({ fitResume: vi.fn() }));
-vi.mock("@/lib/latex-compiler", () => ({ fitResume: compiler.fitResume }));
-
 import { withPacketFiles } from "@/lib/packet-files";
 import { resumeFields, sealResume } from "@/lib/resume-document";
 
-beforeEach(() => compiler.fitResume.mockReset());
+afterEach(() => vi.unstubAllEnvs());
 
-it("retains renderer failures as technical résumé diagnostics with the completed audit count", async () => {
+it("reports a compiler process failure as a renderer diagnostic and preserves the completed audit count", async () => {
   const { profile, document } = latexFixture();
   document.grounding = { version: 1, writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1, findings: [] };
   const sealed = sealResume(profile, document);
-  compiler.fitResume.mockRejectedValueOnce(new Error("The resume cannot fit one readable page. Shorten long confirmed facts or remove lower-priority material in your profile, then rebuild."));
-  const packet = { schemaVersion: 2 as const, version: 1, summary: "Resume repair", resumeLines: resumeFields(sealed).map(({ text, factIds }) => ({ text, factIds })), resumeDocument: sealed, answers: [], createdAt: new Date().toISOString(), model: "gpt-6-sol" };
+  const packet = {
+    schemaVersion: 2 as const,
+    version: 1,
+    summary: "Resume repair",
+    resumeLines: resumeFields(sealed).map(({ text, factIds }) => ({ text, factIds })),
+    resumeDocument: sealed,
+    answers: [],
+    createdAt: new Date().toISOString(),
+    model: "gpt-6-sol",
+  };
+
+  // Exercise withPacketFiles -> fitResume -> compileLatex -> execFile. The
+  // compiler is an external process boundary, so fail it without mocking the
+  // internal renderer collaborator.
+  vi.stubEnv("TECTONIC_BIN", "/missing-test-binary/tectonic");
+
   await expect(withPacketFiles(profile, packet, Date.now() + 60_000)).rejects.toMatchObject({
     diagnostics: { outcome: "technical_failure", technicalFailure: "renderer", writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 },
-    message: expect.stringContaining("cannot fit one readable page"),
+    message: expect.stringContaining("Resume compilation is temporarily unavailable"),
   });
-  expect(compiler.fitResume).toHaveBeenCalledOnce();
 });
