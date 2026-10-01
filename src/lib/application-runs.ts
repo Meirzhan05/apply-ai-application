@@ -141,6 +141,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
+      else validatePacket(current.profile, target.packet!);
       target.browserActions = [...(target.browserActions || []), { at: new Date().toISOString(), label }].slice(-60);
       return true;
     }), app.autonomousAuthorization ? async (observed) => {

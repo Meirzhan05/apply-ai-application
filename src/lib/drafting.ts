@@ -55,16 +55,18 @@ export async function draftPacket(
   options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; beforeModelCall?: () => Promise<void> },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
-  if (options?.knownAnswersOnly && profile.automationSettings?.resumeTailoring === false) {
-    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResumeManifest(profile), version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
-    return profile.automationSettings.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
+  const originalResumeOnly = profile.automationSettings?.resumeTailoring === false;
+  const originalResume = originalResumeOnly ? originalResumeManifest(profile) : undefined;
+  if (options?.knownAnswersOnly && originalResumeOnly) {
+    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResume!, version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
+    return profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
   }
-  if (facts.length === 0)
+  if (facts.length === 0 && !originalResumeOnly)
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
     );
-  const resumeDocument = options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
-  if (options?.preserveResume && previous) validatePacket(profile, previous);
+  const resumeDocument = originalResumeOnly ? undefined : options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
+  if (!originalResumeOnly && options?.preserveResume && previous) validatePacket(profile, previous);
   let selected = facts.slice(0, 4);
   let answers: ScreeningAnswer[] = [
     {
@@ -74,9 +76,9 @@ export async function draftPacket(
       requiresUserInput: true,
     },
   ];
-  let model = resumeDocument?.model ?? "verified-facts-template";
+  let model = resumeDocument?.model ?? (originalResumeOnly ? "confirmed-original-upload" : "verified-facts-template");
 
-  if (!options && process.env.OPENAI_API_KEY && !previous) {
+  if (!originalResumeOnly && !options && process.env.OPENAI_API_KEY && !previous) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
     try {
       const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", "gpt-6-sol", () => client.responses.parse({
@@ -143,12 +145,13 @@ export async function draftPacket(
   if (options?.beforeModelCall) await options.beforeModelCall();
   const packet = await withPacketFiles(profile, {
     schemaVersion: resumeDocument ? 2 : 1,
-    resumeMode: "tailored",
+    resumeMode: originalResumeOnly ? "original" : "tailored",
+    ...(originalResume ? { originalResume } : {}),
     ...(resumeDocument ? { resumeDocument } : {}),
-    ...(options?.preserveResume && previous?.resumeArtifact ? { resumeArtifact: previous.resumeArtifact, files: previous.files } : {}),
+    ...(!originalResumeOnly && options?.preserveResume && previous?.resumeArtifact ? { resumeArtifact: previous.resumeArtifact, files: previous.files } : {}),
     version: (previous?.version ?? 0) + 1,
     summary: `Application for ${job.title} at ${job.company}`,
-    resumeLines: resumeDocument ? resumeFields(resumeDocument).map(({ text, factIds }) => ({ text, factIds })) : previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
+    resumeLines: originalResumeOnly ? [] : resumeDocument ? resumeFields(resumeDocument).map(({ text, factIds }) => ({ text, factIds })) : previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
       text: fact.text,
       factIds: [fact.id],
     })),
