@@ -348,6 +348,14 @@ export interface Application {
     requestedAt: string;
     reason: "waiting" | "budget" | "active_run";
   };
+  budgetReservation?: {
+    reservationId: string;
+    projectedUsd: number;
+    month: string;
+    ownerId: string;
+    applicationId: string;
+    status: "release_pending" | "released";
+  };
   runToken?: string;
   runWorkerClaimedAt?: string;
   runDispatch?: { kind: "draft" | "fill"; draftMode?: "resume" | "essays"; token: string; confirmedAt?: string };

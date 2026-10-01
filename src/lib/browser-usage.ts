@@ -223,3 +223,18 @@ export async function readBrowserUsage(userId: string): Promise<BrowserUsageRepo
     measuredUsd: values.reduce((sum, session) => sum + (session.browserCostUsd ?? 0) + (session.proxyCostUsd ?? 0), 0),
     incompleteCostSessions: values.filter((session) => session.estimatedUsd === null || session.proxyCostUsd === null).length };
 }
+
+// Operator reports use this only after the server authorization boundary.
+// Keep the owner tag attached so aggregation can enforce owner isolation.
+export async function readAllBrowserUsage(): Promise<BrowserUsageRecord[]> {
+  const file = localPath();
+  if (file) { await writes; return await readLocal(file); }
+  const records: BrowserUsageRecord[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await adminSupabase().from("browser_usage_records").select("data").order("occurred_at", { ascending: false }).range(offset, offset + 499);
+    if (error) throw new Error("Browser usage could not be loaded.");
+    records.push(...(data ?? []).map((row) => row.data as BrowserUsageRecord));
+    if (!data || data.length < 500) break;
+  }
+  return records;
+}
