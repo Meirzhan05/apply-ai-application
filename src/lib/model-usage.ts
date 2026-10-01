@@ -72,6 +72,12 @@ function usageCompleteness(record: ModelUsageRecord): number {
 function usageTimestamp(record: ModelUsageRecord): string {
   return record.completedAt ?? record.startedAt;
 }
+function normalizeModelUsageRecord(record: ModelUsageRecord): ModelUsageRecord {
+  return { ...record, completedAt: record.completedAt ?? null, responseId: record.responseId ?? null,
+    requestId: record.requestId ?? null, providerStatus: record.providerStatus ?? null, serviceTier: record.serviceTier ?? null,
+    tokens: { input: record.tokens?.input ?? null, cachedInput: record.tokens?.cachedInput ?? null, cacheWrite: record.tokens?.cacheWrite ?? null, output: record.tokens?.output ?? null, reasoningOutput: record.tokens?.reasoningOutput ?? null },
+    rate: record.rate ?? null, estimatedUsd: record.estimatedUsd ?? null, reconciledUsd: record.reconciledUsd ?? null, failure: record.failure ?? null };
+}
 function mergeModelUsageRecord(previous: ModelUsageRecord, incoming: ModelUsageRecord): ModelUsageRecord {
   const previousComplete = previous.completedAt !== null;
   const incomingComplete = incoming.completedAt !== null;
@@ -94,6 +100,7 @@ function mergeModelUsageRecord(previous: ModelUsageRecord, incoming: ModelUsageR
 // This ledger is separate from owner-state CAS: provider work cannot be rerun by a state retry.
 export async function recordModelUsage(record: ModelUsageRecord): Promise<void> {
   if (!record.userId || !record.id || !record.runId) throw new Error("Model usage requires an owner, invocation and run.");
+  record = normalizeModelUsageRecord(record);
   const file = localPath();
   if (file) {
     const write = writes.then(async () => {
@@ -117,14 +124,14 @@ export async function recordModelUsage(record: ModelUsageRecord): Promise<void> 
 export async function readModelUsage(userId: string): Promise<ModelUsageReport> {
   const file = localPath();
   let records: ModelUsageRecord[];
-  if (file) { await writes; records = (await readLocal(file)).filter((item) => item.userId === userId); }
+  if (file) { await writes; records = (await readLocal(file)).map(normalizeModelUsageRecord).filter((item) => item.userId === userId); }
   else {
     records = [];
     // Supabase's default page size must not silently truncate cost evidence.
     for (let offset = 0; ; offset += 500) {
       const { data, error } = await adminSupabase().from("model_usage_records").select("data").eq("user_id", userId).order("id").range(offset, offset + 499);
       if (error) throw new Error("Model usage could not be loaded.");
-      records.push(...(data ?? []).map((row) => row.data as ModelUsageRecord));
+      records.push(...(data ?? []).map((row) => normalizeModelUsageRecord(row.data as ModelUsageRecord)));
       if (!data || data.length < 500) break;
     }
   }

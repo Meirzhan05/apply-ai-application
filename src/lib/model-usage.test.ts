@@ -43,6 +43,26 @@ it("keeps failed and retried background matching calls without inventing an appl
   expect(report.incompleteCostCalls).toBe(2);
 });
 
+it("keeps an unknown failed replay shaped with nullable fields", async () => {
+  const userId = randomUUID();
+  const id = randomUUID();
+  const incomplete = {
+    version: 1 as const, id, userId, runId: "failed-run", provider: "openai" as const, model: "gpt-6-luna", operation: "matching",
+    startedAt: "2026-10-01T00:00:00.000Z", completedAt: "2026-10-01T00:01:00.000Z", status: "failed" as const,
+    responseId: null, requestId: null, providerStatus: null, serviceTier: null, tokens: {} as never,
+    rate: undefined as never, estimatedUsd: undefined as never, reconciledUsd: undefined as never, failure: "provider_error" as const,
+  };
+  await recordModelUsage(incomplete);
+  const report = await readModelUsage(userId);
+  expect(report.measuredCalls).toBe(0);
+  expect(report.unknownCalls).toBe(1);
+  expect(report.estimatedUsd).toBe(0);
+  expect(report.incompleteCostCalls).toBe(1);
+  expect(report.records[0].tokens).toEqual({ input: null, cachedInput: null, cacheWrite: null, output: null, reasoningOutput: null });
+  expect(report.records[0].rate).toBeNull();
+  expect(report.records[0].estimatedUsd).toBeNull();
+});
+
 it("reconciles replayed reports and provider responses once and isolates owners", async () => {
   const userId = randomUUID();
   const otherId = randomUUID();
