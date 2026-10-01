@@ -105,7 +105,7 @@ export function browserUsageEventId(provider: BrowserProvider, sessionId: string
 }
 
 export async function recordBrowserUsage(record: BrowserUsageRecord): Promise<void> {
-  if (!record.userId || !record.id || !record.runId) throw new Error("Browser usage requires an owner, event and run.");
+  if (record.version !== 1 || !record.userId || !record.id || !record.runId || !record.provider || !record.event || !Number.isFinite(Date.parse(record.occurredAt))) throw new Error("Browser usage requires an owner, event and run.");
   const normalized = record.report && record.provider === "browser-use" && !record.report.rate
     ? { ...record, report: { ...record.report, rate: BROWSER_USE_RATE } } : record;
   const file = localPath();
@@ -114,6 +114,7 @@ export async function recordBrowserUsage(record: BrowserUsageRecord): Promise<vo
       const records = await readLocal(file);
       const previous = records.find((item) => item.id === normalized.id);
       if (previous && previous.userId !== normalized.userId) throw new Error("Browser usage belongs to another owner.");
+      if (previous && (["provider", "sessionId", "event", "runId"] as const).some((key) => previous[key] !== normalized[key])) throw new Error("Browser usage identity cannot change.");
       const next = [...records.filter((item) => item.id !== normalized.id), mergeBrowserUsageRecord(previous, normalized)];
       await mkdir(path.dirname(file), { recursive: true });
       const temporary = `${file}.${randomUUID()}.tmp`;
@@ -141,15 +142,15 @@ function mergeBrowserUsageRecord(previous: BrowserUsageRecord | undefined, incom
   if (!previous) return incoming;
   const previousReport = normalizedReport(previous.report), incomingReport = normalizedReport(incoming.report);
   const previousFinal = isFinalReport(previousReport), incomingFinal = isFinalReport(incomingReport);
-  const incomingNewer = incoming.occurredAt >= previous.occurredAt;
+  const incomingNewer = Date.parse(incoming.occurredAt) >= Date.parse(previous.occurredAt);
   const newer = incomingNewer ? incoming : previous;
   const older = incomingNewer ? previous : incoming;
   const primary = previousFinal && !incomingFinal ? previousReport : normalizedReport(newer.report);
   const secondary = previousFinal && !incomingFinal ? incomingReport : normalizedReport(older.report);
   const report = primary || secondary ? withoutUndefined({ ...(secondary ?? {}), ...(primary ?? {}) }) : null;
   const merged = { ...older, ...newer, occurredAt: newer.occurredAt, report };
-  if (incoming.applicationId === undefined) merged.applicationId = previous.applicationId;
-  if (incoming.jobId === undefined) merged.jobId = previous.jobId;
+  merged.applicationId = newer.applicationId ?? older.applicationId;
+  merged.jobId = newer.jobId ?? older.jobId;
   return merged;
 }
 
