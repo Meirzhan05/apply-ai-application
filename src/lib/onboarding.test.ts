@@ -131,4 +131,28 @@ describe("autonomous onboarding", () => {
     });
     expect(profile.graduationYear).toBe("2027");
   });
+
+  it("lets the latest legal declaration replace or clear a legacy saved answer", () => {
+    const profile = initialDemoState().profile;
+    profile.sensitiveAnswers = {
+      requiresSponsorship: "Yes",
+      workAuthorization: "No",
+      gender: "Woman",
+    };
+    saveOnboarding(profile, {
+      questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" },
+    });
+
+    expect(reusableFactualAnswers(profile)).toMatchObject({
+      workAuthorization: "Yes",
+      requiresSponsorship: "No",
+      gender: "Woman",
+    });
+
+    saveOnboarding(profile, {
+      questionnaire: { workAuthorization: "unknown" },
+    });
+    expect(reusableFactualAnswers(profile)).not.toHaveProperty("workAuthorization");
+    expect(reusableFactualAnswers(profile).requiresSponsorship).toBe("No");
+  });
 });

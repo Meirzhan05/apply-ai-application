@@ -93,14 +93,12 @@ export function reusableFactualAnswers(profile: Profile): Record<string, string>
   const questionnaire = profile.onboarding!.questionnaire;
   const declaration = (value: FactualDeclaration | undefined): string | undefined =>
     value === "yes" ? "Yes" : value === "no" ? "No" : undefined;
-  if (!values.requiresSponsorship) {
-    const value = declaration(questionnaire.requiresSponsorship);
-    if (value) values.requiresSponsorship = value;
-  }
-  if (!values.workAuthorization) {
-    const value = declaration(questionnaire.workAuthorization);
-    if (value) values.workAuthorization = value;
-  }
+  const sponsorship = declaration(questionnaire.requiresSponsorship);
+  if (sponsorship) values.requiresSponsorship = sponsorship;
+  else if (questionnaire.requiresSponsorship === "unknown") delete values.requiresSponsorship;
+  const authorization = declaration(questionnaire.workAuthorization);
+  if (authorization) values.workAuthorization = authorization;
+  else if (questionnaire.workAuthorization === "unknown") delete values.workAuthorization;
   if (questionnaire.availability?.trim() && !values.availability) values.availability = questionnaire.availability.trim();
   return values;
 }
