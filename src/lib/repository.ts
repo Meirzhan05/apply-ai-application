@@ -123,7 +123,8 @@ export async function saveCatalog(jobs: Job[]): Promise<void> {
   if (isDemo()) {
     await updateState((state) => {
       const existing = new Map(state.jobs.map((job) => [job.id, job]));
-      jobs.forEach((job) => existing.set(job.id, { ...job, discoveredAt: existing.get(job.id)?.discoveredAt ?? job.discoveredAt }));
+      const checkedAt = new Date().toISOString();
+      jobs.forEach((job) => existing.set(job.id, { ...job, discoveredAt: existing.get(job.id)?.discoveredAt ?? job.discoveredAt, lastCheckedAt: checkedAt }));
       state.jobs = [...existing.values()];
       state.lastRefreshAt = new Date().toISOString();
     });

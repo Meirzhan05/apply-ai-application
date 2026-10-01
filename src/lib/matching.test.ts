@@ -119,9 +119,11 @@ describe("matching boundaries", () => {
     const assessment = await assessMatch(state.profile, unknown);
     expect(assessment.category).toBe("uncertain");
     expect(assessment.uncertainty.join(" ")).toContain("remote-only rule");
-    expect((await assessMatch(state.profile, { ...unknown, remote: true })).category).toBe("strong");
+    expect((await assessMatch(state.profile, { ...unknown, remote: true })).category).toBe("uncertain");
+    expect((await assessMatch(state.profile, { ...unknown, remote: true })).uncertainty.join(" ").toLowerCase()).toContain("work authorization");
     expect(matchKey(state.profile, unknown)).not.toBe(matchKey(state.profile, { ...unknown, remote: true }));
     expect(matchKey(state.profile, unknown)).not.toBe(matchKey(state.profile, { ...unknown, deadline: "2026-10-01" }));
+    expect(matchKey(state.profile, unknown)).not.toBe(matchKey(state.profile, { ...unknown, lastCheckedAt: "2026-10-01T12:00:00.000Z" }));
   });
   it("applies elapsed deadlines even when an unchanged posting has a cached strong match", () => {
     vi.useFakeTimers();

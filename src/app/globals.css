@@ -340,6 +340,30 @@ a {
 .autonomy-strip strong { display: block; font-size: 14px; }
 .autonomy-strip p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .autonomy-strip .text-button { flex: none; }
+.discovery-pulse {
+  border: 1px solid #d8e8df;
+  background: #fbfdfb;
+  padding: 15px 18px;
+  margin-bottom: 20px;
+}
+.discovery-pulse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.discovery-pulse-head strong { color: var(--forest); font-size: 14px; }
+.discovery-pulse-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.discovery-pulse-head > span { color: #527267; font-size: 11px; white-space: nowrap; }
+.discovery-sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.discovery-sources span { display: inline-flex; align-items: center; gap: 5px; color: #28735f; font-size: 11px; }
+.discovery-sources span.unavailable { color: #8b641e; }
+.discovery-sources i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.discovery-backlog { margin: 11px 0 0; color: #765c16; font-size: 11px; }
+.discovery-events { display: grid; gap: 6px; margin: 13px 0 0; padding: 11px 0 0; border-top: 1px solid #e5eee8; list-style: none; }
+.discovery-events li { display: flex; justify-content: space-between; gap: 12px; color: #536c63; font-size: 11px; }
+.discovery-events small { color: #7a8d85; }
+.discovery-empty { margin: 13px 0 0; padding-top: 11px; border-top: 1px solid #e5eee8; color: var(--muted); font-size: 11px; }
 .autonomy-card { display: grid; gap: 12px; }
 .automation-state { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 6px; background: #f4f7f3; }
 .automation-state strong { font-size: 14px; }
@@ -348,6 +372,7 @@ a {
 .automation-state.paused { background: #fff8e5; color: #765c16; }
 @media (max-width: 760px) {
   .autonomy-strip { align-items: flex-start; flex-direction: column; }
+  .discovery-pulse-head { align-items: flex-start; flex-direction: column; gap: 5px; }
 }
 .filterbar {
   border-bottom: 1px solid var(--line);

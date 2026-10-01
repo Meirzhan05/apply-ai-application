@@ -392,6 +392,39 @@ export interface ActivityEvent {
   detail: string;
 }
 
+export type DiscoverySourceStatus = "available" | "unavailable";
+export type DiscoveryEventKind = "arrived" | "matched" | "queued" | "unavailable";
+
+export interface DiscoverySource {
+  source: string;
+  status: DiscoverySourceStatus;
+  checkedAt: string;
+  error?: string;
+}
+
+export interface DiscoveryEvent {
+  id: string;
+  kind: DiscoveryEventKind;
+  at: string;
+  jobId?: string;
+  source?: string;
+  arrivalAt?: string;
+  delayMs?: number;
+  detail: string;
+}
+
+export interface DiscoveryState {
+  lastRefreshAt?: string;
+  sources: DiscoverySource[];
+  events: DiscoveryEvent[];
+  pendingMatches?: number;
+  matchContinuation?: {
+    token: string;
+    profileUpdatedAt: string;
+    requestedAt: string;
+  };
+}
+
 export interface AppState {
   profile: Profile;
   jobs: Job[];
@@ -406,4 +439,5 @@ export interface AppState {
   budgetMonth?: string;
   budgetReservations?: Record<string, number>;
   matchLabels?: Array<{ jobId: string; label: "strong" | "possible" | "uncertain"; profile: Profile; job: Job; labeledAt: string }>;
+  discovery?: DiscoveryState;
 }
