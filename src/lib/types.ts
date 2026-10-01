@@ -235,6 +235,8 @@ export interface ApplicationPacket {
 export interface FormFieldSnapshot {
   label: string;
   value: string;
+  /** Native radio value, retained separately from the user-facing option label. */
+  optionValue?: string;
   kind: string;
   required?: boolean;
   checked?: boolean;
@@ -269,6 +271,8 @@ export interface AutonomousHumanAnswer {
     label: string;
     kind: string;
     options: string[];
+    /** Ordered native values for radio options; labels remain user-facing. */
+    optionValues?: string[];
   };
   value: string;
   confirmedAt: string;
