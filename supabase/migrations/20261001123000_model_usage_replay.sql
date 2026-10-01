@@ -25,10 +25,26 @@ declare
 begin
   if existing_complete and not incoming_complete then return p_existing; end if;
   if incoming_score < existing_score or (incoming_score = existing_score and incoming_time < existing_time) then return p_existing; end if;
-  -- Strip nulls before merging so an unknown replay field cannot erase a
-  -- measured value. Nested token keys need the same treatment.
-  merged := jsonb_strip_nulls(p_existing) || jsonb_strip_nulls(p_incoming);
-  merged := jsonb_set(merged, '{tokens}', jsonb_strip_nulls(coalesce(p_existing->'tokens', '{}'::jsonb)) || jsonb_strip_nulls(coalesce(p_incoming->'tokens', '{}'::jsonb)), true);
+  -- Unknown replay fields cannot erase measured values. Keep every nullable
+  -- record/token key present so failed calls remain visibly unknown rather
+  -- than changing shape to an incomplete object.
+  merged := p_existing || p_incoming;
+  merged := jsonb_set(merged, '{tokens}', jsonb_build_object(
+    'input', coalesce(nullif(p_incoming->'tokens'->'input', 'null'::jsonb), nullif(p_existing->'tokens'->'input', 'null'::jsonb), 'null'::jsonb),
+    'cachedInput', coalesce(nullif(p_incoming->'tokens'->'cachedInput', 'null'::jsonb), nullif(p_existing->'tokens'->'cachedInput', 'null'::jsonb), 'null'::jsonb),
+    'cacheWrite', coalesce(nullif(p_incoming->'tokens'->'cacheWrite', 'null'::jsonb), nullif(p_existing->'tokens'->'cacheWrite', 'null'::jsonb), 'null'::jsonb),
+    'output', coalesce(nullif(p_incoming->'tokens'->'output', 'null'::jsonb), nullif(p_existing->'tokens'->'output', 'null'::jsonb), 'null'::jsonb),
+    'reasoningOutput', coalesce(nullif(p_incoming->'tokens'->'reasoningOutput', 'null'::jsonb), nullif(p_existing->'tokens'->'reasoningOutput', 'null'::jsonb), 'null'::jsonb)
+  ), true);
+  merged := jsonb_set(merged, '{completedAt}', coalesce(nullif(p_incoming->'completedAt', 'null'::jsonb), nullif(p_existing->'completedAt', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{responseId}', coalesce(nullif(p_incoming->'responseId', 'null'::jsonb), nullif(p_existing->'responseId', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{requestId}', coalesce(nullif(p_incoming->'requestId', 'null'::jsonb), nullif(p_existing->'requestId', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{providerStatus}', coalesce(nullif(p_incoming->'providerStatus', 'null'::jsonb), nullif(p_existing->'providerStatus', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{serviceTier}', coalesce(nullif(p_incoming->'serviceTier', 'null'::jsonb), nullif(p_existing->'serviceTier', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{rate}', coalesce(nullif(p_incoming->'rate', 'null'::jsonb), nullif(p_existing->'rate', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{estimatedUsd}', coalesce(nullif(p_incoming->'estimatedUsd', 'null'::jsonb), nullif(p_existing->'estimatedUsd', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{reconciledUsd}', coalesce(nullif(p_incoming->'reconciledUsd', 'null'::jsonb), nullif(p_existing->'reconciledUsd', 'null'::jsonb), 'null'::jsonb), true);
+  merged := jsonb_set(merged, '{failure}', coalesce(nullif(p_incoming->'failure', 'null'::jsonb), nullif(p_existing->'failure', 'null'::jsonb), 'null'::jsonb), true);
   return merged;
 end;
 $$;
