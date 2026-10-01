@@ -29,7 +29,7 @@ async function main(){
  assert.equal(app!.form?.fields.find(f=>/email/i.test(f.label))?.value,profile.email);
  assert.ok(app!.form?.fields.find(f=>f.kind==='file')?.fileHashes?.length);
  const proof=await db.storage.from('form-shots').download(`${userId}/${appId}.png`);assert.equal(proof.error,null);assert.ok(proof.data!.size>1000);
- console.log('PASS cloud Trigger.dev fill worker → Browserbase → owned controlled form, synthetic fields, Unicode-capable PDF upload, final-review snapshot, private screenshot and live takeover URL');
+ console.log('PASS cloud Trigger.dev fill worker → remote cloud browser → owned controlled form, synthetic fields, Unicode-capable PDF upload, final-review snapshot, private screenshot and live takeover URL');
  const takeoverPath=process.env.TEST_REMOTE_TAKEOVER_PATH;
  if(takeoverPath){
   await writeFile(takeoverPath,JSON.stringify({liveUrl:app!.browserLiveUrl}),{mode:0o600});

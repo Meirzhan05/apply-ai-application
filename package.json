@@ -32,7 +32,8 @@
     "test:latex-review": "node --import tsx scripts/test-latex-review.ts",
     "test:latex-storage": "DEMO_MODE=false node --env-file=.env --import tsx scripts/test-latex-storage.ts",
     "test:latex-ai": "DEMO_MODE=true node --env-file=.env --import tsx scripts/test-latex-ai.ts",
-    "test:latex-worker": "node --env-file=.env --import tsx scripts/test-latex-worker.ts"
+    "test:latex-worker": "node --env-file=.env --import tsx scripts/test-latex-worker.ts",
+    "test:live-browser": "node --env-file=.env --import tsx scripts/test-live-browser.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.21.0",

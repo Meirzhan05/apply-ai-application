@@ -2,10 +2,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
+import { LiveBrowser } from "@/app/live-browser";
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
+import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
   Bookmark,
@@ -43,6 +45,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
@@ -141,6 +144,7 @@ export default function Dashboard() {
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
+  const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
   ).length;
@@ -869,6 +873,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
+                    <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />
                     {activeApp.status === "filling" && (
                       <div className="step-card">
                         <LoaderCircle className="spin" size={24} /> Filling the
@@ -925,7 +930,6 @@ export default function Dashboard() {
                         "approved_to_submit",
                         "submitting",
                         "submitted",
-                        "uncertain",
                       ].includes(activeApp.status) && (
                         <div className="step-card">
                           <div className="card-title">
@@ -945,7 +949,7 @@ export default function Dashboard() {
                           {activeApp.form.screenshotPath && (
                             <Image
                               className="form-shot"
-                              src={activeApp.form.screenshotPath}
+                              src={`${activeApp.form.screenshotPath}${activeApp.form.screenshotPath.includes("?") ? "&" : "?"}capture=${encodeURIComponent(activeApp.form.capturedAt)}`}
                               alt="Filled application form screenshot"
                               width={1000}
                               height={600}
@@ -967,9 +971,7 @@ export default function Dashboard() {
                               <div key={i}>
                                 <span>{field.label}</span>
                                 <strong>
-                                  {field.kind === "file"
-                                    ? field.value || "No file"
-                                    : field.value || "Blank"}
+                                  {formFieldValue(field)}
                                 </strong>
                               </div>
                             ))}
@@ -1038,13 +1040,43 @@ export default function Dashboard() {
                       <div className="warning-note">
                         <CircleHelp size={20} />
                         <div>
-                          <strong>Submission result uncertain</strong>
+                          <strong>{employerBlock ? "Employer blocked submission" : "Submission result uncertain"}</strong>
                           <p>
-                            {activeApp.confirmation ||
+                            {employerBlock || activeApp.confirmation ||
                               activeApp.error ||
                               "Check the employer site or email before taking further action."}{" "}
                             The agent will not retry automatically.
                           </p>
+                          {activeApp.submissionReceipt && <p className="submission-capture">
+                            Response captured {new Date(activeApp.submissionReceipt.capturedAt).toLocaleString("en-US", { timeZone: data.profile.timeZone || "America/New_York", dateStyle: "medium", timeStyle: "short" })}.
+                          </p>}
+                          {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View submission screenshot ↗</a>}
+                          {employerBlock && <p>
+                            Review the employer’s instructions in your own browser. Your saved packet and confirmed essays are available below.{" "}
+                            <a href={appJob.applyUrl} target="_blank" rel="noreferrer">Open employer application ↗</a>
+                          </p>}
+                          {activeApp.manualSubmissionReport && !activeApp.manualSubmissionReport.resolution && !activeApp.submissionAttemptedAt && <p>
+                            The previous browser run has stopped. No new form fill has started.
+                            Your saved packet and confirmed essays are available for review.
+                          </p>}
+                          {canReopenManualAttempt(activeApp) && <>
+                            <p>Check the employer page or confirmation email first. Missing email alone does not confirm that an application failed.</p>
+                            <label className="checkline">
+                              <input type="checkbox" checked={confirmedUnacceptedId === activeApp.id} onChange={(event) => setConfirmedUnacceptedId(event.target.checked ? activeApp.id : null)} />
+                              I confirmed this attempt did not submit an application.
+                            </label>
+                            <button className="outline-action" disabled={Boolean(busy) || confirmedUnacceptedId !== activeApp.id} onClick={() => act("reviewManualFailure", { applicationId: activeApp.id, confirmedNotAccepted: true })}>
+                              Return to packet review
+                            </button>
+                            <p className="muted">This closes the old browser. A new fill run requires your packet approval.</p>
+                          </>}
+                          {activeApp.form && <details>
+                            <summary>View previous browser snapshot</summary>
+                            <p className="muted">Captured {new Date(activeApp.form.capturedAt).toLocaleString("en-US", { timeZone: data.profile.timeZone || "America/New_York", dateStyle: "medium", timeStyle: "short" })}. This saved snapshot predates the outcome review.</p>
+                            <div className="form-fields">
+                              {activeApp.form.fields.map((field, index) => <div key={index}><span>{field.label}</span><strong>{formFieldValue(field)}</strong></div>)}
+                            </div>
+                          </details>}
                         </div>
                       </div>
                     )}

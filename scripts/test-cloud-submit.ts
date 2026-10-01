@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { tasks, runs } from "@trigger.dev/sdk";
-import Browserbase from "@browserbasehq/sdk";
+import {remoteBrowserStatus} from "../src/lib/browser-provider";
 import { initialDemoState } from "../src/lib/demo-data";
 import { loadState, mutateState } from "../src/lib/repository";
 import { selectApplication, setPacket, approveFill, approveSubmit, transition } from "../src/lib/workflow";
@@ -89,14 +89,14 @@ async function main() {
       assert.equal(app.browserSessionId, undefined);
       assert.equal(app.approvals.some((approval) => approval.kind === "submit"), false);
       assert.equal((result.output as { blocked?: boolean }).blocked, true);
-      const browserbase = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY! });
-      let session = await browserbase.sessions.retrieve(reviewedSessionId);
+      const reviewedBrowser = { ...app, browserSessionId: reviewedSessionId };
+      let session = await remoteBrowserStatus(reviewedBrowser);
       const releaseDeadline = Date.now() + 15_000;
-      while (session.status === "RUNNING" && Date.now() < releaseDeadline) {
+      while (session === "active" && Date.now() < releaseDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        session = await browserbase.sessions.retrieve(reviewedSessionId);
+        session = await remoteBrowserStatus(reviewedBrowser);
       }
-      assert.equal(session.status, "COMPLETED", "Browserbase must confirm the reviewed session was released");
+      assert.equal(session, "stopped", "Provider must confirm the reviewed session was released");
       const duplicate = await tasks.trigger("submit-application-form", payload);
       assert.deepEqual((await runs.poll(duplicate.id, { pollIntervalMs: 1000 })).output, { skipped: true });
       assert.equal((await loadState(userId)).applications.find((item) => item.id === applicationId)!.controlledTest?.submissions, 0);

@@ -65,9 +65,17 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       validatePacket(current.profile, target.packet!);
       target.browserSessionId = opened.sessionId;
+      target.browserProvider = opened.provider;
+      target.browserSessionExpiresAt = opened.expiresAt;
+      target.browserActions = [];
       target.browserConnectUrl = opened.connectUrl;
       target.browserLiveUrl = opened.liveUrl;
       target.browserSessionCreatedAt = new Date().toISOString();
+      return true;
+    }), async (label) => mutateState(userId, (current) => {
+      const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
+      if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      target.browserActions = [...(target.browserActions || []), { at: new Date().toISOString(), label }].slice(-60);
       return true;
     }));
     const result = session;
@@ -76,6 +84,8 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       validatePacket(current.profile, target.packet!);
       target.browserSessionId = result.sessionId;
+      target.browserProvider = result.provider;
+      target.browserSessionExpiresAt = result.expiresAt;
       target.browserSessionCreatedAt = app.runWorkerClaimedAt || app.updatedAt;
       target.browserConnectUrl = result.connectUrl;
       target.browserLiveUrl = result.liveUrl;
@@ -88,13 +98,13 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       return true;
     });
     if (!saved) {
-      await cancelBrowser({ ...app, browserSessionId: result.sessionId });
+      await cancelBrowser({ ...app, browserSessionId: result.sessionId, browserProvider: result.provider });
       return { cancelled: true };
     }
     if (process.env.EMAIL_FROM) await sendActionNeeded(await loadState(userId), session.needsAction ? "Your browser run needs your help" : "A filled application is ready for review").catch(() => undefined);
     return { needsAction: session.needsAction };
   } catch (error) {
-    if (session) await cancelBrowser({ ...app, browserSessionId: session.sessionId });
+    if (session) await cancelBrowser({ ...app, browserSessionId: session.sessionId, browserProvider: session.provider });
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (target?.status === "filling" && target.runToken === runToken) {

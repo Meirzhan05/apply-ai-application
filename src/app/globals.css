@@ -1,4 +1,22 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap");
+.live-browser { margin: 24px 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: white; }
+.live-browser-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; background: var(--tint); }
+.live-browser-header > div { display: flex; align-items: center; gap: 10px; }
+.live-browser-header h3 { margin: 0; font-size: 17px; }
+.live-browser-header > span { color: var(--forest); font-size: 12px; }
+.live-browser-toolbar { padding: 16px 22px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.live-browser-toolbar p { margin: 0; max-width: 65ch; line-height: 1.5; }
+.live-browser-toolbar .text-button, .live-browser-toolbar button { display: inline-flex; align-items: center; gap: 8px; }
+.live-browser-screen { background: #eef4f1; height: clamp(340px, 33vw, 440px); }
+.live-browser-screen iframe { display: block; width: 100%; height: 100%; border: 0; }
+.live-browser-screen.watch-only iframe { pointer-events: none; }
+.browser-actions { padding: 16px 22px; border-top: 1px solid var(--line); }
+.browser-actions summary { cursor: pointer; font-weight: 600; }
+.browser-actions ol { margin: 12px 0 0; padding: 0; list-style: none; max-height: 180px; overflow: auto; }
+.browser-actions li { display: flex; gap: 16px; padding: 7px 0; line-height: 1.5; }
+.browser-actions time { flex: none; font-size: 12px; color: #355750; font-variant-numeric: tabular-nums; }
+.browser-actions li span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .live-browser-header { align-items: flex-start; flex-direction: column; gap: 8px; } .live-browser-toolbar, .live-browser-header, .browser-actions { padding: 14px; } }
 :root {
   --ink: #102d2e;
   --forest: #0b4038;
@@ -846,6 +864,18 @@ a {
   margin: 16px 0;
   background: #eaf4ed;
   color: #145742;
+}
+.success-note > div,
+.warning-note > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.success-note > svg,
+.warning-note > svg {
+  flex-shrink: 0;
+}
+.warning-note .submission-capture {
+  font-size: 12px;
 }
 .warning-note {
   background: #fff5df;

@@ -29,16 +29,16 @@ The first visual direction is [dashboard-mockup.png](docs/dashboard-mockup.png).
 - Conservative required-location checks recognize supported aliases and leave ambiguous geography or missing required remote status uncertain. Live hard rules override stale cached matches. Match runs serialize per owner, and changed postings receive separate cost reservations.
 - Selection, a three initiated applications per day limit, packet drafting and editing, exact packet approval, browser fill, takeover, exact form approval, one submit attempt, confirmation or uncertain outcome, cancellation, and an audit trail of transitions.
 - Versioned approval records and application packets with separate schema/revision numbers. New packet file manifests bind approved filenames, sizes, SHA-256 hashes and verified source facts; preview and upload verify the same PDF bytes.
-- Trigger.dev browser fill and submit workers for production, Browserbase sessions, local Chromium for the controlled demo, private form screenshots, and a shared monthly service budget reservation in Postgres. A watchdog marks stalled submissions uncertain without retrying them.
+- Trigger.dev browser fill and submit workers for production, Browser Use Cloud sessions, an embedded live browser with action history and takeover controls, local Chromium for the controlled demo, private form screenshots, and a shared monthly service budget reservation in Postgres. A watchdog marks stalled submissions uncertain without retrying them.
 - Supabase magic-link sign-in, owner scoped app state, private resume and form screenshot storage, a daily digest task, and action-needed email hooks.
 
 ## Production setup
 
 The owner-only demo is deployed at <https://apply-ai-chi.vercel.app>. Services and callback URLs are configured. Email remains restricted to the test inbox. See [integration status](docs/INTEGRATIONS.md), [acceptance checklist](docs/ACCEPTANCE.md), and the [requirement audit](docs/PLAN-AUDIT.md). Credentials use takeover; the [later vault design](docs/CREDENTIAL-VAULT.md) is inactive.
 
-For a new deployment, configure dedicated Supabase, Browserbase, Trigger.dev, OpenAI, and Resend projects. Do not reuse unrelated projects. Apply [the SQL migration](supabase/migrations/20260929190000_initial.sql) to Supabase. Set the variables in [.env.example](.env.example) on Vercel and set `DEMO_MODE=false`. Use a strong random `INTERNAL_TASK_SECRET` in both Vercel and Trigger.dev; set `APP_ORIGIN` and `TRIGGER_PROJECT_REF` in Trigger.dev. Configure Supabase Auth redirect URLs to include `/auth/callback`. Set `BETA_ALLOWED_EMAILS` for invitation-only access. Deploy all tasks in [trigger](trigger), including polling, digest, queue dispatch, and recovery schedules.
+For a new deployment, configure dedicated Supabase, Browser Use Cloud, Trigger.dev, OpenAI, and Resend projects. Do not reuse unrelated projects. Apply [the SQL migration](supabase/migrations/20260929190000_initial.sql) to Supabase. Set the variables in [.env.example](.env.example) on Vercel and set `DEMO_MODE=false`. Use a strong random `INTERNAL_TASK_SECRET` in both Vercel and Trigger.dev; set `APP_ORIGIN` and `TRIGGER_PROJECT_REF` in Trigger.dev. Configure Supabase Auth redirect URLs to include `/auth/callback`. Set `BETA_ALLOWED_EMAILS` for invitation-only access. Deploy all tasks in [trigger](trigger), including polling, digest, queue dispatch, and recovery schedules.
 
-Browserbase `keepAlive` must be available on the account so a session can stay open across user review. The browser uses only the approved packet, pauses at unfamiliar required fields and consent controls, and blocks LinkedIn and Indeed automation. Users can import those links for tracking and handoff. Public ATS posting APIs are used for discovery only. No direct ATS submit adapter is active.
+Set `BROWSER_PROVIDER=browser-use` and the server-only `BROWSER_USE_API_KEY` on both Vercel and Trigger.dev. Sessions remain available across review for up to 30 minutes. Existing Browserbase sessions retain their original provider; setting `BROWSER_PROVIDER=browserbase` explicitly enables that adapter and requires its `keepAlive` capability. In Applications, the Agent browser panel shows the real remote page and timestamped actions. Watch mode prevents embedded input while the agent fills. When paused, choose Take control, then Refresh form state to review your edits. Open browser window provides a larger live view. The browser uses only the approved packet, pauses at unfamiliar required fields and consent controls, and blocks LinkedIn and Indeed automation. Users can import those links for tracking and handoff. Public ATS posting APIs are used for discovery only. No direct ATS submit adapter is active.
 
 The global $500 monthly projected ceiling covers drafting, matching, and browser runs. Reconcile estimates with actual provider bills before beta. Set `EMAIL_TEST_RECIPIENT` to restrict outbound email during testing. Digest delivery is marked after provider acceptance.
 
@@ -61,6 +61,7 @@ npm test
 npm run build
 npm audit
 npm run test:browser
+npm run test:live-browser
 # With the non-demo app running on port 3001:
 npm run test:supabase
 ```

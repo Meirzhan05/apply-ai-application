@@ -205,6 +205,8 @@ export interface Approval {
   createdAt: string;
 }
 
+export type BrowserProvider = "browser-use" | "browserbase";
+
 export interface Application {
   id: string;
   userId: string;
@@ -216,6 +218,9 @@ export interface Application {
   form?: FormSnapshot;
   approvals: Approval[];
   browserSessionId?: string;
+  browserProvider?: BrowserProvider;
+  browserSessionExpiresAt?: string;
+  browserActions?: Array<{ at: string; label: string }>;
   browserSessionCreatedAt?: string;
   browserConnectUrl?: string;
   browserLiveUrl?: string;
@@ -229,7 +234,13 @@ export interface Application {
   submissionStartedAt?: string;
   submissionWorkerClaimedAt?: string;
   submissionAttemptedAt?: string;
-  manualSubmissionReport?: { reportedAt: string; source: "owner"; outcome: "unconfirmed"; siteMessage: string };
+  manualSubmissionReport?: {
+    reportedAt: string;
+    source: "owner";
+    outcome: "unconfirmed";
+    siteMessage: string;
+    resolution?: { outcome: "not_accepted"; reviewedAt: string; previousForm?: FormSnapshot; previousApprovals: Approval[] };
+  };
   queuedRun?: {
     id: string;
     kind: "draft" | "fill";

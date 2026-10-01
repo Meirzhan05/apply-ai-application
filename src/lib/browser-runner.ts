@@ -1,16 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isIP } from "node:net";
-import Browserbase from "@browserbasehq/sdk";
+import { createRemoteBrowser, releaseRemoteBrowser, type RemoteBrowserSession } from "@/lib/browser-provider";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
-import { chromium, type Browser, type Page } from "playwright-core";
+import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 import { z } from "zod";
 import { reviewedPacketFile } from "@/lib/packet-files";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
+import { graduationSeasonOption } from "@/lib/education-options";
 import type {
   Application,
   FormFieldSnapshot,
@@ -252,6 +253,7 @@ function allowedValues(
     email: profile.email,
     phone: profile.phone,
     school: profile.school,
+    graduation_date: profile.graduationYear,
     cover_letter: application.packet?.coverLetter || "",
   };
   application.packet?.answers.forEach((answer, index) => {
@@ -283,6 +285,7 @@ function deterministicKey(
   if (/e.?mail/.test(label) || field.kind === "email") return "email";
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
   if (/school|university|college/.test(label)) return "school";
+  if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
   if (/sponsor/.test(label)) return "saved_requiresSponsorship";
   if (/authorized.*work|work.*authoriz/.test(label)) return "saved_workAuthorization";
   if (/gender/.test(label)) return "saved_gender";
@@ -302,6 +305,7 @@ function matchingOption(label: string, value: string, options: string[]): string
   const normalize = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
   const exact = options.filter((option) => normalize(option) === normalize(value));
   if (exact.length === 1) return exact[0];
+  if (/graduation.*season|graduat.*term/i.test(label)) return graduationSeasonOption(value, options);
   // Match an explicitly chosen city to the ATS's city + "office" label only.
   // Never turn an explanation of work authorization into a Yes/No answer.
   if (/office/.test(label) && !sensitiveQuestion(label)) {
@@ -309,6 +313,47 @@ function matchingOption(label: string, value: string, options: string[]): string
     if (city.length === 1) return city[0];
   }
   return undefined;
+}
+
+async function autocompleteOptions(page: Page, locator: Locator) {
+  const controls = await locator.getAttribute("aria-controls");
+  if (controls) return page.locator(`[id=${JSON.stringify(controls)}]`).getByRole("option");
+  // Some supported widgets place their list inside the question's fieldset.
+  // Never select an option from another question's popup.
+  return locator.locator("xpath=ancestor::fieldset[1]").getByRole("option");
+}
+
+async function fillAutocomplete(page: Page, locator: Locator, value: string, school: boolean): Promise<boolean> {
+  await locator.fill(value);
+  const options = await autocompleteOptions(page, locator);
+  const exact = options.filter({ hasText: new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+  await exact.first().waitFor({ state: "visible", timeout: 3000 }).catch(() => undefined);
+  if (await exact.count() === 1 && await exact.isVisible()) { await exact.click(); return true; }
+  await locator.fill("");
+  if (!school) return false;
+  // A school absent from an employer's fixed list can be entered truthfully
+  // through its explicit Other option and accompanying school-name question.
+  await locator.press("ArrowDown");
+  await options.first().waitFor({ state: "visible", timeout: 3000 }).catch(() => undefined);
+  if (await exact.count() === 1 && await exact.isVisible()) { await exact.click(); return true; }
+  const other = options.filter({ hasText: /^Other$/i });
+  if (await other.count() !== 1 || !await other.isVisible()) return false;
+  await other.click();
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const followups = (await inspectFields(page)).filter(candidate => !candidate.autocomplete && ["text", "textarea"].includes(candidate.kind) &&
+      /if you selected other.*(?:school|university|college)/i.test(candidate.label));
+    if (followups.length === 1) {
+      const followup = await currentFieldLocator(page, followups[0]);
+      if (!followup) return false;
+      if (followups[0].value.trim()) return followups[0].value.trim().toLowerCase() === value.trim().toLowerCase();
+      await followup.fill(value);
+      return true;
+    }
+    await page.waitForTimeout(100);
+  }
+  // Other without an observed field to record the actual school is incomplete.
+  return false;
 }
 
 async function aiMappings(
@@ -428,6 +473,16 @@ async function snapshot(
   };
 }
 
+async function restrictNavigation(page: Page, targetUrl: string) {
+  const origin = new URL(targetUrl).origin;
+  await page.context().route("**/*", async (route) => {
+    const request = route.request();
+    if (request.isNavigationRequest() && request.frame().parentFrame() === null && new URL(request.url()).origin !== origin)
+      return route.abort("blockedbyclient");
+    return route.continue();
+  });
+}
+
 async function getPage(application: Application): Promise<Runtime> {
   if (!application.browserSessionId)
     throw new Error("No browser session exists for this application.");
@@ -439,6 +494,7 @@ async function getPage(application: Application): Promise<Runtime> {
   const context = browser.contexts()[0];
   const page = context.pages()[0];
   if (!page) { await browser.close().catch(() => undefined); throw new Error("The application page is no longer open."); }
+  await restrictNavigation(page, application.jobSnapshot?.applyUrl || application.form?.url || page.url());
   return { browser, page };
 }
 
@@ -446,9 +502,12 @@ export async function prepareBrowser(
   application: Application,
   job: Job,
   profile: Profile,
-  onSession?: (session: { sessionId: string; connectUrl?: string; liveUrl?: string }) => Promise<boolean>,
+  onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
+  onAction?: (label: string) => Promise<boolean>,
 ): Promise<{
   form: Omit<FormSnapshot, "hash">;
+  provider?: RemoteBrowserSession["provider"];
+  expiresAt?: string;
   sessionId: string;
   connectUrl?: string;
   liveUrl?: string;
@@ -470,27 +529,23 @@ export async function prepareBrowser(
   let sessionId: string;
   let connectUrl: string | undefined;
   let liveUrl: string | undefined;
-  if (!isDemo() && process.env.BROWSERBASE_API_KEY) {
-    const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY });
-    const session = await bb.sessions.create({
-      projectId: process.env.BROWSERBASE_PROJECT_ID,
-      keepAlive: true,
-      api_timeout: 1800,
-      browserSettings: {
-        allowedDomains: [new URL(job.applyUrl).hostname],
-        solveCaptchas: false,
-      },
-    });
-    sessionId = session.id;
+  let provider: RemoteBrowserSession["provider"] | undefined;
+  let expiresAt: string | undefined;
+  if (!isDemo()) {
+    const session = await createRemoteBrowser(job.applyUrl);
+    sessionId = session.sessionId;
+    provider = session.provider;
+    expiresAt = session.expiresAt;
     connectUrl = session.connectUrl;
+    liveUrl = session.liveUrl;
     try {
       const browser = await chromium.connectOverCDP(connectUrl);
       const context = browser.contexts()[0];
       const page = context.pages()[0] ?? (await context.newPage());
       runtime = { browser, page };
-      liveUrl = (await bb.sessions.debug(session.id)).debuggerFullscreenUrl;
-    } catch (error) { await cancelBrowser({ ...application, browserSessionId: sessionId }); throw error; }
-  } else if (isDemo()) {
+      await restrictNavigation(page, job.applyUrl);
+    } catch (error) { await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider }); throw error; }
+  } else {
     const browser = await chromium.launch({
       headless: true,
       executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
@@ -499,11 +554,15 @@ export async function prepareBrowser(
     sessionId = `local-${application.id}`;
     runtime = { browser, page };
     localBrowsers.set(sessionId, runtime);
-  } else throw new Error("Browserbase is not configured.");
+  }
 
   const { browser, page } = runtime;
+  const action = async (label: string) => {
+    if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
+  };
   try {
-    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl }))) throw new Error("The browser run was cancelled before filling.");
+    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt }))) throw new Error("The browser run was cancelled before filling.");
+    await action("Opening the employer form");
     await page.goto(job.applyUrl, {
       waitUntil: "domcontentloaded",
       timeout: 20000,
@@ -514,12 +573,13 @@ export async function prepareBrowser(
       );
     await waitForForm(page);
     const fields = await inspectFields(page);
+    await action("Checking the form questions");
     if (new URL(page.url()).origin !== new URL(job.applyUrl).origin) {
       const form = await snapshot(page, application);
       form.readyToSubmit = false;
       form.blockers = ["The posting redirected to a different site. Review the destination and import its application link before allowing an automatic fill."];
       if (connectUrl) await browser.close();
-      return { form, sessionId, connectUrl, liveUrl, needsAction: true, needsCoverLetter: false };
+      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, needsAction: true, needsCoverLetter: false };
     }
     const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
     if (questionCount > 40 || fields.length > 200) {
@@ -532,10 +592,11 @@ export async function prepareBrowser(
       // Disconnect from a remote session without releasing it. The applicant
       // needs the same open page for takeover and a fresh final review.
       if (connectUrl) await browser.close();
-      return { form, sessionId, connectUrl, liveUrl, needsAction: true,
+      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, needsAction: true,
         needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
     }
     const values = allowedValues(profile, application);
+    await action("Mapping questions to approved answers");
     const ai = await aiMappings(fields, values, application);
     let needsAction = false;
     let needsCoverLetter = false;
@@ -561,6 +622,7 @@ export async function prepareBrowser(
             buffer: resume.bytes,
           });
         await waitForUploads(page);
+        await action(`Uploaded: ${field.label}`);
         continue;
       }
       if (
@@ -576,6 +638,7 @@ export async function prepareBrowser(
             buffer: coverLetter!.bytes,
           });
         await waitForUploads(page);
+        await action(`Uploaded: ${field.label}`);
         continue;
       }
       if (
@@ -596,7 +659,7 @@ export async function prepareBrowser(
         const chosen = group.find((candidate) => candidate.optionLabel === option);
         if (chosen) {
           const choice = await currentFieldLocator(page, chosen);
-          if (choice) await choice.check();
+          if (choice) { await choice.check(); await action(`Filled: ${field.label}`); }
           else fillBlockers.push(`The form changed while filling: ${field.label}`);
         }
         else if (value) fillBlockers.push(`Choose an exact option for: ${field.label}`);
@@ -613,23 +676,25 @@ export async function prepareBrowser(
         if (option) await locator.selectOption({ label: option });
         else if (field.required) needsAction = true;
       } else if (field.autocomplete) {
-        await locator.fill(value);
-        const options = page.getByRole("option", { name: value, exact: true });
-        try { await options.first().waitFor({ state: "visible", timeout: 3000 }); } catch { /* Unknown widgets require takeover. */ }
-        if (await options.count() === 1 && await options.first().isVisible()) await options.first().click();
-        else fillBlockers.push(`Select and confirm the option for: ${field.label}`);
+        const filled = await fillAutocomplete(page, locator, value, key === "school");
+        if (!filled && field.required) fillBlockers.push(`Select and confirm the option for: ${field.label}`);
       } else await locator.fill(value);
+      await action(`Checked: ${field.label}`);
     }
     if (!canAutomate(page.url()))
       throw new Error(
         "The form navigated to a site that is not enabled for automation.",
       );
+    await action("Verifying filled fields and attachments");
     const form = await snapshot(page, application);
+    await action(form.readyToSubmit === false ? "Paused for your input" : "Paused before submission for your review");
     if (fillBlockers.length) { form.blockers = [...new Set([...(form.blockers ?? []), ...fillBlockers])]; form.readyToSubmit = false; }
     needsAction ||= form.readyToSubmit === false;
     if (connectUrl) await browser.close();
     return {
       form,
+      provider,
+      expiresAt,
       sessionId,
       connectUrl,
       liveUrl,
@@ -639,7 +704,7 @@ export async function prepareBrowser(
   } catch (error) {
     await browser.close().catch(() => undefined);
     if (sessionId.startsWith("local-")) localBrowsers.delete(sessionId);
-    else await cancelBrowser({ ...application, browserSessionId: sessionId });
+    else await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider });
     throw error;
   }
 }
@@ -651,6 +716,53 @@ export async function refreshBrowserSnapshot(
   try {
     if (!canAutomate(runtime.page.url())) throw new Error("This site requires a manual application handoff.");
     return await snapshot(runtime.page, application);
+  } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+}
+
+// Repair supported blank education questions in the existing approved session.
+// Leave takeover edits, attachments, sensitive answers and submission untouched.
+export async function repairEducationFields(application: Application, job: Job, profile: Profile): Promise<Omit<FormSnapshot, "hash">> {
+  if (application.status !== "needs_user_action" || application.submissionStartedAt || application.submissionAttemptedAt || application.submittedAt ||
+    application.submissionReceipt || (application.manualSubmissionReport && !application.manualSubmissionReport.resolution) || application.approvals.some(approval => approval.kind === "submit"))
+    throw new Error("This browser run cannot be filled again.");
+  if (!application.packet || !hasFillApproval(application, profile.id, job.applyUrl)) throw new Error("The current packet requires fill approval.");
+  validatePacket(profile, application.packet);
+  const runtime = await getPage(application);
+  try {
+    const { page } = runtime;
+    if (!canAutomate(page.url()) || page.url() !== job.applyUrl) throw new Error("The application destination changed. Review it before filling.");
+    const values = allowedValues(profile, application);
+    const fields = await inspectFields(page);
+    const handled = new Set<string>();
+    const blockers: string[] = [];
+    for (const field of fields) {
+      const key = deterministicKey(field, application);
+      if (key !== "school" && key !== "graduation_date") continue;
+      const value = values[key];
+      if (!value || field.kind !== "radio" && field.value.trim()) continue;
+      if (page.url() !== job.applyUrl) throw new Error("The application destination changed during filling.");
+      if (field.kind === "radio") {
+        if (handled.has(field.identifier)) continue;
+        handled.add(field.identifier);
+        const group = fields.filter(candidate => candidate.kind === "radio" && candidate.identifier === field.identifier);
+        if (group.some(candidate => candidate.checked)) continue;
+        const option = matchingOption(field.label, value, group.map(candidate => candidate.optionLabel));
+        const chosen = group.find(candidate => candidate.optionLabel === option);
+        if (chosen) { const locator = await currentFieldLocator(page, chosen); if (locator) await locator.check(); }
+      } else {
+        const locator = await currentFieldLocator(page, field);
+        if (!locator) continue;
+        if (field.autocomplete) {
+          if (!await fillAutocomplete(page, locator, value, key === "school") && field.required) blockers.push(`Select and confirm the option for: ${field.label}`);
+        } else if (field.kind === "select") {
+          const option = matchingOption(field.label, value, field.options);
+          if (option) await locator.selectOption({label:option});
+        } else if (["text", "textarea"].includes(field.kind)) await locator.fill(value);
+      }
+    }
+    const form = await snapshot(page, application);
+    if (blockers.length) { form.blockers = [...new Set([...form.blockers ?? [], ...blockers])]; form.readyToSubmit = false; }
+    return form;
   } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
 }
 
@@ -722,20 +834,7 @@ export async function submitBrowser(
     } else if (application.browserConnectUrl) {
       await browser.close().catch(() => undefined);
     }
-    if (
-      clicked &&
-      application.browserSessionId &&
-      !application.browserSessionId.startsWith("local-") &&
-      process.env.BROWSERBASE_API_KEY
-    ) {
-      const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY });
-      await bb.sessions
-        .update(application.browserSessionId, {
-          projectId: process.env.BROWSERBASE_PROJECT_ID,
-          status: "REQUEST_RELEASE",
-        })
-        .catch(() => undefined);
-    }
+    if (clicked) await releaseRemoteBrowser(application).catch(() => undefined);
   }
 }
 
@@ -746,16 +845,5 @@ export async function cancelBrowser(application: Application): Promise<void> {
     await local.browser.close().catch(() => undefined);
     localBrowsers.delete(application.browserSessionId);
   }
-  if (
-    process.env.BROWSERBASE_API_KEY &&
-    !application.browserSessionId.startsWith("local-")
-  ) {
-    const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY });
-    await bb.sessions
-      .update(application.browserSessionId, {
-        projectId: process.env.BROWSERBASE_PROJECT_ID,
-        status: "REQUEST_RELEASE",
-      })
-      .catch(() => undefined);
-  }
+  await releaseRemoteBrowser(application).catch(() => undefined);
 }

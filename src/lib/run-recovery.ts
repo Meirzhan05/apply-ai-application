@@ -5,7 +5,9 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
   const closed: Application[] = [];
   for (const app of state.applications) {
     const idle = now - new Date(app.updatedAt).getTime();
-    const expired = app.browserSessionId && now - new Date(app.browserSessionCreatedAt || app.updatedAt).getTime() > 30 * 60 * 1000;
+    const expired = app.browserSessionId && (app.browserSessionExpiresAt
+      ? now >= new Date(app.browserSessionExpiresAt).getTime()
+      : now - new Date(app.browserSessionCreatedAt || app.updatedAt).getTime() > 30 * 60 * 1000);
     if (app.status === "submitting" && idle > 10 * 60 * 1000) {
       closed.push(structuredClone(app));
       transition(app, ["submitting"], "uncertain");

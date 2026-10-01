@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { Page } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { draftPacket } from "../src/lib/drafting";
-import { prepareBrowser, refreshBrowserSnapshot, submitBrowser, cancelBrowser } from "../src/lib/browser-runner";
+import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, cancelBrowser } from "../src/lib/browser-runner";
 import { approveFill, approveSubmit, selectApplication, setFormSnapshot, setPacket } from "../src/lib/workflow";
 import type { Application } from "../src/lib/types";
 import { hashJson } from "../src/lib/crypto";
@@ -59,7 +59,13 @@ const server = createServer((request, response) => {
     return;
   }
   const group = (question: string, name: string, options: string[], required = true) => `<fieldset><label class="ashby-application-form-question-title ${required ? "_required_fixture" : ""}">${question}</label>${options.map((option, index) => `<input type="radio" name="${name}" id="${name}-${index}"><label for="${name}-${index}">${option}</label>`).join("")}</fieldset>`;
-  const extra = scenario.startsWith("grouped") ? `<label>Preferred First & Last Name<input name="preferred" required></label><label>Why are you excited to join us?<textarea required></textarea></label>${group("Which office would you prefer?", "office", ["San Francisco office", "New York office", "No preference"])}${group("Are you legally authorized to work in the United States?", "authorization", ["Yes", "No"])}${group("Will you now or in the future require visa sponsorship?", "sponsorship", ["Yes", "No"])}${group("How did you hear about this opportunity?", "source", Array.from({length:35}, (_, i) => `Source ${i}`))}<label><input type="checkbox" name="newsletter">Subscribe to newsletter</label><fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" placeholder="Start typing..."><ul role="listbox" hidden><li role="option">${initialDemoState().profile.school}</li></ul></fieldset><script>document.querySelector('[name=resume]').addEventListener('change', () => {const hidden=document.createElement('input'); hidden.type='hidden'; document.querySelector('form').prepend(hidden)}); const school=document.querySelector('[role=combobox]'); school.addEventListener('input', () => {document.querySelector('[role=listbox]').hidden=false}); document.querySelector('[role=option]').addEventListener('click', () => {school.dataset.selected='true'; document.querySelector('[role=listbox]').hidden=true});</script>`
+  const education = `<fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" aria-controls="schools" placeholder="Start typing..."><ul id="schools" role="listbox" hidden></ul></fieldset>${group("What is your anticipated graduation season?", "graduation", ["Winter 2027", "Spring 2027", "Fall 2027"])}<label>Name pronunciation<input name="pronunciation"></label><script>
+    const school=document.querySelector('[role=combobox]'); const list=document.querySelector('#schools');
+    const choices=${JSON.stringify(scenario === "education-exact" ? ["Stetson University", "Other"] : scenario === "education-no-other" ? ["Stanford University"] : ["Stanford University", "Other"])};
+    function show(query) { list.hidden=false; list.innerHTML=''; for(const text of choices.filter(choice => choice.toLowerCase().includes(query.toLowerCase()))) {const option=document.createElement('li'); option.setAttribute('role','option'); option.textContent=text; option.addEventListener('click',()=>{school.value=text; school.dataset.selected='true'; list.hidden=true; if(text==='Other' && !document.querySelector('[name=otherSchool]')) school.closest('fieldset').insertAdjacentHTML('afterend','<label>If you selected Other above, please list what school you attended<input name="otherSchool" required></label>'); });list.append(option);} }
+    school.addEventListener('input',()=>show(school.value));school.addEventListener('keydown',event=>{if(event.key==='ArrowDown')show(school.value)});
+    </script>`;
+  const extra = scenario.startsWith("education-") ? education : scenario.startsWith("grouped") ? `<label>Preferred First & Last Name<input name="preferred" required></label><label>Why are you excited to join us?<textarea required></textarea></label>${group("Which office would you prefer?", "office", ["San Francisco office", "New York office", "No preference"])}${group("Are you legally authorized to work in the United States?", "authorization", ["Yes", "No"])}${group("Will you now or in the future require visa sponsorship?", "sponsorship", ["Yes", "No"])}${group("How did you hear about this opportunity?", "source", Array.from({length:35}, (_, i) => `Source ${i}`))}<label><input type="checkbox" name="newsletter">Subscribe to newsletter</label><fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" placeholder="Start typing..."><ul role="listbox" hidden><li role="option">${initialDemoState().profile.school}</li></ul></fieldset><script>document.querySelector('[name=resume]').addEventListener('change', () => {const hidden=document.createElement('input'); hidden.type='hidden'; document.querySelector('form').prepend(hidden)}); const school=document.querySelector('[role=combobox]'); school.addEventListener('input', () => {document.querySelector('[role=listbox]').hidden=false}); document.querySelector('[role=option]').addEventListener('click', () => {school.dataset.selected='true'; document.querySelector('[role=listbox]').hidden=true});</script>`
     : scenario === "complex" ? Array.from({ length: 41 }, (_, i) => `<label>Optional question ${i}<input name="optional-${i}"></label>`).join("")
     : scenario === "unknown" ? '<label>Do you hold a secret clearance?<input name="clearance" required></label>'
     : scenario === "login" ? '<label>Password<input type="password"></label>'
@@ -102,6 +108,7 @@ const liveApps: Application[] = [];
 
 async function fill(scenario: string, onSession?: Parameters<typeof prepareBrowser>[3]) {
   const state = initialDemoState();
+  if (scenario.startsWith("education-")) { state.profile.school = "Stetson University"; state.profile.graduationYear = scenario === "education-year-only" ? "2027" : "May 2027 (expected)"; }
   const job = { ...state.jobs[0], applyUrl: `${base}/apply?scenario=${scenario}`, url: `${base}/apply?scenario=${scenario}` };
   state.jobs[0] = job;
   const app = selectApplication(state, job.id, state.profile.id);
@@ -140,6 +147,39 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  for (const scenario of ["education-other", "education-exact", "education-no-other", "education-year-only"]) await test(`${scenario}: handles known education without guessing or requesting optional details`, async () => {
+    const {state, app, result} = await fill(scenario);
+    const page = pageFor(app);
+    assert.equal(await page.locator('[name=pronunciation]').inputValue(), "");
+    assert.equal(result.form.blockers?.some(blocker => /pronunciation/.test(blocker)), false);
+    assert.equal(await page.locator('#graduation-1').isChecked(), scenario !== 'education-year-only');
+    if (scenario === 'education-exact') {
+      assert.equal(await page.locator('[role=combobox]').inputValue(), state.profile.school);
+      assert.equal(await page.locator('[name=otherSchool]').count(), 0);
+    } else if (scenario !== 'education-no-other') {
+      assert.equal(await page.locator('[role=combobox]').inputValue(), 'Other');
+      assert.equal(await page.locator('[name=otherSchool]').inputValue(), state.profile.school);
+    } else assert.equal(await page.locator('[role=combobox]').inputValue(), '');
+    assert.equal(result.form.readyToSubmit, ['education-other','education-exact'].includes(scenario));
+    assert.equal(submissions.get(scenario), undefined);
+    if (scenario === 'education-other') {
+      await page.locator('[name=otherSchool]').fill('');
+      await page.locator('[name=email]').fill('takeover-edit@example.com');
+      await page.locator('#graduation-1').evaluate(element => { (element as HTMLInputElement).checked = false; });
+      setFormSnapshot(app, await refreshBrowserSnapshot(app));
+      assert.equal(app.status, 'needs_user_action');
+      const repaired = await repairEducationFields(app, app.jobSnapshot!, state.profile);
+      assert.equal(repaired.readyToSubmit, true);
+      assert.equal(await page.locator('[name=otherSchool]').inputValue(), state.profile.school);
+      assert.equal(await page.locator('[name=email]').inputValue(), 'takeover-edit@example.com');
+      assert.equal(await page.locator('#graduation-1').isChecked(), true);
+      const approvals = app.approvals; app.approvals=[];
+      await assert.rejects(() => repairEducationFields(app, app.jobSnapshot!, state.profile), /requires fill approval/);
+      app.approvals=approvals; app.submissionAttemptedAt = new Date().toISOString();
+      await assert.rejects(() => repairEducationFields(app, app.jobSnapshot!, state.profile), /cannot be filled again/);
+    }
+    await cancelBrowser(app);
+  });
   await test("delayed hydration fills approved details after the real form appears", async () => {
     const {state, app, result} = await fill("delayed-form");
     assert.equal(result.needsAction, false);

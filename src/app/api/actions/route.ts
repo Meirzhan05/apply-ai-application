@@ -11,10 +11,12 @@ import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmAiEssay } from "@/lib/answer-policy";
 import { assertJobEligible } from "@/lib/application-policy";
+import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { sameOrigin } from "@/lib/request-security";
 import { adminSupabase } from "@/lib/supabase-admin";
 import {
   refreshBrowserSnapshot,
+  repairEducationFields,
   submitBrowser,
   cancelBrowser,
 } from "@/lib/browser-runner";
@@ -35,6 +37,7 @@ import {
   approveFill,
   approveSubmit,
   canSubmit,
+  hasFillApproval,
   selectApplication,
   setFormSnapshot,
   setPacket,
@@ -313,9 +316,16 @@ async function perform(
     const app = findApp(state, appId, userId);
     if (app.status !== "needs_user_action" && app.status !== "final_review")
       throw new Error("This browser run is not awaiting review.");
-    const form = await refreshBrowserSnapshot(app);
+    const job = findJob(state, app);
+    const form = app.status === "needs_user_action" && !app.submissionStartedAt && !app.submissionAttemptedAt &&
+      (!app.manualSubmissionReport || app.manualSubmissionReport.resolution?.outcome === "not_accepted") && hasFillApproval(app, userId, job.applyUrl)
+      ? await repairEducationFields(app, job, state.profile)
+      : await refreshBrowserSnapshot(app);
     return mutateState(userId, (current) => {
       const target = findApp(current, appId, userId);
+      if (target.status !== app.status || target.browserSessionId !== app.browserSessionId || target.packetHash !== app.packetHash ||
+        target.form?.hash !== app.form?.hash || target.submissionStartedAt || target.submissionAttemptedAt)
+        throw new Error("The browser run changed while refreshing. Review its current state.");
       setFormSnapshot(target, form);
       activity(
         current,
@@ -444,6 +454,20 @@ async function perform(
       );
     });
     await cancelBrowser(app);
+    return;
+  }
+  if (action === "reviewManualFailure") {
+    const appId = text(payload.applicationId, 100);
+    const confirmed = z.literal(true).parse(payload.confirmedNotAccepted);
+    const before = findApp(await loadState(userId), appId, userId);
+    await mutateState(userId, (current) => {
+      const app = findApp(current, appId, userId);
+      if (!app.packet) throw new Error("The saved packet is unavailable.");
+      validatePacket(current.profile, app.packet);
+      reopenManualAttempt(app, userId, confirmed);
+      activity(current, "Manual attempt reviewed", "You confirmed the employer did not accept the application. Review and approve the saved packet before a new fill run.");
+    });
+    await cancelBrowser(before);
     return;
   }
   if (action === "restartBrowser") {

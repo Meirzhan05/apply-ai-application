@@ -34,4 +34,26 @@ describe("stalled run recovery", () => {
     expect(app.browserSessionId).toBeUndefined();
     expect(app.approvals).toHaveLength(0);
   });
+  it("uses the cloud provider deadline even when the local creation time differs", () => {
+    const now = Date.now();
+    const state = initialDemoState();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "approved_to_submit";
+    app.browserProvider = "browser-use";
+    app.browserSessionId = "cloud-session";
+    app.browserLiveUrl = "https://live.browser-use.com/";
+    app.browserConnectUrl = "https://session.cdp.browser-use.com/";
+    app.browserSessionCreatedAt = new Date(now - 31 * 60_000).toISOString();
+    app.browserSessionExpiresAt = new Date(now + 1000).toISOString();
+    app.approvals.push({ version: 1, id: "test", kind: "submit", userId: app.userId, applicationId: app.id, targetUrl: "https://example.org", reviewHash: "old", createdAt: app.updatedAt });
+    expect(recoverStaleRuns(state, now)).toEqual([]);
+    expect(app.approvals).toHaveLength(1);
+    const [closed] = recoverStaleRuns(state, now + 1000);
+    expect(closed.browserProvider).toBe("browser-use");
+    expect(closed.browserSessionId).toBe("cloud-session");
+    expect(app.status).toBe("needs_user_action");
+    expect(app.browserLiveUrl).toBeUndefined();
+    expect(app.browserConnectUrl).toBeUndefined();
+    expect(app.approvals).toHaveLength(0);
+  });
 });
