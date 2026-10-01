@@ -225,16 +225,34 @@ async function formBlockers(page: Page, fields: InspectedField[]): Promise<strin
     if (!field.valid) blockers.push(`Correct or complete the field: ${field.label}`);
   }
   const captchaUnresolved = await page.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="challenge" i], [data-sitekey]').evaluateAll((elements) => elements
-    .filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).display !== "none" && getComputedStyle(element).visibility !== "hidden")
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility !== "visible") return false;
+      // Empty provider mounts and transparent/hidden overlays can still have
+      // DOM rects. They are not controls the applicant can see or operate.
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        const computed = getComputedStyle(node);
+        if (Number(computed.opacity) === 0 || computed.display === "none" || computed.contentVisibility === "hidden") return false;
+      }
+      if (style.position === "fixed" && (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth)) return false;
+      return true;
+    })
     .some((element) => {
       const source = element.getAttribute("src") || "";
       const widget = element.closest(".g-recaptcha, .h-captcha") ?? element;
       const provider = /hcaptcha/i.test(source) || widget.matches(".h-captcha") || widget.querySelector('iframe[src*="hcaptcha"]') ? "hcaptcha"
         : /recaptcha/i.test(source) || widget.matches(".g-recaptcha") || widget.querySelector('iframe[src*="recaptcha"]') ? "recaptcha" : undefined;
-      if (!provider) return true;
       // A visible challenge dialog needs takeover even if a previous response
-      // remains in the page. The persistent checkbox/badge alone does not.
+      // remains in the page or the widget is configured as invisible.
       if (element.tagName === "IFRAME" && /bframe|[?&#]frame=challenge(?:[&#]|$)/i.test(source)) return true;
+      // Invisible widgets run after the approved submit click. Their badge,
+      // empty response field and enclave frame are background infrastructure,
+      // not evidence of an interactive challenge that needs human takeover.
+      if ((element.tagName === "IFRAME" && /[?&#]frame=enclave(?:[&#]|$)/i.test(source)) ||
+        element.closest('.grecaptcha-badge, [data-size="invisible"]') ||
+        /[?&#]size=invisible(?:[&#]|$)/i.test(source)) return false;
+      if (!provider) return true;
       const responseName = provider === "hcaptcha" ? "h-captcha-response" : "g-recaptcha-response";
       const nativeForm = element.closest("form");
       const scope = nativeForm ?? (widget.querySelector(`[name="${responseName}"]`) ? widget : document.forms.length === 1 ? document.forms[0] : widget);

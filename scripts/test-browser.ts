@@ -57,7 +57,7 @@ const server = createServer((request, response) => {
     response.end('<html><body><h1>Public job posting</h1><button type="button">Apply</button></body></html>');
     return;
   }
-  if (url.pathname === "/recaptcha/api2/bframe") {
+  if (url.pathname === "/recaptcha/api2/bframe" || url.pathname === "/recaptcha/api2/anchor" || url.pathname === "/hcaptcha-enclave.html") {
     response.end("<html><body>Synthetic challenge frame</body></html>");
     return;
   }
@@ -84,6 +84,8 @@ const server = createServer((request, response) => {
     : scenario === "questions" ? `${group("Will you now or in the future require visa sponsorship?", "questionSponsor", ["Yes", "No"])}<label>Favorite snack<select name="snack" required><option value="">Choose</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label><label>Optional nickname<input name="nickname"></label>`
     : scenario === "unknown" ? '<label>Do you hold a secret clearance?<input name="clearance" required></label>'
     : scenario === "login" ? '<label>Password<input type="password"></label>'
+    : scenario === "captcha-enclave" ? '<div class="h-captcha" data-sitekey="fixture"><iframe src="/hcaptcha-enclave.html#frame=enclave" title="Widget containing checkbox for hCaptcha security challenge" style="position:fixed;top:0;left:0;width:100%;height:100%;visibility:hidden"></iframe><input type="hidden" name="h-captcha-response"></div>'
+    : scenario === "captcha-background" ? '<div class="g-recaptcha" data-sitekey="fixture" data-size="invisible"><div class="grecaptcha-badge"><iframe src="/recaptcha/api2/anchor?size=invisible" title="reCAPTCHA"></iframe></div><div style="opacity:0;pointer-events:none"><iframe src="/recaptcha/api2/bframe" title="reCAPTCHA challenge"></iframe></div></div><textarea name="g-recaptcha-response" style="display:none"></textarea>'
     : scenario === "captcha" ? '<div data-sitekey="fixture">CAPTCHA takeover fixture</div>'
     : scenario === "recaptcha-recovery" || scenario === "captcha-active-challenge" || scenario === "captcha-wrong-provider" ? `<div class="g-recaptcha" data-sitekey="fixture">reCAPTCHA takeover fixture</div><textarea name="g-recaptcha-response" style="display:none"></textarea>${scenario === "captcha-active-challenge" ? '<iframe src="/recaptcha/api2/bframe" title="reCAPTCHA challenge"></iframe>' : scenario === "captcha-wrong-provider" ? '<input type="hidden" name="h-captcha-response" value="unrelated-provider-response">' : ""}`
     : scenario === "hcaptcha-recovery" ? '<div class="h-captcha" data-sitekey="fixture">hCaptcha takeover fixture</div><input type="hidden" name="h-captcha-response">'
@@ -162,6 +164,31 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("captcha-enclave: Lever's zero-height hCaptcha container is not a takeover challenge", async () => {
+    const { app, result } = await fill("captcha-enclave");
+    assert.equal(await pageFor(app).locator('.h-captcha').evaluate(element => element.getBoundingClientRect().height), 0);
+    assert.equal(result.form.blockers?.some(blocker => /CAPTCHA/.test(blocker)), false, "An empty hCaptcha container is not a visible challenge");
+    assert.equal(result.form.readyToSubmit, true);
+    assert.equal(submissions.get("captcha-enclave"), undefined);
+    await cancelBrowser(app);
+  });
+  await test("captcha-background: an invisible badge and hidden challenge do not ask for takeover", async () => {
+    const { app, result } = await fill("captcha-background");
+    assert.equal(result.form.blockers?.some(blocker => /CAPTCHA/.test(blocker)), false, "There is no visible interactive CAPTCHA to solve");
+    assert.equal(result.form.readyToSubmit, true);
+    assert.equal(await pageFor(app).locator('[name="g-recaptcha-response"]').inputValue(), "");
+    setFormSnapshot(app, result.form);
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+    approveSubmit(app, app.userId, app.form!.hash);
+    await pageFor(app).locator('div[style="opacity:0;pointer-events:none"]').evaluate(element => { (element as HTMLElement).style.opacity = "1"; });
+    await assert.rejects(() => submitBrowser(app), /FORM_CHANGED/);
+    app.status = "final_review";
+    setFormSnapshot(app, await refreshBrowserSnapshot(app));
+    assert.equal(app.status, "needs_user_action", "A newly visible challenge invalidates review and still requires takeover");
+    assert.ok(app.form!.blockers?.some(blocker => /CAPTCHA/.test(blocker)));
+    assert.equal(submissions.get("captcha-background"), undefined);
+    await cancelBrowser(app);
+  });
   await test("label extraction: employer headings stay separate from options, technical names, and location status", async () => {
     const { app, result } = await fill("label-extraction"); setFormSnapshot(app, result.form);
     const questions = browserQuestions(app.form);
