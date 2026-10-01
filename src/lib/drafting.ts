@@ -1,3 +1,4 @@
+import { originalResumeManifest } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -28,7 +29,7 @@ const DraftSchema = z.object({
 });
 
 export function packetProfileHash(profile: Profile): string {
-  return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills, facts: profile.facts.filter((fact) => fact.verified), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion, automationSettings: profile.automationSettings });
+  return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills, facts: profile.facts.filter((fact) => fact.verified), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion, automationSettings: profile.automationSettings, resumeSource: profile.resumeSource, resumeFileName: profile.resumeFileName });
 }
 
 function relevantFacts(profile: Profile, job: Job): VerifiedFact[] {
@@ -53,6 +54,10 @@ export async function draftPacket(
   options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; beforeModelCall?: () => Promise<void> },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
+  if (options?.knownAnswersOnly && profile.automationSettings?.resumeTailoring === false) {
+    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResumeManifest(profile), version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: [], createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
+    return profile.automationSettings.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
+  }
   if (facts.length === 0)
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
@@ -134,8 +139,10 @@ export async function draftPacket(
   const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&
     (!previous.coverLetterContext || previous.coverLetter === `Dear Hiring Team,\n\nI am applying for the ${previous.coverLetterContext.title} role at ${previous.coverLetterContext.company}.\n\n${previous.coverLetterFactIds.map((id) => facts.find((fact) => fact.id === id)!.text).join("\n")}\n\nThank you for considering my application.\n\nSincerely,\n${profile.name}`);
   answers = options?.knownAnswersOnly ? [] : await draftEssayAnswers(profile, job, answers, options?.deadline);
-  return withPacketFiles(profile, {
+  if (options?.beforeModelCall) await options.beforeModelCall();
+  const packet = await withPacketFiles(profile, {
     schemaVersion: resumeDocument ? 2 : 1,
+    resumeMode: "tailored",
     ...(resumeDocument ? { resumeDocument } : {}),
     ...(options?.preserveResume && previous?.resumeArtifact ? { resumeArtifact: previous.resumeArtifact, files: previous.files } : {}),
     version: (previous?.version ?? 0) + 1,
@@ -150,6 +157,17 @@ export async function draftPacket(
     profileHash: packetProfileHash(profile),
     ...(previousCoverValid ? { coverLetter: previous!.coverLetter, coverLetterFactIds: previous!.coverLetterFactIds, coverLetterContext: previous!.coverLetterContext } : {}),
   }, options?.deadline);
+  return options?.knownAnswersOnly && profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, packet, options.beforeModelCall) : packet;
+}
+
+export async function withGroundedCoverLetter(profile: Profile, job: Job, packet: ApplicationPacket, guard?: () => Promise<void>): Promise<ApplicationPacket> {
+  if (guard) await guard();
+  validatePacket(profile, packet);
+  const letter = coverLetterFromFacts(profile, job);
+  const revised = await withPacketFiles(profile, { ...packet, version: packet.version + 1, coverLetter: letter.text, coverLetterFactIds: letter.factIds, coverLetterContext: { title: job.title, company: job.company } });
+  validatePacket(profile, revised);
+  if (guard) await guard();
+  return revised;
 }
 
 export function coverLetterFromFacts(
@@ -176,15 +194,16 @@ export function validatePacket(
     const kinds = packet.coverLetter ? ["resume", "cover-letter"] : ["resume"];
     if (packet.files.length !== kinds.length || kinds.some((kind) => packet.files!.filter((file) => file.kind === kind).length !== 1)) throw new Error("The application file manifest is incomplete.");
     for (const file of packet.files) {
-      const ids = [...new Set(file.kind === "resume" ? (packet.schemaVersion === 2 && packet.resumeDocument ? resumeFactIds(packet.resumeDocument) : packet.resumeLines.flatMap((line) => line.factIds)) : packet.coverLetterFactIds ?? [])];
-      if (!/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isInteger(file.size) || file.size < 1 || file.mimeType !== "application/pdf" ||
-        file.filename !== (file.kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf") || hashJson(file.factIds) !== hashJson(ids)) throw new Error("The application file manifest does not match its verified facts.");
+      const ids = [...new Set(file.kind === "resume" ? (packet.resumeMode === "original" ? [] : packet.schemaVersion === 2 && packet.resumeDocument ? resumeFactIds(packet.resumeDocument) : packet.resumeLines.flatMap((line) => line.factIds)) : packet.coverLetterFactIds ?? [])];
+      if (!/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isInteger(file.size) || file.size < 1 || file.mimeType !== (file.kind === "resume" && packet.resumeMode === "original" ? packet.originalResume?.mimeType : "application/pdf") ||
+        file.filename !== (file.kind === "resume" && packet.resumeMode === "original" ? packet.originalResume?.filename : file.kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf") || hashJson(file.factIds) !== hashJson(ids)) throw new Error("The application file manifest does not match its verified facts.");
     }
   }
   if (packet.profileHash && packet.profileHash !== packetProfileHash(profile)) throw new Error("Your confirmed profile changed. Prepare and review a new packet.");
   const verified = profile.facts.filter((fact) => fact.verified);
   const verifiedIds = new Set(verified.map((fact) => fact.id));
-  if (!packet.resumeLines.length)
+  if (packet.resumeMode === "original" && (!packet.originalResume || hashJson(packet.originalResume) !== hashJson(originalResumeManifest(profile)) || packet.resumeDocument || packet.resumeArtifact || packet.resumeLines.length || packet.files?.find((file) => file.kind === "resume")?.storageKey !== packet.originalResume.storageKey)) throw new Error("The confirmed original résumé changed. Prepare a new application.");
+  if (packet.resumeMode !== "original" && !packet.resumeLines.length)
     throw new Error("The resume needs at least one verified fact.");
   if (packet.schemaVersion === 2) {
     validateResumeArtifact(profile, packet);

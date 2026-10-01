@@ -1,9 +1,9 @@
 import { withModelUsageContext } from "@/lib/model-usage";
-import { assertAutonomous, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
+import { assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
 import { queueAutonomousSubmission, saveAutonomousSubmission } from "@/lib/autonomous-application";
-import { newId } from "@/lib/crypto";
+import { hashJson, newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
-import { draftPacket, validatePacket } from "@/lib/drafting";
+import { draftPacket, validatePacket, withGroundedCoverLetter } from "@/lib/drafting";
 import { assertJobEligible } from "@/lib/application-policy";
 import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { sendActionNeeded } from "@/lib/email";
@@ -106,12 +106,27 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       target.browserActions = [...(target.browserActions || []), { at: new Date().toISOString(), label }].slice(-60);
       return true;
-    })));
+    }), app.autonomousAuthorization ? async (observed) => {
+      if (!observed.fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label))) throw new Error("The required cover-letter control changed.");
+      assertAutonomousDestination(app, observed);
+      if (state.profile.automationSettings!.coverLetterMode === "disabled") throw new Error("The employer requires a cover letter, but your cover-letter setting is disabled.");
+      const packet = await withGroundedCoverLetter(state.profile, job, app.packet!, () => currentAutonomousRun(userId, applicationId, runToken, "fill"));
+      await mutateState(userId, (current) => {
+        const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
+        if (!target || target.status !== "filling" || target.runToken !== runToken || target.packetHash !== app.packetHash) throw new Error("The application materials changed during letter preparation.");
+        assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
+        validatePacket(current.profile, packet);
+        target.packet = packet; target.packetHash = hashJson(packet); target.form = undefined; target.autonomousAuthorization!.requiredCoverLetter = true; sealAutonomousPacket(target);
+        current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Required cover letter prepared", detail: "Grounded in confirmed facts; continuing the same authorized browser session." });
+      });
+      app.packet = packet; app.packetHash = hashJson(packet); app.autonomousAuthorization!.requiredCoverLetter = true; sealAutonomousPacket(app);
+      return packet;
+    } : undefined));
     const result = session;
     if (app.autonomousAuthorization && (result.needsCoverLetter || unsupportedAutonomousForm(result.form))) {
       result.needsAction = true;
       result.form.readyToSubmit = false;
-      result.form.blockers = [...result.form.blockers || [], "This automatic workflow does not yet support cover letters or open-ended essays."];
+      result.form.blockers = [...result.form.blockers || [], result.needsCoverLetter ? "The employer requires a cover letter, but your saved cover-letter mode does not permit this attachment." : "This automatic workflow does not yet support open-ended essays."];
     }
     const saved = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);

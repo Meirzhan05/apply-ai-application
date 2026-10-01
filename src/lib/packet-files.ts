@@ -1,3 +1,5 @@
+import { hashJson } from "@/lib/crypto";
+import { readOriginalResume, validateOriginalResume } from "@/lib/original-resume";
 import { coverLetterPdf, resumePdf } from "@/lib/resume-pdf";
 import { fitResume } from "@/lib/latex-compiler";
 import { resumeFactIds, resumeFields, resumeInputHash, validateResumeDocument } from "@/lib/resume-document";
@@ -5,6 +7,8 @@ import { bytesHash, readArtifact, saveArtifact } from "@/lib/resume-artifacts";
 import type { ApplicationPacket, PacketFile, Profile } from "@/lib/types";
 
 export type PacketFileKind = PacketFile["kind"];
+const legacyResumeInputHash = (profile: Profile, packet: ApplicationPacket) => hashJson({ kind: "resume", profile: { name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills }, lines: packet.resumeLines });
+const coverInputHash = (packet: ApplicationPacket) => hashJson({ kind: "cover-letter", text: packet.coverLetter });
 const filename = (kind: PacketFileKind) => kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
 async function render(profile: Profile, packet: ApplicationPacket, kind: PacketFileKind) {
   if (kind === "resume") return resumePdf(profile, packet);
@@ -26,7 +30,11 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
 export async function withPacketFiles(profile: Profile, original: ApplicationPacket, deadline = Date.now() + 90_000): Promise<ApplicationPacket> {
   let packet = { ...original };
   let resumeFile: PacketFile;
-  if (packet.schemaVersion === 2) {
+  if (packet.resumeMode === "original") {
+    if (!packet.originalResume) throw new Error("The confirmed original résumé is missing.");
+    await readOriginalResume(profile.id, packet.originalResume);
+    resumeFile = { kind: "resume", ...packet.originalResume, storageBucket: "resumes", factIds: [] };
+  } else if (packet.schemaVersion === 2) {
     if (!packet.resumeDocument) throw new Error("The structured resume is missing. Rebuild the packet.");
     validateResumeDocument(profile, packet.resumeDocument);
     if (packet.resumeArtifact) {
@@ -45,22 +53,48 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
       resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", ...pdf, factIds: resumeFactIds(fitted.document) };
     }
   } else {
-    const bytes = await render(profile, packet, "resume");
-    resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", sha256: bytesHash(bytes), size: bytes.length, factIds: [...new Set(packet.resumeLines.flatMap((line) => line.factIds))] };
+    const inputHash = legacyResumeInputHash(profile, packet);
+    const saved = packet.files?.find((file) => file.kind === "resume");
+    if (saved?.storageKey?.startsWith(`${profile.id}/${inputHash}/`)) {
+      await readArtifact(profile.id, saved.storageKey, saved.sha256, saved.size); resumeFile = saved;
+    } else {
+      const bytes = await render(profile, packet, "resume");
+      const artifact = await saveArtifact(profile.id, inputHash, bytes, "pdf");
+      resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", ...artifact, storageBucket: "application-files", factIds: [...new Set(packet.resumeLines.flatMap((line) => line.factIds))] };
+    }
   }
   const files = [resumeFile];
   if (packet.coverLetter) {
-    const bytes = await render(profile, packet, "cover-letter");
-    files.push({ kind: "cover-letter", filename: filename("cover-letter"), mimeType: "application/pdf", sha256: bytesHash(bytes), size: bytes.length, factIds: [...new Set(packet.coverLetterFactIds ?? [])] });
+    const inputHash = coverInputHash(packet);
+    const saved = packet.files?.find((file) => file.kind === "cover-letter");
+    if (saved?.storageKey?.startsWith(`${profile.id}/${inputHash}/`)) {
+      await readArtifact(profile.id, saved.storageKey, saved.sha256, saved.size); files.push(saved);
+    } else {
+      const bytes = await render(profile, packet, "cover-letter");
+      const artifact = await saveArtifact(profile.id, inputHash, bytes, "pdf");
+      files.push({ kind: "cover-letter", filename: filename("cover-letter"), mimeType: "application/pdf", ...artifact, storageBucket: "application-files", factIds: [...new Set(packet.coverLetterFactIds ?? [])] });
+    }
   }
   return { ...packet, schemaVersion: packet.schemaVersion ?? 1, files };
 }
 export async function reviewedPacketFile(profile: Profile, packet: ApplicationPacket, kind: PacketFileKind) {
   const file = packet.files?.find((item) => item.kind === kind);
+  if (kind === "resume" && packet.resumeMode === "original") {
+    if (!packet.originalResume || !file) throw new Error("The confirmed original résumé is missing.");
+    validateOriginalResume(profile.id, packet.originalResume);
+    if (file.filename !== packet.originalResume.filename || file.mimeType !== packet.originalResume.mimeType || file.storageKey !== packet.originalResume.storageKey || file.sha256 !== packet.originalResume.sha256 || file.size !== packet.originalResume.size) throw new Error("The original résumé attachment changed.");
+    return { bytes: await readOriginalResume(profile.id, packet.originalResume), filename: file.filename, mimeType: file.mimeType };
+  }
   if (kind === "resume" && packet.schemaVersion === 2) {
     validateResumeArtifact(profile, packet);
     const bytes = await readArtifact(profile.id, file!.storageKey!, file!.sha256, file!.size);
     return { bytes, filename: filename(kind), mimeType: "application/pdf" };
+  }
+  if (file?.storageKey) {
+    const inputHash = kind === "resume" ? legacyResumeInputHash(profile, packet) : coverInputHash(packet);
+    if (file.filename !== filename(kind) || file.mimeType !== "application/pdf" || file.storageKey !== `${profile.id}/${inputHash}/${file.sha256}.pdf`) throw new Error("The application file changed or no longer matches its current content.");
+    const bytes = await readArtifact(profile.id, file.storageKey, file.sha256, file.size);
+    return { bytes, filename: file.filename, mimeType: file.mimeType };
   }
   const bytes = await render(profile, packet, kind);
   if ((!file && packet.schemaVersion !== undefined) || (file &&
@@ -72,4 +106,13 @@ export async function reviewedResumeSource(profile: Profile, packet: Application
   validateResumeArtifact(profile, packet);
   const source = packet.resumeArtifact!.source;
   return { bytes: await readArtifact(profile.id, source.storageKey, source.sha256, source.size), filename: "tailored-resume.tex", mimeType: "text/plain; charset=utf-8" };
+}
+
+// Historical inspection verifies the bytes recorded at the durable claim. It
+// cannot authorize a new upload and does not reinterpret later profile changes.
+export async function historicalPacketFile(owner: string, file: PacketFile) {
+  const bytes = file.storageBucket === "resumes" ? await readOriginalResume(owner, file)
+    : file.storageKey ? await readArtifact(owner, file.storageKey, file.sha256, file.size) : undefined;
+  if (!bytes || bytes.length !== file.size || bytesHash(bytes) !== file.sha256) throw new Error("The historical material is unavailable or changed.");
+  return { bytes, filename: file.filename, mimeType: file.mimeType };
 }

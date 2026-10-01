@@ -190,11 +190,12 @@ export interface ScreeningAnswer {
 export interface PacketFile {
   kind: "resume" | "cover-letter";
   filename: string;
-  mimeType: "application/pdf";
+  mimeType: ResumeSource["mimeType"];
   sha256: string;
   size: number;
   factIds: string[];
   storageKey?: string;
+  storageBucket?: "resumes" | "application-files";
 }
 
 export interface ApplicationPacket {
@@ -202,6 +203,8 @@ export interface ApplicationPacket {
   version: number;
   summary: string;
   resumeLines: ResumeLine[];
+  resumeMode?: "original" | "tailored";
+  originalResume?: ResumeSource & { filename: string };
   resumeDocument?: ResumeDocument;
   resumeArtifact?: ResumeArtifact;
   answers: ScreeningAnswer[];
@@ -295,6 +298,7 @@ export interface Application {
     authorizedAt: string;
     expectedFormUrl?: string;
     expectedSubmitAction?: string;
+    requiredCoverLetter?: boolean;
     profileHash?: string;
     jobHash?: string;
     postingIdentity?: string;
@@ -323,6 +327,7 @@ export interface Application {
   submissionStartedAt?: string;
   submissionWorkerClaimedAt?: string;
   submissionDispatch?: { token: string; confirmedAt?: string };
+  submissionMaterials?: { resumeMode: "original" | "tailored"; coverLetterMode?: CoverLetterMode; files: PacketFile[]; capturedAt: string };
   submissionAttemptedAt?: string;
   submissionVerification?: {
     version: 1;

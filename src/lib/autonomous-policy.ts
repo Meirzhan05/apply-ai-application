@@ -1,3 +1,4 @@
+import { originalResumeManifest } from "@/lib/original-resume";
 import { hashJson } from "@/lib/crypto";
 import { assertJobEligible } from "@/lib/application-policy";
 import { validatePacket } from "@/lib/drafting";
@@ -8,7 +9,7 @@ import { answerOwner } from "@/lib/answer-responsibility";
 import type { Application, Job, Profile, FormSnapshot } from "@/lib/types";
 
 export function unsupportedAutonomousForm(form: Pick<FormSnapshot, "fields">): boolean {
-  return form.fields.some((field) => field.kind === "textarea" || answerOwner(field.label) === "ai" || (field.required && /cover\s*letter/i.test(field.label)));
+  return form.fields.some((field) => field.kind === "textarea" || answerOwner(field.label) === "ai");
 }
 
 export function exactApplicationUrl(raw: string, base?: string): string {
@@ -50,8 +51,9 @@ export function assertAutomationEnabled(profile: Profile): void {
       profile.automationAuthorization?.status !== "enabled" || profile.automationAuthorization.version !== profile.automationVersion ||
       profile.automationSettings?.version !== profile.automationVersion)
     throw new Error("Complete onboarding and enable your current automation settings before applying automatically.");
-  if (!profile.automationSettings.resumeTailoring || profile.automationSettings.coverLetterMode === "enabled" || profile.automationSettings.essayMode !== "automatic-truthful")
-    throw new Error("Automatic applications currently support a tailored résumé and no optional cover letter. Original résumé and essay workflows are not available yet.");
+  if (!profile.automationSettings.resumeTailoring) originalResumeManifest(profile);
+  if (profile.automationSettings.essayMode !== "automatic-truthful")
+    throw new Error("This essay workflow is not available yet.");
 }
 
 export function authorizeKnownAnswerApplication(application: Application, profile: Profile, job: Job): void {
@@ -73,14 +75,15 @@ export function assertAutonomous(application: Application, profile: Profile, job
     throw new Error("The application authorization changed. Start a new authorized workflow after reviewing your settings.");
   if (phase === "draft") return;
   if (!application.packet || auth.packetHash !== application.packetHash || application.packetHash !== hashJson(application.packet) ||
-      !auth.filesHash || auth.filesHash !== hashJson(application.packet.files) || application.packet.coverLetter || application.packet.answers.length)
+      !auth.filesHash || auth.filesHash !== hashJson(application.packet.files) || (application.packet.coverLetter && (profile.automationSettings!.coverLetterMode === "disabled" || (profile.automationSettings!.coverLetterMode === "required-only" && !auth.requiredCoverLetter))) || application.packet.answers.length)
     throw new Error("The validated application materials changed or require an unsupported letter or essay.");
   validatePacket(profile, application.packet);
   if (phase === "fill") return;
   const form = application.form;
   if (form) assertAutonomousDestination(application, form);
+  if (auth.requiredCoverLetter && !form?.fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label))) throw new Error("The authorized required cover-letter control changed.");
   if (!form || !form.readyToSubmit || unsupportedAutonomousForm(form) || form.blockers?.length || form.hash !== formDigest(form) || auth.formHash !== form.hash ||
-      application.packet.files?.some((file) => !form.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ||
+      application.packet.files?.some((file) => (file.kind === "resume" || form.fields.some((field) => field.kind === "file" && /cover\s*letter/i.test(field.label))) && !form.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ||
       application.submissionAttemptedAt)
     throw new Error("The authorized form changed or a submission was already attempted. No new submission is allowed.");
 }

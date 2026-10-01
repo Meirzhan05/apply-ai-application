@@ -55,7 +55,7 @@ describe("v2 reviewed LaTeX packets", () => {
     expect(revised.schemaVersion).toBe(2);
     expect(revised.files![0]).toEqual(packet.files![0]);
     expect(revised.resumeArtifact).toEqual(packet.resumeArtifact);
-    expect(mocks.fit).toHaveBeenCalledOnce(); expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.fit).toHaveBeenCalledOnce(); expect(revised.files!.every((file) => Boolean(file.storageKey))).toBe(true);
   });
   it("invalidates approval on rebuild and accepts complete v2 approval semantics", async () => {
     const state = initialDemoState(); state.profile = latexFixture().profile;
