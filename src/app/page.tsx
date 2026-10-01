@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
 import { LiveBrowser } from "@/app/live-browser";
+import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
+import { browserQuestions, browserTakeoverReasons } from "@/lib/browser-questions";
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
@@ -881,13 +883,13 @@ export default function Dashboard() {
                       </div>
                     )}
                     {activeApp.status === "needs_user_action" && (
+                      <>
+                      {activeApp.browserSessionId && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
                       <div className="step-card">
-                        <h3>Takeover needed</h3>
-                        {activeApp.form?.blockers?.map((blocker) => <p key={blocker}>{blocker}</p>)}
+                        <h3>{!activeApp.browserSessionId ? "Start a fresh browser session" : browserTakeoverReasons(activeApp.form).length ? "Browser help needed" : "Your browser is saved"}</h3>
+                        {browserTakeoverReasons(activeApp.form).map((blocker) => <p key={blocker}>{blocker}</p>)}
                         <p>
-                          Complete any login, CAPTCHA, unfamiliar required
-                          field, or missing answer in the live browser. Then
-                          refresh the form for final review.
+                          {!activeApp.browserSessionId ? "Your packet is saved. Review it and approve a fresh browser session to continue." : browserTakeoverReasons(activeApp.form).length ? "Complete the browser steps above, then refresh the form for review." : "You can inspect the browser at any time. Use the questions above to let the agent continue filling."}
                         </p>
                         {activeApp.browserLiveUrl && (
                           <a
@@ -919,10 +921,11 @@ export default function Dashboard() {
                             })
                           }
                         >
-                          I’m done · refresh form
+                          Refresh form state
                         </button>}
                         <button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review packet for a new browser session</button>
                       </div>
+                      </>
                     )}
                     {activeApp.form &&
                       [
@@ -1511,7 +1514,7 @@ function statusLabel(status: Application["status"]) {
     draft_review: "Review packet",
     authorized_to_fill: "Ready to fill",
     filling: "Filling form",
-    needs_user_action: "Takeover needed",
+    needs_user_action: "Your input needed",
     final_review: "Review final form",
     approved_to_submit: "Ready to submit",
     submitting: "Submitting",

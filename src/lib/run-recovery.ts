@@ -8,6 +8,13 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
     const expired = app.browserSessionId && (app.browserSessionExpiresAt
       ? now >= new Date(app.browserSessionExpiresAt).getTime()
       : now - new Date(app.browserSessionCreatedAt || app.updatedAt).getTime() > 30 * 60 * 1000);
+    if (!expired && app.browserQuestionRun && now - Date.parse(app.browserQuestionRun.startedAt) > 5 * 60 * 1000 && ["filling", "needs_user_action"].includes(app.status)) {
+      app.browserQuestionRun = undefined;
+      transition(app, ["filling", "needs_user_action"], "needs_user_action");
+      app.approvals = app.approvals.filter((approval) => approval.kind !== "submit");
+      app.error = "The agent paused while handling your answers. Your browser is saved; refresh the form before continuing.";
+      continue;
+    }
     if (app.status === "submitting" && idle > 10 * 60 * 1000) {
       closed.push(structuredClone(app));
       transition(app, ["submitting"], "uncertain");
@@ -25,6 +32,7 @@ export function recoverStaleRuns(state: AppState, now = Date.now()): Application
       app.approvals = app.approvals.filter((approval) => approval.kind !== "submit");
     } else continue;
     app.browserSessionId = app.browserConnectUrl = app.browserLiveUrl = undefined;
+    app.browserQuestionRun = app.browserQuestionDrafts = undefined;
   }
   return closed;
 }

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isIP } from "node:net";
+import { hashJson } from "@/lib/crypto";
 import { createRemoteBrowser, releaseRemoteBrowser, type RemoteBrowserSession } from "@/lib/browser-provider";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -12,12 +13,15 @@ import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
 import { graduationSeasonOption } from "@/lib/education-options";
+import { browserQuestions } from "@/lib/browser-questions";
+import { answerOwner } from "@/lib/answer-responsibility";
 import type {
   Application,
   FormFieldSnapshot,
   FormSnapshot,
   Job,
   Profile,
+  BrowserAnswerApproval,
 } from "@/lib/types";
 
 type Runtime = { browser: Browser; page: Page };
@@ -43,6 +47,7 @@ interface InspectedField {
   optionLabel: string;
   autocomplete: boolean;
   stableIdentifier: boolean;
+  editable: boolean;
 }
 
 const BrowserMapping = z.object({
@@ -128,6 +133,7 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
             !(required && (kind === "radio" ? !groupChecked : kind === "checkbox" ? !(input as HTMLInputElement).checked : !input.value.trim())),
           identifier: input.name || input.id || String(index),
           stableIdentifier: Boolean(input.name || input.id),
+          editable: !input.disabled && !(input as HTMLInputElement).readOnly,
           fileHashes: await Promise.all(Array.from((input as HTMLInputElement).files ?? []).map(async (file) => {
             const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
             return `${file.name}:${file.size}:${Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("")}`;
@@ -135,7 +141,7 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           value: input.value,
           options:
             input.tagName.toLowerCase() === "select"
-              ? Array.from((input as HTMLSelectElement).options).map(
+              ? Array.from((input as HTMLSelectElement).options).filter((option) => !option.disabled && Boolean(option.value)).map(
                   (option) => option.text,
                 )
               : [],
@@ -361,7 +367,7 @@ async function aiMappings(
   values: Record<string, string>,
   application: Application,
 ): Promise<Map<number, string>> {
-  fields = fields.filter((field) => !deterministicKey(field, application) && !sensitiveQuestion(field.label) && !["radio", "checkbox", "file", "password", "submit", "button"].includes(field.kind));
+  fields = fields.filter((field) => !deterministicKey(field, application) && answerOwner(field.label) !== "ai" && !sensitiveQuestion(field.label) && !["radio", "checkbox", "file", "password", "submit", "button"].includes(field.kind));
   if (!fields.length || !process.env.OPENAI_API_KEY) return new Map();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 0 });
   try {
@@ -425,6 +431,9 @@ async function snapshot(
       checked: ["checkbox", "radio"].includes(field.kind) ? field.checked : undefined,
       options: field.kind === "select" ? field.options : undefined,
       identifier: field.identifier,
+      valid: field.valid,
+      editable: field.editable,
+      autocomplete: field.autocomplete,
       fileHashes: field.kind === "file" ? field.fileHashes : undefined,
     }));
   const screenshot = await page.screenshot({ fullPage: true });
@@ -717,6 +726,56 @@ export async function refreshBrowserSnapshot(
     if (!canAutomate(runtime.page.url())) throw new Error("This site requires a manual application handoff.");
     return await snapshot(runtime.page, application);
   } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+}
+
+// Resume only the exact controls approved in Apply. Never navigate, upload a
+// different file, alter other answers, or touch the submit control here.
+export async function fillApprovedBrowserAnswers(application: Application, job: Job, profile: Profile,
+  approvals: BrowserAnswerApproval[], stillActive: () => Promise<boolean> = async () => true): Promise<Omit<FormSnapshot, "hash">> {
+  if (application.status !== "filling" || application.browserQuestionRun?.kind !== "answers" ||
+    !application.form || !application.packet || !hasFillApproval(application, profile.id, job.applyUrl) ||
+    application.submissionStartedAt || application.submissionAttemptedAt || application.submittedAt ||
+    application.submissionReceipt || (application.manualSubmissionReport && !application.manualSubmissionReport.resolution) ||
+    !approvals.length || approvals.length > 20 || approvals.some((approval) => approval.userId !== profile.id ||
+      approval.applicationId !== application.id || approval.targetUrl !== application.form!.url ||
+      approval.sessionId !== application.browserSessionId || approval.packetHash !== application.packetHash ||
+      approval.formHash !== application.form!.hash ||
+      !application.browserAnswerApprovals?.some((saved) => hashJson(saved) === hashJson(approval))))
+    throw new Error("These answers have not been approved for the current browser form.");
+  validatePacket(profile, application.packet);
+  const { browser, page } = await getPage(application);
+  const deadline = Date.now() + 90_000;
+  try {
+    if (!canAutomate(page.url()) || page.url() !== application.form.url || new URL(page.url()).origin !== new URL(job.applyUrl).origin)
+      throw new Error("The application destination changed. Refresh the form before continuing.");
+    const current = await snapshot(page, application);
+    const controlsHash = (form: Omit<FormSnapshot, "hash">) => formDigest({ ...form, readyToSubmit: undefined, blockers: undefined });
+    // Fill diagnostics may differ between captures, but every actual control,
+    // value, option, attachment, and submit destination must still match.
+    if (controlsHash(current) !== controlsHash(application.form)) return current;
+    const pending = browserQuestions({ ...current, hash: application.form.hash });
+    for (const approval of approvals) {
+      if (Date.now() >= deadline || !await stillActive()) throw new Error("The browser continuation stopped. Refresh its current state.");
+      const question = pending.find((item) => item.id === approval.question.id);
+      if (!question || hashJson(question) !== hashJson(approval.question)) return await snapshot(page, application);
+      const fields = await inspectFields(page);
+      const group = fields.filter((field) => field.identifier === question.identifier && field.kind === question.kind && field.label === question.label);
+      const field = question.kind === "radio" ? group.find((item) => item.optionLabel === approval.answer.answer) : group.length === 1 ? group[0] : undefined;
+      if (!field?.editable || !canAutomate(page.url()) || page.url() !== current.url) throw new Error("A form control changed. Refresh before answering again.");
+      const locator = await currentFieldLocator(page, field);
+      if (!locator) throw new Error("A form control changed. Refresh before answering again.");
+      const value = approval.answer.answer;
+      if (field.kind === "radio") await locator.check({ timeout: 5000 });
+      else if (field.kind === "checkbox") await locator.setChecked(value === "Yes", { timeout: 5000 });
+      else if (field.kind === "select") {
+        if (!field.options.includes(value)) throw new Error("The employer changed the available options. Refresh the questions.");
+        await locator.selectOption({ label: value }, { timeout: 5000 });
+      } else if (field.autocomplete) {
+        if (!await fillAutocomplete(page, locator, value, false)) throw new Error(`The agent could not select the option for: ${question.label}. Open the browser to finish this control.`);
+      } else await locator.fill(value, { timeout: 5000 });
+    }
+    return await snapshot(page, application);
+  } finally { if (application.browserConnectUrl) await browser.close(); }
 }
 
 // Repair supported blank education questions in the existing approved session.

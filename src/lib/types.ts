@@ -179,6 +179,32 @@ export interface FormFieldSnapshot {
   options?: string[];
   fileHashes?: string[];
   identifier?: string;
+  valid?: boolean;
+  editable?: boolean;
+  autocomplete?: boolean;
+}
+
+export interface BrowserQuestion {
+  id: string;
+  identifier: string;
+  label: string;
+  kind: string;
+  options: string[];
+  owner: "human" | "ai";
+  value: string;
+}
+
+export interface BrowserAnswerApproval {
+  version: 1;
+  userId: string;
+  applicationId: string;
+  targetUrl: string;
+  sessionId: string;
+  packetHash: string;
+  formHash: string;
+  question: BrowserQuestion;
+  answer: ScreeningAnswer;
+  approvedAt: string;
 }
 
 export interface FormSnapshot {
@@ -221,6 +247,9 @@ export interface Application {
   browserProvider?: BrowserProvider;
   browserSessionExpiresAt?: string;
   browserActions?: Array<{ at: string; label: string }>;
+  browserQuestionDrafts?: { formHash: string; sessionId: string; packetHash: string; answers: Record<string, ScreeningAnswer> };
+  browserAnswerApprovals?: BrowserAnswerApproval[];
+  browserQuestionRun?: { token: string; startedAt: string; kind: "answers" | "essays" };
   browserSessionCreatedAt?: string;
   browserConnectUrl?: string;
   browserLiveUrl?: string;
@@ -254,7 +283,7 @@ export interface Application {
   runs?: Array<{ token: string; kind: "draft" | "fill"; projectedUsd: number; requestedAt: string }>;
   timeSavedMinutes?: number;
   transitionHistory?: Array<{ from: ApplicationStatus; to: ApplicationStatus; at: string }>;
-  controlledTest?: { expiresAt: number; submissions: number };
+  controlledTest?: { expiresAt: number; submissions: number; questions?: boolean };
 }
 
 export interface ActivityEvent {

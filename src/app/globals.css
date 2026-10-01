@@ -1033,6 +1033,33 @@ a {
   z-index: 10;
   padding: 20px;
 }
+.questions-dialog { width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; margin: auto; padding: 0; border: 0; border-radius: 12px; color: var(--ink); background: var(--paper); box-shadow: 0 20px 70px #102d2e40; }
+.questions-dialog::backdrop { background: #102d2e80; }
+.questions-dialog header { display: flex; align-items: flex-start; gap: 20px; padding: 24px 28px 16px; }
+.questions-dialog h2 { margin: 0 0 8px; font-size: 25px; }
+.questions-dialog p { line-height: 1.55; margin: 0; }
+.question-close { flex: none; border: 0; background: transparent; color: var(--ink); padding: 8px; }
+.questions-dialog form { display: flex; flex-direction: column; }
+.question-list { padding: 0 28px; }
+.browser-question { padding: 22px 0; border-top: 1px solid var(--line); }
+.question-label { display: block; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.browser-question .question-hint { margin: 6px 0 12px; color: #355750; font-size: 13px; }
+.browser-question input:not([type=checkbox]), .browser-question select, .browser-question textarea { width: 100%; border: 1px solid #9aaba2; border-radius: 6px; background: white; color: var(--ink); padding: 12px; }
+.browser-question textarea { resize: vertical; }
+.question-essay { white-space: pre-wrap; line-height: 1.65; max-width: 70ch; }
+.question-sources { margin-top: 12px; color: #355750; font-size: 13px; line-height: 1.55; }
+.question-sources summary { cursor: pointer; font-weight: 600; }
+.question-confirm { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; line-height: 1.5; }
+.question-confirm input { margin-top: 4px; accent-color: var(--forest); }
+.questions-dialog footer { display: flex; flex-wrap: wrap; gap: 12px; padding: 20px 28px 24px; border-top: 1px solid var(--line); background: var(--tint); }
+.questions-dialog footer p { flex-basis: 100%; font-size: 13px; color: #355750; }
+.questions-dialog footer button { display: inline-flex; align-items: center; gap: 8px; }
+.question-error { color: #853e37; padding: 12px 0; }
+.questions-dialog :focus-visible { outline: 3px solid #17674e; outline-offset: 3px; }
+.questions-dialog input::placeholder { color: #52675f; }
+.questions-dialog input, .questions-dialog textarea { caret-color: var(--forest); }
+.questions-dialog ::selection { background: var(--mint); }
+@media (max-width: 600px) { .questions-dialog header, .questions-dialog footer { padding: 20px; } .question-list { padding: 0 20px; } .questions-dialog footer button { width: 100%; justify-content: center; } }
 .modal {
   position: relative;
   width: min(100%, 480px);

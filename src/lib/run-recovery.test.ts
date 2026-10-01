@@ -4,6 +4,18 @@ import { selectApplication } from "@/lib/workflow";
 import { recoverStaleRuns } from "@/lib/run-recovery";
 
 describe("stalled run recovery", () => {
+  it("keeps the same browser after a stopped question continuation and clears its lock", () => {
+    const state = initialDemoState(); const now = Date.now();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "filling"; app.browserSessionId = "saved-session";
+    app.browserSessionCreatedAt = new Date(now).toISOString();
+    app.browserQuestionRun = { token: "stopped", kind: "answers", startedAt: new Date(now - 6 * 60_000).toISOString() };
+    expect(recoverStaleRuns(state, now)).toEqual([]);
+    expect(app.status).toBe("needs_user_action");
+    expect(app.browserSessionId).toBe("saved-session");
+    expect(app.browserQuestionRun).toBeUndefined();
+    expect(app.error).toMatch(/refresh the form/);
+  });
   it("recovers drafts and fills but never retries a possibly successful submit", () => {
     const state = initialDemoState();
     for (const [index, status] of (["drafting", "filling", "submitting"] as const).entries()) {

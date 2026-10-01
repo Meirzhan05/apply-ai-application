@@ -3,7 +3,9 @@ import { createServer } from "node:http";
 import type { Page } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { draftPacket } from "../src/lib/drafting";
-import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, cancelBrowser } from "../src/lib/browser-runner";
+import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, cancelBrowser, fillApprovedBrowserAnswers } from "../src/lib/browser-runner";
+import { browserQuestions, browserTakeoverReasons } from "../src/lib/browser-questions";
+import { approveBrowserAnswers } from "../src/lib/browser-question-approval";
 import { approveFill, approveSubmit, selectApplication, setFormSnapshot, setPacket } from "../src/lib/workflow";
 import type { Application } from "../src/lib/types";
 import { hashJson } from "../src/lib/crypto";
@@ -67,6 +69,7 @@ const server = createServer((request, response) => {
     </script>`;
   const extra = scenario.startsWith("education-") ? education : scenario.startsWith("grouped") ? `<label>Preferred First & Last Name<input name="preferred" required></label><label>Why are you excited to join us?<textarea required></textarea></label>${group("Which office would you prefer?", "office", ["San Francisco office", "New York office", "No preference"])}${group("Are you legally authorized to work in the United States?", "authorization", ["Yes", "No"])}${group("Will you now or in the future require visa sponsorship?", "sponsorship", ["Yes", "No"])}${group("How did you hear about this opportunity?", "source", Array.from({length:35}, (_, i) => `Source ${i}`))}<label><input type="checkbox" name="newsletter">Subscribe to newsletter</label><fieldset><label class="ashby-application-form-question-title _required_fixture">What University do you currently attend?</label><input role="combobox" aria-autocomplete="list" placeholder="Start typing..."><ul role="listbox" hidden><li role="option">${initialDemoState().profile.school}</li></ul></fieldset><script>document.querySelector('[name=resume]').addEventListener('change', () => {const hidden=document.createElement('input'); hidden.type='hidden'; document.querySelector('form').prepend(hidden)}); const school=document.querySelector('[role=combobox]'); school.addEventListener('input', () => {document.querySelector('[role=listbox]').hidden=false}); document.querySelector('[role=option]').addEventListener('click', () => {school.dataset.selected='true'; document.querySelector('[role=listbox]').hidden=true});</script>`
     : scenario === "complex" ? Array.from({ length: 41 }, (_, i) => `<label>Optional question ${i}<input name="optional-${i}"></label>`).join("")
+    : scenario === "questions" ? `${group("Will you now or in the future require visa sponsorship?", "questionSponsor", ["Yes", "No"])}<label>Favorite snack<select name="snack" required><option value="">Choose</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label><label>Optional nickname<input name="nickname"></label>`
     : scenario === "unknown" ? '<label>Do you hold a secret clearance?<input name="clearance" required></label>'
     : scenario === "login" ? '<label>Password<input type="password"></label>'
     : scenario === "captcha" ? '<div data-sitekey="fixture">CAPTCHA takeover fixture</div>'
@@ -147,6 +150,61 @@ async function test(name: string, run: () => Promise<void>) {
   console.log(`PASS ${name}`);
 }
 try {
+  await test("in-app questions: a required checkbox is filled only after explicit agreement", async () => {
+    const { state, app, result } = await fill("consent"); setFormSnapshot(app, result.form);
+    const question = browserQuestions(app.form)[0];
+    assert.equal(question.kind, "checkbox"); assert.deepEqual(question.options, []);
+    assert.throws(() => approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, value: "No" }]), /exact option/);
+    assert.equal(await pageFor(app).locator('[name=consent]').isChecked(), false);
+    const approvals = approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, value: "Yes" }]);
+    app.browserAnswerApprovals = approvals; app.browserQuestionRun = { token: "consent", startedAt: new Date().toISOString(), kind: "answers" }; app.status = "filling";
+    const form = await fillApprovedBrowserAnswers(app, app.jobSnapshot!, state.profile, approvals);
+    assert.equal(await pageFor(app).locator('[name=consent]').isChecked(), true);
+    assert.equal(form.readyToSubmit, true); assert.equal(submissions.get("consent"), undefined);
+  });
+  await test("in-app questions: explicit human answers and confirmed AI essay resume the same browser without submitting", async () => {
+    const { state, app, result } = await fill("questions");
+    setFormSnapshot(app, result.form);
+    const questions = browserQuestions(app.form);
+    assert.equal(questions.length, 3);
+    assert.equal(browserTakeoverReasons(app.form).length, 0);
+    const ai = questions.find(question => question.owner === "ai")!;
+    const fact = state.profile.facts[0];
+    const essay = { question: ai.label, answer: fact.text, factIds: [fact.id], author: "ai" as const, requiresUserInput: true, aiDraft: { version: 1 as const, model: "synthetic", sentences: [{ text: fact.text, kind: "fact" as const, factIds: [fact.id] }], evidenceHash: essayEvidenceHash(state.profile, [fact.id]), contentHash: "" } };
+    essay.aiDraft.contentHash = essayContentHash(essay);
+    app.browserQuestionDrafts = { formHash: app.form!.hash, sessionId: app.browserSessionId!, packetHash: app.packetHash!, answers: { [ai.id]: essay } };
+    const approvals = approveBrowserAnswers(app, state.profile, app.form!.hash, questions.map(question => question.owner === "ai" ? { questionId: question.id, confirmEssay: true, answerHash: essay.aiDraft.contentHash } : { questionId: question.id, value: question.label.includes("sponsorship") ? "No" : "Chips" }));
+    app.browserAnswerApprovals = approvals; app.browserQuestionRun = { token: "questions", startedAt: new Date().toISOString(), kind: "answers" }; app.status = "filling";
+    const originalSession = app.browserSessionId;
+    const form = await fillApprovedBrowserAnswers(app, app.jobSnapshot!, state.profile, approvals);
+    assert.equal(app.browserSessionId, originalSession); assert.equal(form.readyToSubmit, true);
+    assert.equal(form.fields.find(field => field.identifier === "questionSponsor" && field.value === "No")?.checked, true);
+    assert.equal(form.fields.find(field => field.identifier === "snack")?.value, "Chips");
+    assert.equal(form.fields.find(field => field.identifier === "why")?.value, fact.text);
+    assert.equal(form.fields.find(field => field.identifier === "nickname")?.value, "");
+    assert.equal(submissions.get("questions"), undefined);
+    setFormSnapshot(app, form); assert.equal(app.status, "final_review");
+    await assert.rejects(() => submitBrowser(app), /both approvals/);
+  });
+  await test("in-app questions: a changed live form receives no stale answers", async () => {
+    const { state, app, result } = await fill("unknown"); setFormSnapshot(app, result.form);
+    const question = browserQuestions(app.form)[0];
+    const approvals = approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, value: "No" }]);
+    app.browserAnswerApprovals = approvals; app.browserQuestionRun = { token: "changed", startedAt: new Date().toISOString(), kind: "answers" }; app.status = "filling";
+    await pageFor(app).locator('[name=email]').fill("human-edit@example.com");
+    const form = await fillApprovedBrowserAnswers(app, app.jobSnapshot!, state.profile, approvals);
+    assert.equal(form.fields.find(field => field.identifier === "clearance")?.value, "");
+    assert.equal(form.fields.find(field => field.identifier === "email")?.value, "human-edit@example.com");
+    assert.equal(submissions.get("unknown"), undefined);
+  });
+  await test("in-app questions: cancellation stops writes before a field is filled", async () => {
+    const { state, app, result } = await fill("unknown"); setFormSnapshot(app, result.form);
+    const question = browserQuestions(app.form)[0];
+    const approvals = approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, value: "No" }]);
+    app.browserAnswerApprovals = approvals; app.browserQuestionRun = { token: "cancel", startedAt: new Date().toISOString(), kind: "answers" }; app.status = "filling";
+    await assert.rejects(() => fillApprovedBrowserAnswers(app, app.jobSnapshot!, state.profile, approvals, async () => false), /stopped/);
+    assert.equal(await pageFor(app).locator('[name=clearance]').inputValue(), "");
+  });
   for (const scenario of ["education-other", "education-exact", "education-no-other", "education-year-only"]) await test(`${scenario}: handles known education without guessing or requesting optional details`, async () => {
     const {state, app, result} = await fill(scenario);
     const page = pageFor(app);

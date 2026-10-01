@@ -4,6 +4,8 @@ import { draftPacket, validatePacket } from "@/lib/drafting";
 import { assertJobEligible } from "@/lib/application-policy";
 import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { sendActionNeeded } from "@/lib/email";
+import { writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
+import { browserQuestions } from "@/lib/browser-questions";
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
@@ -94,13 +96,15 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
         target.form = { ...result.form, hash: formDigest(result.form) };
         transition(target, ["filling"], "needs_user_action");
       } else setFormSnapshot(target, result.form);
-      current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: result.needsAction ? "Takeover needed" : "Form ready for review", detail: job.title });
+      current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: result.needsAction ? "Your input needed" : "Form ready for review", detail: job.title });
       return true;
     });
     if (!saved) {
       await cancelBrowser({ ...app, browserSessionId: result.sessionId, browserProvider: result.provider });
       return { cancelled: true };
     }
+    if (browserQuestions({ ...result.form, hash: formDigest(result.form) }).some((question) => question.owner === "ai"))
+      await writeBrowserQuestionEssays(userId, applicationId, formDigest(result.form)).catch(() => undefined);
     if (process.env.EMAIL_FROM) await sendActionNeeded(await loadState(userId), session.needsAction ? "Your browser run needs your help" : "A filled application is ready for review").catch(() => undefined);
     return { needsAction: session.needsAction };
   } catch (error) {

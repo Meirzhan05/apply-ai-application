@@ -6,6 +6,7 @@ import type {
 import { queueMatchAssessment } from "@/lib/match-queue";
 import { z } from "zod";
 import { newId } from "@/lib/crypto";
+import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
@@ -46,6 +47,7 @@ import {
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 const Input = z.object({
   action: z.string().max(40),
   payload: z.record(z.string(), z.unknown()).default({}),
@@ -310,10 +312,20 @@ async function perform(
     await queueApplicationRun(userId, text(payload.applicationId, 100), "fill");
     return;
   }
+  if (action === "answerBrowserQuestions") {
+    const answers = z.array(z.object({ questionId: z.string().max(5000), value: z.string().max(4000).optional(), confirmEssay: z.boolean().optional(), answerHash: z.string().max(100).optional() }).strict()).min(1).max(20).parse(payload.answers);
+    await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers);
+    return;
+  }
+  if (action === "draftBrowserEssays") {
+    await writeBrowserQuestionEssays(userId, text(payload.applicationId, 100), text(payload.formHash, 100));
+    return;
+  }
   if (action === "resumeBrowser") {
     const appId = text(payload.applicationId, 100);
     const state = await loadState(userId);
     const app = findApp(state, appId, userId);
+    if (app.browserQuestionRun) throw new Error("The agent is continuing this form. Wait for it to finish before refreshing.");
     if (app.status !== "needs_user_action" && app.status !== "final_review")
       throw new Error("This browser run is not awaiting review.");
     const job = findJob(state, app);
