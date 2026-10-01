@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 const record = {id:'fixture', version:1, userId:'owner', runId:'saved-run', applicationId:'app', jobId:'job', provider:'openai', model:'gpt-6-sol', operation:'essay-generation', startedAt:'2026-10-01T04:00:00Z', completedAt:'2026-10-01T04:00:10Z', status:'reported', responseId:'response', requestId:null, providerStatus:'completed', serviceTier:'default', tokens:{input:1000,cachedInput:200,cacheWrite:0,output:100,reasoningOutput:60}, rate:{version:'openai-standard-2026-10-01',source:'https://developers.openai.com/api/docs/pricing',checkedAt:'2026-10-01',unit:'USD per million tokens',context:'short',input:2,cachedInput:.2,cacheWrite:2.5,output:10}, estimatedUsd:.00264,reconciledUsd:null,failure:null, applicationStatus:'cancelled',applicationTitle:'Software Engineering Internship'};
-const report={records:[record,{...record,id:'failed',responseId:null,status:'failed',operation:'matching',applicationId:null,applicationTitle:null,applicationStatus:null,backgroundJobId:'matching:job',providerStatus:null,tokens:{input:null,cachedInput:null,cacheWrite:null,output:null,reasoningOutput:null},rate:null,estimatedUsd:null,failure:'provider_error'}],measuredCalls:1,unknownCalls:1,estimatedUsd:.00264,incompleteCostCalls:1,reconciledUsd:null,projectedReservations:[{applicationId:'app',runId:'saved-run',kind:'draft',projectedUsd:.2}]};
+const browserRate={version:'browser-use-2026-10-01',source:'https://browser-use.com/pricing',checkedAt:'2026-10-01',unit:'USD per browser minute',browserUsdPerMinute:.02/60};
+const report={records:[record,{...record,id:'failed',responseId:null,status:'failed',operation:'matching',applicationId:null,applicationTitle:null,applicationStatus:null,backgroundJobId:'matching:job',providerStatus:null,tokens:{input:null,cachedInput:null,cacheWrite:null,output:null,reasoningOutput:null},rate:null,estimatedUsd:null,failure:'provider_error'}],measuredCalls:1,unknownCalls:1,estimatedUsd:.00264,incompleteCostCalls:1,reconciledUsd:null,projectedReservations:[{applicationId:'app',runId:'saved-run',kind:'draft',projectedUsd:.2}],browser:{records:[],sessions:[{userId:'owner',applicationId:'app',jobId:'job',runId:'saved-run',provider:'browser-use',sessionId:'active-session',startedAt:'2026-10-01T04:00:00Z',finishedAt:null,expiresAt:'2026-10-01T05:00:00Z',status:'active',durationMinutes:2,proxyUsedMb:null,proxyCostUsd:null,browserCostUsd:null,estimatedBrowserCostUsd:.0006666667,estimatedUsd:.0006666667,trafficStatus:'unknown',rate:browserRate,lastEvent:'disconnected',provisional:true,orphaned:false},{userId:'owner',applicationId:'app',jobId:'job',runId:'saved-run',provider:'browserbase',sessionId:'orphaned-session',startedAt:'2026-10-01T03:00:00Z',finishedAt:'2026-10-01T03:01:00Z',expiresAt:null,status:'stopped',durationMinutes:1,proxyUsedMb:0,proxyCostUsd:null,browserCostUsd:null,estimatedBrowserCostUsd:null,estimatedUsd:null,trafficStatus:'measured',rate:null,lastEvent:'release_failed',provisional:true,orphaned:true}],measuredSessions:1,activeSessions:1,unknownTrafficSessions:1,estimatedUsd:.0006666667,measuredUsd:0,incompleteCostSessions:2}};
 async function main() {
 await mkdir(".data", { recursive: true });
 const browser=await chromium.launch({headless:true, executablePath:process.env.CHROMIUM_EXECUTABLE_PATH || undefined});
@@ -14,6 +15,11 @@ try {
   await page.getByRole('heading',{name:'Model calls'}).waitFor();
   assert(await page.getByText('cancelled',{exact:true}).isVisible());
   assert(await page.getByText('Failed / unmeasured',{exact:true}).isVisible());
+  assert(await page.getByRole('heading',{name:'Browser sessions'}).isVisible());
+  assert(await page.getByText('Active / provisional',{exact:true}).isVisible());
+  assert(await page.getByText('Release needs reconciliation',{exact:true}).isVisible());
+  assert(await page.getByText('Unknown',{exact:true}).count() > 0);
+  assert(await page.getByText('estimated',{exact:false}).count() > 0);
   assert(await page.getByText('Projected scheduling reservations',{exact:true}).isVisible());
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page must not overflow viewport');
   await page.screenshot({path:`.data/usage-${name}.png`,fullPage:true});

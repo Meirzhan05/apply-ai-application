@@ -17,6 +17,7 @@ import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
 import { browserQuestions } from "@/lib/browser-questions";
 import { answerOwner } from "@/lib/answer-responsibility";
+import { browserUsageContext, recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
 import type {
   Application,
   FormFieldSnapshot,
@@ -34,6 +35,19 @@ const localBrowsers = (globalRuntime.applyAiLocalBrowsers ??= new Map<
   string,
   Runtime
 >());
+
+async function browserUsageEvent(application: Application, event: Parameters<typeof recordBrowserUsageEvent>[0]["event"], sessionId = application.browserSessionId, report: Parameters<typeof recordBrowserUsageEvent>[0]["report"] = null, failure: Parameters<typeof recordBrowserUsageEvent>[0]["failure"] = null, orphanedSessionId: string | null = null) {
+  if ((!sessionId && !["failed", "ambiguous"].includes(event)) || sessionId?.startsWith("local-")) return;
+  const owner = { userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.runToken ?? application.browserQuestionRun?.token ?? application.id };
+  const provider = application.browserProvider ?? (process.env.BROWSER_PROVIDER === "browser-use" ? "browser-use" : "browserbase");
+  const write = () => recordBrowserUsageEvent({ ...owner, provider, sessionId: sessionId ?? null, event, report, failure, orphanedSessionId });
+  await (browserUsageContext() ? write() : withBrowserUsageContext(owner, write));
+}
+
+async function disconnectBrowser(application: Application, browser: Browser, sessionId = application.browserSessionId) {
+  await browser.close().catch(() => undefined);
+  await browserUsageEvent(application, "disconnected", sessionId).catch(() => undefined);
+}
 
 interface InspectedField {
   index: number;
@@ -546,8 +560,9 @@ async function getPage(application: Application): Promise<Runtime> {
   const browser = await chromium.connectOverCDP(application.browserConnectUrl);
   const context = browser.contexts()[0];
   const page = context.pages()[0];
-  if (!page) { await browser.close().catch(() => undefined); throw new Error("The application page is no longer open."); }
+  if (!page) { await disconnectBrowser(application, browser); throw new Error("The application page is no longer open."); }
   await restrictNavigation(page, application.jobSnapshot?.applyUrl || application.form?.url || page.url());
+  await browserUsageEvent(application, "connected");
   return { browser, page };
 }
 
@@ -635,7 +650,7 @@ export async function prepareBrowser(
       const form = await snapshot(page, application);
       form.readyToSubmit = false;
       form.blockers = ["The posting redirected to a different site. Review the destination and import its application link before allowing an automatic fill."];
-      if (connectUrl) await browser.close();
+      if (connectUrl) await disconnectBrowser(application, browser, sessionId);
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true, needsCoverLetter: false };
     }
     const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
@@ -648,7 +663,7 @@ export async function prepareBrowser(
       ])];
       // Disconnect from a remote session without releasing it. The applicant
       // needs the same open page for takeover and a fresh final review.
-      if (connectUrl) await browser.close();
+      if (connectUrl) await disconnectBrowser(application, browser, sessionId);
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true,
         needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
     }
@@ -747,7 +762,7 @@ export async function prepareBrowser(
     await action(form.readyToSubmit === false ? "Paused for your input" : "Paused before submission for your review");
     if (fillBlockers.length) { form.blockers = [...new Set([...(form.blockers ?? []), ...fillBlockers])]; form.readyToSubmit = false; }
     needsAction ||= form.readyToSubmit === false;
-    if (connectUrl) await browser.close();
+    if (connectUrl) await disconnectBrowser(application, browser, sessionId);
     return {
       form,
       provider,
@@ -760,7 +775,7 @@ export async function prepareBrowser(
       needsCoverLetter,
     };
   } catch (error) {
-    await browser.close().catch(() => undefined);
+    await disconnectBrowser(application, browser, sessionId);
     if (sessionId.startsWith("local-")) localBrowsers.delete(sessionId);
     else await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider });
     throw error;
@@ -774,7 +789,7 @@ export async function refreshBrowserSnapshot(
   try {
     if (!canAutomate(runtime.page.url())) throw new Error("This site requires a manual application handoff.");
     return await snapshot(runtime.page, application);
-  } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, runtime.browser); }
 }
 
 // Resume only the exact controls approved in Apply. Never navigate, upload a
@@ -824,7 +839,7 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
       } else await locator.fill(value, { timeout: 5000 });
     }
     return await snapshot(page, application);
-  } finally { if (application.browserConnectUrl) await browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, browser); }
 }
 
 // Repair supported blank education questions in the existing approved session.
@@ -871,7 +886,7 @@ export async function repairEducationFields(application: Application, job: Job, 
     const form = await snapshot(page, application);
     if (blockers.length) { form.blockers = [...new Set([...form.blockers ?? [], ...blockers])]; form.readyToSubmit = false; }
     return form;
-  } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, runtime.browser); }
 }
 
 export type BrowserSubmissionResult = {
@@ -970,10 +985,10 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     if (clicked) throw new Error("SUBMISSION_UNCERTAIN");
     throw error;
   } finally {
-    if ((clicked && !keepSession) || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if ((clicked && !keepSession) || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (clicked && !keepSession) {
       if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await releaseRemoteBrowser(application).catch(() => undefined);
+      await cancelBrowser(application);
     }
   }
 }
@@ -995,10 +1010,10 @@ export async function checkBrowserSubmission(application: Application): Promise<
     finished = result.confirmed;
     return result;
   } finally {
-    if (finished || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if (finished || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (finished) {
       if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await releaseRemoteBrowser(application).catch(() => undefined);
+      await cancelBrowser(application);
     }
   }
 }
@@ -1010,5 +1025,7 @@ export async function cancelBrowser(application: Application): Promise<void> {
     await local.browser.close().catch(() => undefined);
     localBrowsers.delete(application.browserSessionId);
   }
-  await releaseRemoteBrowser(application).catch(() => undefined);
+  const owner = { userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.runToken ?? application.browserQuestionRun?.token ?? application.id };
+  const release = () => releaseRemoteBrowser(application);
+  await (browserUsageContext() ? release() : withBrowserUsageContext(owner, release)).catch(() => undefined);
 }
