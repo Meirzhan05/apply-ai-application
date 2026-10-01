@@ -666,7 +666,12 @@ export async function prepareBrowser(
   application.browserCaptchaSolving = captchaSolving;
   try {
     application.browserSessionId = sessionId;
+    application.browserProvider = provider;
     if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
+    // The provider connection is billable lifecycle state. Record it only
+    // after the owner/application/session reference has been persisted by the
+    // session callback; any ledger failure stays inside this cleanup boundary.
+    await browserUsageEvent(application, "connected", sessionId);
     await action("Opening the employer form");
     await page.goto(job.applyUrl, {
       waitUntil: "domcontentloaded",
