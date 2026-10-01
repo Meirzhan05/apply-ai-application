@@ -237,7 +237,7 @@ async function perform(
           .parse(payload.facts) : undefined;
       if (facts) profile.facts = facts;
       if ("sensitiveAnswers" in payload)
-        profile.sensitiveAnswers = z.record(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
+        profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
       const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
       const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
         workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),

@@ -11,7 +11,7 @@ import { queueApplicationRun } from "../src/lib/application-queue";
 import { cancelBrowser } from "../src/lib/browser-runner";
 import { browserQuestions } from "../src/lib/browser-questions";
 import { remoteBrowserStatus } from "../src/lib/browser-provider";
-import { writeBrowserQuestionEssays } from "../src/lib/browser-question-runs";
+import { answerBrowserQuestions, writeBrowserQuestionEssays } from "../src/lib/browser-question-runs";
 
 async function main() {
   process.env.DEMO_MODE = "false";
