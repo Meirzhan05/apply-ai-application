@@ -25,7 +25,7 @@ export default function UsagePage() {
   }, []);
   useEffect(() => { const initial = setTimeout(() => { void refresh(); }, 0); return () => clearTimeout(initial); }, [refresh]);
   return <main className={styles.sheet}>
-    <nav className={styles.navigation} aria-label="Usage navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><button onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh usage"}</button></nav>
+    <nav className={styles.navigation} aria-label="Usage navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><div><Link href="/costs">Service costs</Link><button onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh usage"}</button></div></nav>
     <header className={styles.heading}><h1>AI usage</h1><p>Provider reports for your applications and background matching, including work that failed or was cancelled.</p></header>
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {loading && !data && <p role="status">Loading your usage records…</p>}

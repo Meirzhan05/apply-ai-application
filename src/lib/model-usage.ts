@@ -150,6 +150,22 @@ export async function readModelUsage(userId: string): Promise<ModelUsageReport> 
     incompleteCostCalls: records.filter((item) => item.estimatedUsd === null).length, reconciledUsd: null };
 }
 
+// Operator reports use this only after the server authorization boundary. It
+// returns raw owner-tagged evidence so the cost service can aggregate without
+// exposing one owner's records to another owner.
+export async function readAllModelUsage(): Promise<ModelUsageRecord[]> {
+  const file = localPath();
+  if (file) { await writes; return (await readLocal(file)).map(normalizeModelUsageRecord); }
+  const records: ModelUsageRecord[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await adminSupabase().from("model_usage_records").select("data").order("id").range(offset, offset + 499);
+    if (error) throw new Error("Model usage could not be loaded.");
+    records.push(...(data ?? []).map((row) => normalizeModelUsageRecord(row.data as ModelUsageRecord)));
+    if (!data || data.length < 500) break;
+  }
+  return records;
+}
+
 interface ProviderResponse {
   id?: string;
   _request_id?: string | null;

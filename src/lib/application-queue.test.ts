@@ -5,7 +5,7 @@ import { withPacketFiles } from "@/lib/packet-files";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
 import { dispatchUserQueue, queueApplicationRun } from "@/lib/application-queue";
 
-const mocks = vi.hoisted(() => ({ state: undefined as unknown as AppState, budget: true, trigger: vi.fn(), draft: vi.fn(), fill: vi.fn(), queue: Promise.resolve() }));
+const mocks = vi.hoisted(() => ({ state: undefined as unknown as AppState, budget: true, release: vi.fn(), claim: vi.fn(), terminal: vi.fn(), trigger: vi.fn(), draft: vi.fn(), fill: vi.fn(), queue: Promise.resolve() }));
 vi.mock("@/lib/repository", () => ({
   isDemo: () => false,
   loadState: async () => structuredClone(mocks.state),
@@ -15,11 +15,11 @@ vi.mock("@/lib/repository", () => ({
     return pending;
   },
 }));
-vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => mocks.budget }));
+vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => mocks.budget, reserveQueuedBudget: async (_user: string, app: string, queued: string, projected: number) => mocks.budget ? { queuedId: queued, reservationId: `queued:${queued}`, month: "2026-10", ownerId: "demo-user", applicationId: app, projectedUsd: projected } : null, releaseQueuedBudget: mocks.release, markQueuedBudgetClaimed: mocks.claim, markQueuedBudgetTerminal: mocks.terminal }));
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: mocks.trigger } }));
 vi.mock("@/lib/application-runs", () => ({ runDraft: mocks.draft, runFill: mocks.fill }));
 
-beforeEach(() => { mocks.state = initialDemoState(); mocks.budget = true; mocks.queue = Promise.resolve(); vi.clearAllMocks(); });
+beforeEach(() => { mocks.state = initialDemoState(); mocks.budget = true; mocks.release.mockResolvedValue(true); mocks.claim.mockResolvedValue(true); mocks.terminal.mockResolvedValue(true); mocks.queue = Promise.resolve(); vi.clearAllMocks(); });
 describe("durable application queue", () => {
   it("keeps a request across budget rejection, then dispatches it when spending permits", async () => {
     const app = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
@@ -43,6 +43,7 @@ describe("durable application queue", () => {
     mocks.budget = true;
     await Promise.all([dispatchUserQueue(app.userId), dispatchUserQueue(app.userId)]);
     expect(mocks.trigger).toHaveBeenCalledOnce();
+    expect(mocks.release).not.toHaveBeenCalled();
   });
   it("does not dispatch a listing that closes while queued", async () => {
     const app = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
@@ -53,6 +54,7 @@ describe("durable application queue", () => {
     await dispatchUserQueue(app.userId);
     expect(app.error).toMatch(/closed/);
     expect(mocks.trigger).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledOnce();
   });
   it("retries an ambiguous worker handoff with the same idempotency key", async () => {
     const app = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
@@ -79,5 +81,14 @@ describe("durable application queue", () => {
     await dispatchUserQueue(waiting.userId);
     expect(waiting.status).toBe("filling");
     expect(mocks.trigger).toHaveBeenCalledOnce();
+  });
+  it("retries a terminal release tombstone without releasing an adopted run", async () => {
+    const app = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);
+    app.budgetReservation = { reservationId: "queued:terminal", projectedUsd: 0.2, month: "2026-10", ownerId: app.userId, applicationId: app.id, status: "release_pending" };
+    await dispatchUserQueue(app.userId);
+    expect(mocks.terminal).toHaveBeenCalledWith(expect.objectContaining({ queuedId: "terminal", month: "2026-10" }));
+    expect(mocks.release).toHaveBeenCalledWith(expect.objectContaining({ queuedId: "terminal", month: "2026-10" }));
+    expect(app.budgetReservation?.status).toBe("released");
+    expect(mocks.trigger).not.toHaveBeenCalled();
   });
 });
