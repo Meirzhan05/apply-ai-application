@@ -222,6 +222,7 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
+        <a href="/usage" style={{ padding: "16px 24px", color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />

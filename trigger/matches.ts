@@ -1,3 +1,5 @@
+import { withModelUsageContext } from "../src/lib/model-usage";
+import { newId } from "../src/lib/crypto";
 import { task } from "@trigger.dev/sdk";
 import { reserveServiceBudget } from "../src/lib/budget";
 import { assessMatch, assessMatchLocally } from "../src/lib/matching";
@@ -9,7 +11,8 @@ export const assessUserMatches = task({
   retry: { maxAttempts: 1 },
   queue: { concurrencyLimit: 1 },
   maxDuration: 300,
-  run: async ({ userId }: { userId: string }) => {
+  run: async ({ userId }: { userId: string }, options) => {
+    const runId = options?.ctx.run.id ?? newId();
     if (!process.env.OPENAI_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
     if (!state.profile.facts.some((fact) => fact.verified)) return { assessed: 0 };
@@ -38,7 +41,7 @@ export const assessUserMatches = task({
         0.005,
       );
       if (!allowed) break;
-      const assessment = await assessMatch(state.profile, job);
+      const assessment = await withModelUsageContext({ userId, runId, jobId: job.id, backgroundJobId: `matching:${job.id}` }, () => assessMatch(state.profile, job));
       try {
         const saved = await mutateState(userId, (current) => {
           if (current.profile.updatedAt !== profileVersion) return false;

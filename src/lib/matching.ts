@@ -1,3 +1,4 @@
+import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -149,10 +150,11 @@ export async function assessMatch(
   const facts = profile.facts
     .filter((fact) => fact.verified)
     .map((fact) => ({ id: fact.id, text: fact.text }));
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
   try {
-    const result = await client.responses.parse({
+    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", "gpt-6-luna", () => client.responses.parse({
       model: "gpt-6-luna",
+      service_tier: "default",
       input: [
         {
           role: "system",
@@ -176,7 +178,7 @@ export async function assessMatch(
         },
       ],
       text: { format: zodTextFormat(FitSchema, "fit_assessment") },
-    });
+    }));
     const value = result.output_parsed;
     if (!value) return base;
     const source = [job.title, job.location, job.description, ...job.requirements].join(" ");
