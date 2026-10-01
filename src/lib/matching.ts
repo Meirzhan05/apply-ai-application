@@ -144,6 +144,7 @@ export function assessMatchLocally(
 export async function assessMatch(
   profile: Profile,
   job: Job,
+  options?: { beforeModelCall?: () => void | Promise<void> },
 ): Promise<MatchAssessment> {
   const base = assessMatchLocally(profile, job);
   if (base.category === "excluded" || !process.env.OPENAI_API_KEY) return base;
@@ -151,8 +152,12 @@ export async function assessMatch(
     .filter((fact) => fact.verified)
     .map((fact) => ({ id: fact.id, text: fact.text }));
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
+  let freshnessGuardPassed = !options?.beforeModelCall;
   try {
-    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", "gpt-6-luna", () => client.responses.parse({
+    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", "gpt-6-luna", async () => {
+      await options?.beforeModelCall?.();
+      freshnessGuardPassed = true;
+      return client.responses.parse({
       model: "gpt-6-luna",
       service_tier: "default",
       input: [
@@ -178,7 +183,8 @@ export async function assessMatch(
         },
       ],
       text: { format: zodTextFormat(FitSchema, "fit_assessment") },
-    }));
+      });
+    });
     const value = result.output_parsed;
     if (!value) return base;
     const source = [job.title, job.location, job.description, ...job.requirements].join(" ");
@@ -195,7 +201,8 @@ export async function assessMatch(
       evaluatedAt: new Date().toISOString(),
       model: "gpt-6-luna",
     };
-  } catch {
+  } catch (error) {
+    if (!freshnessGuardPassed) throw error;
     return base;
   }
 }

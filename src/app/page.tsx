@@ -344,7 +344,7 @@ export default function Dashboard() {
                       </span>
                     ))}
                   </div>
-                  {data.discovery.pendingMatches ? <p className="discovery-backlog">{data.discovery.pendingMatches} eligible roles waiting for the next serialized matching pass.</p> : null}
+                  {data.discovery.pendingMatches ? <p className="discovery-backlog">{data.discovery.pendingMatches} roles waiting for the next matching pass.</p> : null}
                   {discoveryEvents.length ? (
                     <ul className="discovery-events">
                       {discoveryEvents.map((event) => (

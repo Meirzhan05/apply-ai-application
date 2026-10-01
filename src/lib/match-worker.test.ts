@@ -6,7 +6,7 @@ import { matchKey } from "@/lib/match-cache";
 import { issueControlledTestGrant } from "@/lib/controlled-tests";
 import { selectApplication } from "@/lib/workflow";
 
-const mocks = vi.hoisted(() => ({ load: vi.fn(), mutate: vi.fn(), assess: vi.fn(), reserve: vi.fn(), autoQueue: vi.fn(), append: vi.fn(), continueQueue: vi.fn() }));
+const mocks = vi.hoisted(() => ({ load: vi.fn(), mutate: vi.fn(), assess: vi.fn(), provider: vi.fn(), reserve: vi.fn(), autoQueue: vi.fn(), append: vi.fn(), continueQueue: vi.fn() }));
 vi.mock("@trigger.dev/sdk", () => ({ task: (config: unknown) => config }));
 vi.mock("@/lib/repository", () => ({ loadState: mocks.load, mutateState: mocks.mutate }));
 vi.mock("@/lib/budget", () => ({ reserveServiceBudget: mocks.reserve }));
@@ -24,7 +24,11 @@ beforeEach(() => {
   mocks.load.mockImplementation(async () => structuredClone(state));
   mocks.mutate.mockImplementation(async (_id: string, change: (current: AppState) => unknown) => change(state));
   mocks.reserve.mockResolvedValue(true);
-  mocks.assess.mockResolvedValue({ version: 1, category: "uncertain", score: 0, evidence: [], gaps: [], uncertainty: ["Synthetic worker fixture"], model: "fixture", evaluatedAt: "2026-09-29" });
+  mocks.assess.mockImplementation(async (_profile: unknown, _job: unknown, options?: { beforeModelCall?: () => void | Promise<void> }) => {
+    await options?.beforeModelCall?.();
+    mocks.provider();
+    return { version: 1, category: "uncertain", score: 0, evidence: [], gaps: [], uncertainty: ["Synthetic worker fixture"], model: "fixture", evaluatedAt: "2026-09-29" };
+  });
   mocks.autoQueue.mockResolvedValue({ queued: false, reason: "automation_blocked" });
   mocks.continueQueue.mockResolvedValue({ id: "continuation" });
 });
@@ -90,7 +94,38 @@ describe("matching worker account and profile lifecycle", () => {
     mocks.assess.mockImplementation(async (_profile: unknown, job: { id: string }) => ({ version: 1, category: "uncertain", score: 0, evidence: [], gaps: [], uncertainty: [job.id], model: "fixture", evaluatedAt: "2026-10-01T12:00:00.000Z" }));
     expect(await run({ userId: state.profile.id })).toEqual({ assessed: 1 });
     expect(mocks.reserve).toHaveBeenCalledOnce();
-    expect(mocks.assess).toHaveBeenCalledExactlyOnceWith(state.profile, expect.objectContaining({ id: fixtureJob.id }));
+    expect(mocks.assess).toHaveBeenCalledOnce();
+    expect(mocks.assess.mock.calls[0][0]).toMatchObject({ id: state.profile.id, workAuthorization: state.profile.workAuthorization });
+    expect(mocks.assess.mock.calls[0][1]).toMatchObject({ id: fixtureJob.id });
+  });
+  it.each(["pause", "revoke"] as const)("does not call the provider when authorization changes during the usage ledger write: %s", async (change) => {
+    state.profile.automationAuthorization = { version: 1, status: "enabled", reason: "fixture", authorizedAt: "2026-10-01T11:00:00.000Z" };
+    mocks.reserve.mockImplementation(async () => {
+      state.profile.automationAuthorization = change === "pause"
+        ? { ...state.profile.automationAuthorization!, status: "paused", pausedAt: "2026-10-01T12:00:00.000Z" }
+        : undefined;
+      return true;
+    });
+    expect(await run({ userId: state.profile.id })).toEqual({ assessed: 0, stopped: "authorization_changed" });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(state.matchCache).toEqual({});
+    expect(mocks.autoQueue).not.toHaveBeenCalled();
+  });
+  it.each(["closed", "changed"] as const)("does not call the provider when the posting is %s during the usage ledger write", async (change) => {
+    mocks.reserve.mockImplementation(async () => {
+      if (change === "closed") state.jobs.forEach((job) => { job.active = false; });
+      else state.jobs.forEach((job) => { job.description = `${job.description} changed after refresh`; });
+      return true;
+    });
+    expect(await run({ userId: state.profile.id })).toEqual({ assessed: 0, stopped: change === "closed" ? "job_closed" : "job_changed" });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(state.matchCache).toEqual({});
+    expect(mocks.autoQueue).not.toHaveBeenCalled();
+  });
+  it("continues matching paused ordinary profiles when the pause predates the worker", async () => {
+    state.profile.automationAuthorization = { version: 1, status: "paused", reason: "fixture", authorizedAt: "2026-10-01T11:00:00.000Z", pausedAt: "2026-10-01T11:30:00.000Z" };
+    expect(await run({ userId: state.profile.id })).toEqual({ assessed: 2 });
+    expect(mocks.provider).toHaveBeenCalledTimes(2);
   });
   it("persists and resumes a current-profile continuation after twelve jobs", async () => {
     state.jobs = Array.from({ length: 13 }, (_, index) => ({ ...state.jobs[0], id: `job-${index}`, sourceId: `job-${index}`, url: `https://jobs.example/${index}`, applyUrl: `https://jobs.example/${index}` }));
