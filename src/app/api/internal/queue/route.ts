@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   let dispatched = 0;
   const errors: string[] = [];
   for (const row of data ?? []) {
-    if (!(row.data as AppState).applications.some((app) => app.queuedRun || (app.runDispatch && !app.runDispatch.confirmedAt && ["drafting", "filling"].includes(app.status)))) continue;
+    if (!(row.data as AppState).applications.some((app) => app.queuedRun || (app.runDispatch && !app.runDispatch.confirmedAt && ["drafting", "filling"].includes(app.status)) || (app.submissionDispatch && !app.submissionDispatch.confirmedAt && app.status === "submitting"))) continue;
     try { dispatched += (await dispatchUserQueue(row.user_id)).dispatched; }
     catch (error) { errors.push(error instanceof Error ? error.message : "Queue dispatch failed."); }
   }

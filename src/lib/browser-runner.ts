@@ -12,6 +12,7 @@ import { reviewedPacketFile } from "@/lib/packet-files";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
+import { assertAutonomous, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
 import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
@@ -586,7 +587,8 @@ export async function prepareBrowser(
   if (!application.packet)
     throw new Error("Prepare and review an application packet first.");
   validatePacket(profile, application.packet);
-  if (!hasFillApproval(application, profile.id, job.applyUrl))
+  if (application.autonomousAuthorization) assertAutonomous(application, profile, job, "fill");
+  else if (!hasFillApproval(application, profile.id, job.applyUrl))
     throw new Error("The current packet requires fill approval.");
   // Verify before opening a billable session or entering any applicant data.
   const resume = await reviewedPacketFile(profile, application.packet, "resume");
@@ -594,6 +596,11 @@ export async function prepareBrowser(
     ? await reviewedPacketFile(profile, application.packet, "cover-letter") : undefined;
   if (!canAutomate(job.applyUrl))
     throw new Error("This site requires a manual application handoff.");
+  const action = async (label: string) => {
+    if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
+  };
+  if (application.autonomousAuthorization && !onAction) throw new Error("A fresh persisted permission check is required before automatic browser allocation.");
+  await action("Starting the authorized browser session");
   let runtime: Runtime;
   let sessionId: string;
   let connectUrl: string | undefined;
@@ -629,9 +636,6 @@ export async function prepareBrowser(
 
   const { browser, page } = runtime;
   application.browserCaptchaSolving = captchaSolving;
-  const action = async (label: string) => {
-    if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
-  };
   try {
     if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
     await action("Opening the employer form");
@@ -644,6 +648,8 @@ export async function prepareBrowser(
         "The application redirected to a site that is not enabled for automation.",
       );
     await waitForForm(page);
+    if (application.autonomousAuthorization && exactApplicationUrl(page.url()) !== exactApplicationUrl(application.autonomousAuthorization.expectedFormUrl || ""))
+      throw new Error("The employer redirected to a different application URL. This automatic workflow cannot fill another posting.");
     const fields = await inspectFields(page);
     await action("Checking the form questions");
     if (new URL(page.url()).origin !== new URL(job.applyUrl).origin) {
@@ -675,6 +681,9 @@ export async function prepareBrowser(
     const handledRadioGroups = new Set<string>();
     const fillBlockers: string[] = [];
     for (const field of fields) {
+      // The persisted authorization check completes before each consequential control action.
+      await action(`Checking permission: ${field.label}`);
+      if (application.autonomousAuthorization && exactApplicationUrl(page.url()) !== exactApplicationUrl(application.autonomousAuthorization.expectedFormUrl || "")) throw new Error("The application destination changed before filling.");
       if (new URL(page.url()).origin !== new URL(job.applyUrl).origin || !canAutomate(page.url())) throw new Error("The form changed destination during filling. Review its application link before starting again.");
       if (
         /cover\s*letter/i.test(field.label) &&
@@ -956,9 +965,12 @@ async function observeSubmission(page: Page, application: Application, baseline:
   };
 }
 
-export async function submitBrowser(application: Application): Promise<BrowserSubmissionResult> {
+export async function submitBrowser(application: Application, options?: { profile?: Profile; job?: Job; beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }): Promise<BrowserSubmissionResult> {
   if (!application.form) throw new Error("There is no reviewed form.");
-  if (!hasSubmissionApproval(application)) throw new Error("The exact form needs both approvals before submission.");
+  if (application.autonomousAuthorization) {
+    if (!options?.profile || !options.beforeAttempt) throw new Error("A durable current authorization check is required before automatic submission.");
+    assertAutonomous(application, options.profile, options.job, "submit");
+  } else if (!hasSubmissionApproval(application)) throw new Error("The exact form needs both approvals before submission.");
   const { browser, page } = await getPage(application);
   let clicked = false;
   let keepSession = false;
@@ -969,12 +981,14 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     const button = (await finalSubmitButton(page)).first();
     if ((await button.count()) === 0) throw new Error("The final submit button needs user takeover.");
     const before = await submissionText(page);
-    clicked = true;
-    application.submissionAttemptedAt = new Date().toISOString();
     const baseline: NonNullable<Application["submissionVerification"]> = {
       version: 1, kind: "captcha", sessionId: application.browserSessionId!, targetUrl: application.form.url,
-      attemptedAt: application.submissionAttemptedAt, beforeHash: hashJson(before), beforeHadConfirmation: confirmationPattern.test(before),
+      attemptedAt: new Date().toISOString(), beforeHash: hashJson(before), beforeHadConfirmation: confirmationPattern.test(before),
     };
+    if (options?.beforeAttempt && !(await options.beforeAttempt(baseline))) throw new Error("The application changed before submission. No click was attempted.");
+    application.submissionAttemptedAt = baseline.attemptedAt;
+    application.submissionVerification = baseline;
+    clicked = true;
     // A timeout can follow a dispatched click. Observe; never click again.
     await button.click({ timeout: 10000 }).catch(() => undefined);
     await page.waitForLoadState("domcontentloaded", { timeout: 12000 }).catch(() => undefined);
@@ -982,7 +996,7 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     keepSession = Boolean(result.verification);
     return result;
   } catch (error) {
-    if (clicked) throw new Error("SUBMISSION_UNCERTAIN");
+    if (clicked) { keepSession = true; throw new Error("SUBMISSION_UNCERTAIN"); }
     throw error;
   } finally {
     if ((clicked && !keepSession) || application.browserConnectUrl) await disconnectBrowser(application, browser);
@@ -997,7 +1011,7 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
 // observes only the existing, owner-bound attempt after human verification.
 export async function checkBrowserSubmission(application: Application): Promise<BrowserSubmissionResult> {
   const verification = application.submissionVerification;
-  if (application.status !== "awaiting_verification" || !verification || verification.version !== 1 ||
+  if (!["awaiting_verification", "uncertain"].includes(application.status) || !verification || verification.version !== 1 ||
     verification.sessionId !== application.browserSessionId || verification.attemptedAt !== application.submissionAttemptedAt ||
     verification.targetUrl !== application.form?.url || application.submittedAt)
     throw new Error("There is no active verification for this submission attempt.");
@@ -1007,7 +1021,7 @@ export async function checkBrowserSubmission(application: Application): Promise<
   let finished = false;
   try {
     const result = await observeSubmission(page, application, verification, 5000);
-    finished = result.confirmed;
+    finished = result.confirmed || !result.verification;
     return result;
   } finally {
     if (finished || application.browserConnectUrl) await disconnectBrowser(application, browser);

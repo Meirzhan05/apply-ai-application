@@ -293,6 +293,14 @@ export interface Application {
     profileVersion: number;
     targetUrl: string;
     authorizedAt: string;
+    expectedFormUrl?: string;
+    expectedSubmitAction?: string;
+    profileHash?: string;
+    jobHash?: string;
+    postingIdentity?: string;
+    packetHash?: string;
+    filesHash?: string;
+    formHash?: string;
   };
   browserSessionId?: string;
   browserProvider?: BrowserProvider;
@@ -314,6 +322,7 @@ export interface Application {
   submittedAt?: string;
   submissionStartedAt?: string;
   submissionWorkerClaimedAt?: string;
+  submissionDispatch?: { token: string; confirmedAt?: string };
   submissionAttemptedAt?: string;
   submissionVerification?: {
     version: 1;
