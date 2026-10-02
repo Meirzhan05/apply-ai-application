@@ -1485,7 +1485,9 @@ export default function Dashboard() {
                 <h3>Resume and confirmed facts</h3>
                 <p className="muted">
                   Uploading extracts text for your review. It never confirms
-                  claims automatically.
+                  claims automatically. Source-preserving PDF and DOCX layouts
+                  support up to eight pages and two text columns per page; DOCX
+                  page count is checked after rendering.
                 </p>
                 <label className="upload-box">
                   <FileText size={24} />

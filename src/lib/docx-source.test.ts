@@ -26,6 +26,15 @@ it("includes visible header source text as repeated, stable, non-editable furnit
   expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false, repeatedRole: "header" });
 });
 
+it("keeps a page-break continuation in its original entry for rendered page mapping", async () => {
+  const source = await parseDocxSource(await fixture({ multiPage: true }));
+  const bullets = source.anchors.filter((anchor) => anchor.kind === "bullet");
+
+  expect(source.support).toMatchObject({ status: "candidate" });
+  expect(bullets.map((anchor) => anchor.text)).toEqual(["Built a recommender with 92% precision.", "Improved model recall to 94%."]);
+  expect(bullets[1].entryId).toBe(bullets[0].entryId);
+});
+
 it("updates only an authorized source text node and retains untouched package content and paragraph styles", async () => {
   const bytes = await fixture();
   const source = await parseDocxSource(bytes);

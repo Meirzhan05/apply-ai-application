@@ -84,11 +84,11 @@ async function convertDocx(directory: string, docx: Buffer, name: string, deadli
       cwd: directory, env: minimalEnvironment(directory), timeout: timeoutMs(deadline), killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
     });
   } catch {
-    throw new Error("LibreOffice could not render this DOCX. Check its layout and fonts, then upload a supported one-page DOCX; the existing packet is preserved.");
+    throw new Error("LibreOffice could not render this DOCX. Check its layout and fonts, then upload a supported DOCX with no more than eight pages; the existing packet is preserved.");
   }
   let pdf: Buffer;
   try { pdf = await readFile(path.join(outputDir, `${name}.pdf`)); }
-  catch { throw new Error("LibreOffice did not produce a readable PDF. Upload a supported one-page DOCX and retry."); }
+  catch { throw new Error("LibreOffice did not produce a readable PDF. Upload a supported DOCX with no more than eight pages and retry."); }
   if (pdf.length < 100 || pdf.length > PDF_BYTES_LIMIT || !pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("The rendered résumé exceeds the PDF limit or is not a valid PDF.");
   return pdf;
 }
@@ -161,8 +161,10 @@ function locateAnchor(pages: PdfPageLayout[], anchorText: string, pageNumber?: n
 
 function near(left: number, right: number, tolerance: number) { return Math.abs(left - right) <= tolerance; }
 function layoutFeedback(plan: ResumeSourcePlan, sourceLayout: ResumeSourceLayoutMap, reason: string, pageNumber?: number, regionId?: string): ResumeLayoutFeedbackError | undefined {
-  const edit = plan.edits.find((candidate) => sourceLayout.anchors.some((anchor) => anchor.anchorId === candidate.anchorId &&
+  const edits = plan.edits.filter((candidate) => sourceLayout.anchors.some((anchor) => anchor.anchorId === candidate.anchorId &&
     (pageNumber === undefined || anchor.pageNumber === pageNumber) && (regionId === undefined || anchor.regionId === regionId)));
+  if (edits.length !== 1) return undefined;
+  const edit = edits[0];
   if (!edit) return undefined;
   const anchor = sourceLayout.anchors.find((candidate) => candidate.anchorId === edit.anchorId &&
     (pageNumber === undefined || candidate.pageNumber === pageNumber) && (regionId === undefined || candidate.regionId === regionId));

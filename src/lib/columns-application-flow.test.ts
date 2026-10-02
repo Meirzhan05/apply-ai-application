@@ -12,6 +12,8 @@ const flow = vi.hoisted(() => ({
   browser: null as unknown,
   uploaded: [] as Array<{ name: string; mimeType: string; bytes: Buffer }>,
   editClaims: [] as Array<{ anchorId: string; text: string; factIds: string[] }>,
+  layoutMode: "none" as "none" | "repair" | "exhaust",
+  layoutRepairCount: 0,
 }));
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
@@ -76,11 +78,16 @@ type AnchoredPlanInput = {
 function responseFor(request: ModelRequest) {
   const name = request.text.format.name;
   if (name === "anchored_resume_edit_plan") {
+    const layoutRepair = request.input[0].content.includes("layout fit repair");
+    const retryIndex = layoutRepair ? flow.layoutRepairCount++ : 0;
     const body = JSON.parse(request.input[1].content) as AnchoredPlanInput;
     const claims = body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => {
       const fact = body.confirmedFacts.find((candidate) => candidate.sourceAnchorId === anchor.id);
       if (!fact) throw new Error(`The confirmed source fact for ${anchor.id} is missing.`);
-      const text = anchor.text.startsWith("Built ranking service for 1,200 users.") ? "Built ranking for 1,200 users."
+      const text = anchor.text.startsWith("Built ranking service for 1,200 users.")
+        ? flow.layoutMode === "repair" ? (layoutRepair ? "Built ranking for 1,200 users." : "Built ranking service for 1,200 users Built ranking service for 1,200 users.")
+          : flow.layoutMode === "exhaust" ? (layoutRepair ? retryIndex === 1 ? "Built ranking service for 1,200 users Built ranking." : "Built ranking service for 1,200 users Built ranking service." : "Built ranking service for 1,200 users Built ranking service for 1,200 users.")
+            : "Built ranking for 1,200 users."
         : anchor.text.startsWith("Created accessibility scanner for 40 students.") ? "Created access scanner for 40 students."
           : anchor.text;
       return { anchorId: anchor.id, text, factIds: [fact.id] };
@@ -148,7 +155,7 @@ class FixtureLocator {
   async getAttribute(name: string) { return name === "accept" ? ".pdf,application/pdf" : null; }
   async setInputFiles(file: InputFile) { this.page.acceptFile(file); }
   async evaluateAll<T>(callback: (elements: unknown[]) => T) {
-    if (this.selector !== "input, textarea, select") return [] as T;
+    if (this.selector !== "input, textarea, select") return callback([]);
     if (/\.join\(["']\|["']\)/.test(callback.toString())) return "INPUT:resume:resume:file" as T;
     return this.page.fields() as T;
   }
@@ -171,6 +178,7 @@ beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   vi.stubEnv("MODEL_USAGE_TEST_DIR", `/tmp/columns-flow-usage-${process.pid}`);
   flow.demo = true; flow.tasks = []; flow.uploaded = []; flow.editClaims = [];
+  flow.layoutMode = "none"; flow.layoutRepairCount = 0;
   flow.state = initialDemoState();
   flow.state.profile.id = "columns-flow-owner";
   flow.state.applications = [];
@@ -196,7 +204,8 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
+async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRepair?: boolean; exhaustRedraft?: boolean } = {}) {
+  flow.layoutMode = options.layoutRepair ? "repair" : "none";
   if (format === "docx") {
     if (!sofficeRuntime) throw new Error("Set SOFFICE_BIN to the pinned LibreOffice runtime before running the DOCX source-flow fixture.");
     vi.stubEnv("SOFFICE_BIN", sofficeRuntime.binary);
@@ -232,6 +241,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   await runDraft(draftTask.payload);
   expect(application.status).toBe("draft_review");
   expect(application.packet?.resumeArtifact).toMatchObject({ pageCount: 2, layoutValidation: { outcome: "passed" } });
+  if (options.layoutRepair) expect(application.packet?.resumeSourcePlan?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
 
   const file = (kind: string, query = "") => applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/${kind}${query}`), {
     params: Promise.resolve({ id: application.id, kind }),
@@ -249,6 +259,21 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   expect(output.text).toContain("Orbit Labs — Search Engineer, 2023–2024");
   expect(output.text).toContain("Campus Access Checker");
   expect(output.text).toContain("Improved keyboard navigation coverage to 96%.");
+  if (options.exhaustRedraft) {
+    const previousPacket = structuredClone(application.packet!);
+    const previousBytes = Buffer.from(previewBytes);
+    flow.layoutMode = "exhaust";
+    flow.layoutRepairCount = 0;
+    const requestedRetry = await publicAction("draft", { applicationId: application.id, draftMode: "resume" });
+    expect(requestedRetry.status, await requestedRetry.clone().text()).toBe(200);
+    const retryTask = flow.tasks.filter((item) => item.task === "draft-application-packet").at(-1)!;
+    await expect(runDraft(retryTask.payload)).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2, findings: [] } });
+    expect(application.status).toBe("draft_review");
+    expect(application.packet).toEqual(previousPacket);
+    const retainedPreview = await file("resume");
+    expect(Buffer.from(await retainedPreview.arrayBuffer())).toEqual(previousBytes);
+    return;
+  }
   const writerCall = flow.parse.mock.calls.find(([request]) => request.text.format.name === "anchored_resume_edit_plan")?.[0] as ModelRequest | undefined;
   expect(writerCall).toBeDefined();
   expect(writerCall!.input[1].content).toContain("regionId");
@@ -260,6 +285,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   const campus = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Created accessibility scanner for 40 students."));
   const continuation = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Improved keyboard navigation coverage to 96%."));
   const aster = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Aster Systems — Software Intern, 2021–2022"));
+  const languages = writerInput.sourceDocument.anchors.find((anchor) => anchor.text === "Languages");
   expect(orbit).toMatchObject({ pageNumber: 1, regionId: "page-1-column-1" });
   expect(campus).toMatchObject({ pageNumber: 1, regionId: "page-1-column-2" });
   expect(continuation).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
@@ -269,6 +295,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   expect(continuation!.entryHeading).toBe("Campus Access Checker");
   expect(aster!.entryId).not.toBe(continuation!.entryId);
   expect(aster!.entryHeading).toBe("Aster Systems — Software Intern, 2021–2022");
+  expect(languages).toMatchObject({ kind: "section", sectionHeading: "Languages", entryHeading: "Languages" });
   expect(orbit!.readingOrder).toBeLessThan(campus!.readingOrder);
   const sourceFacts = new Map(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => [fact.id, fact.sourceAnchorId]));
   const confirmedContinuationFact = flow.state!.profile.facts.find((fact) => fact.sourceAnchorId === continuation!.id);
@@ -290,6 +317,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   expect(flow.uploaded[0]).toMatchObject({ name: "tailored-resume.pdf", mimeType: "application/pdf" });
   expect(flow.uploaded[0].bytes).toEqual(previewBytes);
   expect(application.form?.fields[0].fileHashes).toEqual([`tailored-resume.pdf:${previewBytes.length}:${bytesHash(previewBytes)}`]);
+  if (options.layoutRepair) return;
 
   const approvedSubmission = await publicAction("approveSubmit", { applicationId: application.id, formHash: application.form!.hash });
   expect(approvedSubmission.status, await approvedSubmission.clone().text()).toBe(200);
@@ -301,6 +329,14 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
 it("preserves employers, projects, columns and continuation through PDF upload, tailoring and exact attachment", async () => {
   await exerciseTwoColumnFlow("pdf");
 }, 240_000);
+
+it("repairs an overlong PDF edit through the public draft path within the shared 3/3/2 budget", async () => {
+  await exerciseTwoColumnFlow("pdf", { layoutRepair: true });
+}, 300_000);
+
+it("blocks an edit after two layout repairs and retains the prior valid artifact", async () => {
+  await exerciseTwoColumnFlow("pdf", { exhaustRedraft: true });
+}, 300_000);
 
 it.skipIf(!sofficeRuntime)("preserves employers, projects, columns and continuation through DOCX upload, tailoring and exact attachment", async () => {
   await exerciseTwoColumnFlow("docx");

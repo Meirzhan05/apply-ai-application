@@ -8,7 +8,7 @@ import type { PdfSourceAnchor, PdfSourceRepresentation, ResumeSourcePageLayout }
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_TEXT = 20_000;
 const MAX_SUPPORTED_PAGES = 8;
-const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|certifications|awards|leadership|volunteering|summary|profile)$/i;
+const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|languages|certifications|awards|leadership|volunteering|summary|profile)$/i;
 const claimStart = /^(?:built|created|developed|designed|analyzed|managed|led|implemented|conducted|researched|improved|worked|used|organized|launched|integrated|shipped|collaborated|architected|published|authored|supported|automated|reduced|increased|delivered|maintained|deployed|contributed)\b/i;
 const bulletText = /^[•●▪◦‣*\-–]\s*/;
 const imageOperations = new Set<number>([
@@ -118,7 +118,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
         const italic = /italic|oblique/i.test(resolvedFontName);
         const [a, b, c, d, x, y] = item.transform;
         if (Math.abs(b) > 0.01 || Math.abs(c) > 0.01 || Math.abs(a - d) > 0.05 || a <= 0 || d <= 0 || style.vertical)
-          reason = appendReason(reason, "This PDF has rotated, sheared, or vertically scaled text. Save it as an upright single-column PDF or upload an editable DOCX.");
+          reason = appendReason(reason, "This PDF has rotated, sheared, or vertically scaled text. Save it as an upright, text-based PDF or upload an editable DOCX.");
         const left = x;
         const top = viewport.height - y - item.height;
         const right = x + item.width;

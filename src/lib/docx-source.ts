@@ -322,7 +322,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
   if (!anchors.some((anchor) => anchor.candidateClaim)) reason ??= "This DOCX has no clearly separated résumé claim paragraphs to confirm and preserve. Add ordinary experience, project, or education paragraphs before tailoring.";
   const completeText = textLines.join("\n").trim();
   if (!completeText) throw new Error("This DOCX has no readable text. Add facts manually in your profile.");
-  if (completeText.length > MAX_SOURCE_TEXT) throw new Error(`This DOCX contains ${completeText.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported one-page version; no text was dropped.`);
+  if (completeText.length > MAX_SOURCE_TEXT) throw new Error(`This DOCX contains ${completeText.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported version; no text was dropped.`);
   return {
     version: 1, parser: "docx-ooxml-1", format: "docx", sourceHash, text: completeText,
     support: reason ? { status: "blocked", reason } : { status: "candidate" },
@@ -346,7 +346,7 @@ export function suggestDocxFacts(source: DocxSourceRepresentation): DocxFactSugg
 
 export async function applyDocxEdits(bytes: Buffer, source: DocxSourceRepresentation, edits: ResumeSourceEdit[], facts: VerifiedFact[]): Promise<Buffer> {
   if (bytesHash(bytes) !== source.sourceHash || source.version !== 1 || source.format !== "docx") throw new Error("The original DOCX no longer matches its inspected source. Upload and confirm it again.");
-  if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "This DOCX layout is unsupported. Upload a single-column one-page DOCX with supported fonts.");
+  if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "This DOCX layout is unsupported. Upload a DOCX with supported fonts and no more than two columns; the renderer checks its actual page count (up to eight pages).");
   if (!Array.isArray(edits) || edits.length > source.anchors.length) throw new Error("The source edit plan is invalid.");
   const byId = new Map(source.anchors.map((anchor) => [anchor.id, anchor]));
   const factsById = new Map(facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));

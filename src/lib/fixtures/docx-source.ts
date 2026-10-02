@@ -3,18 +3,20 @@ import JSZip from "jszip";
 const wordNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const relationships = "http://schemas.openxmlformats.org/package/2006/relationships";
 
-export async function createDocxSourceFixture(options: { table?: boolean; columns?: number; longText?: string; font?: string; externalResource?: boolean; expandedPayload?: string; headerText?: string } = {}) {
+export async function createDocxSourceFixture(options: { table?: boolean; columns?: number; longText?: string; font?: string; externalResource?: boolean; expandedPayload?: string; headerText?: string; multiPage?: boolean } = {}) {
   const zip = new JSZip();
   zip.file("[Content_Types].xml", `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`);
   zip.file("_rels/.rels", `<Relationships xmlns="${relationships}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
   const font = options.font ?? "Noto Sans";
   zip.file("word/styles.xml", `<w:styles xmlns:w="${wordNs}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}"/><w:sz w:val="20"/><w:color w:val="222222"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:rFonts w:ascii="${font}" w:hAnsi="${font}"/><w:sz w:val="32"/></w:rPr></w:style></w:styles>`);
   const p = (text: string, style = "Normal", bullet = false) => `<w:p><w:pPr><w:pStyle w:val="${style}"/>${bullet ? "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>" : ""}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}"/><w:sz w:val="20"/></w:rPr><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+  const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   const body = [
     p("Riley Example | riley@example.com"),
     p("Experience", "Heading1"),
     p("Orbit Labs — ML Intern | June–August 2026"),
     p(options.longText ?? "Built a recommender with 92% precision.", "Normal", true),
+    ...(options.multiPage ? [pageBreak, p("Improved model recall to 94%.", "Normal", true)] : []),
     p("Education", "Heading1"),
     p("State University — B.S. Computer Science"),
   ];
