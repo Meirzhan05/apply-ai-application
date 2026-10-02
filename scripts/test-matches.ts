@@ -27,8 +27,34 @@ async function main() {
       assert.equal(await strongRole.locator(".preparation-note").isVisible(), true, "Explain preparation and later approvals before the action");
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
+      const launcher = page.getByRole("button", { name: "+ Import a job link", exact: true });
+      await launcher.click();
+      const dialog = page.getByRole("dialog", { name: "Import a job link" });
+      await dialog.waitFor();
+      assert.equal(await page.getByRole("textbox", { name: "Job URL", exact: true }).evaluate(element => element === document.activeElement), true, "Opening import moves focus into its input");
+      for (let step = 0; step < 9; step++) {
+        await page.keyboard.press("Tab");
+        assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true, "Tab must stay inside the modal");
+      }
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await launcher.evaluate(element => element === document.activeElement), true, "Closing import restores launcher focus");
+      const dismissLauncher = strongRole.getByRole("button", { name: "Dismiss", exact: true });
+      await dismissLauncher.click();
+      const dismissDialog = page.getByRole("dialog", { name: "Why dismiss this role?" });
+      await dismissDialog.waitFor();
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press("Escape");
+      await dismissDialog.waitFor({ state: "hidden" });
+      assert.equal(await dismissLauncher.evaluate(element => element === document.activeElement), true);
+      assert.equal(await page.getByRole("button", { name: "Matches", exact: true }).getAttribute("aria-current"), "page");
+      assert.equal(await page.getByRole("button", { name: "All matches 3", exact: true }).getAttribute("aria-pressed"), "true");
+      for (const control of await strongRole.locator(".small-actions button, .dark-button, .job-link").all()) {
+        const box = await control.boundingBox();
+        assert.ok(box && box.width >= 44 && box.height >= 44, "Job actions need at least 44px targets");
+      }
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
-      console.log(`PASS ${label}: fit definitions, unresolved eligibility and preparation guidance`);
+      console.log(`PASS ${label}: fit guidance, native dialog focus/Tab/Escape/return, selection semantics and touch targets`);
     }
   } finally { await browser.close(); }
 }

@@ -4,6 +4,7 @@ import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
+import { WorkspaceDialog } from "@/app/workspace-dialog";
 import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
@@ -205,6 +206,8 @@ export default function Dashboard() {
             <button
               key={key}
               aria-label={label}
+              aria-current={section === key ? "page" : undefined}
+              title={label}
               className={`navitem ${section === key ? "active" : ""}`}
               onClick={() => setSection(key)}
             >
@@ -290,7 +293,7 @@ export default function Dashboard() {
               <div className="page-heading">
                 <div>
                   <p className="eyebrow">YOUR SEARCH, IN MOTION</p>
-                  <h1>Your next opportunities</h1>
+                  <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
                     {jobs.length} roles in your catalog ·{" "}
                     {data.lastRefreshAt
@@ -359,6 +362,7 @@ export default function Dashboard() {
                   ).map((item) => (
                     <button
                       key={item}
+                      aria-pressed={filter === item}
                       className={filter === item ? "selected" : ""}
                       onClick={() => setFilter(item)}
                     >
@@ -1414,18 +1418,7 @@ export default function Dashboard() {
         )}
       </div>
       {dismissJobId && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDismissJobId(null);
-          }}
-        >
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dismiss-heading"
-          >
+        <WorkspaceDialog labelledBy="dismiss-heading" onClose={() => setDismissJobId(null)}>
             <button
               className="modal-close"
               onClick={() => setDismissJobId(null)}
@@ -1451,6 +1444,7 @@ export default function Dashboard() {
             </label>
             <button
               className="dark-button"
+              disabled={Boolean(busy)}
               onClick={async () => {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
@@ -1462,22 +1456,11 @@ export default function Dashboard() {
             >
               Dismiss role
             </button>
-          </div>
-        </div>
+            {error && <p role="alert">{error}</p>}
+        </WorkspaceDialog>
       )}
       {importOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setImportOpen(false);
-          }}
-        >
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="import-heading"
-          >
+        <WorkspaceDialog labelledBy="import-heading" onClose={() => setImportOpen(false)}>
             <button
               className="modal-close"
               onClick={() => setImportOpen(false)}
@@ -1510,6 +1493,7 @@ export default function Dashboard() {
             ))}
             <button
               className="dark-button"
+              disabled={Boolean(busy)}
               onClick={async () => {
                 const next = await act("import", importFields);
                 if (next) {
@@ -1525,8 +1509,8 @@ export default function Dashboard() {
             >
               Add to catalog
             </button>
-          </div>
-        </div>
+            {error && <p role="alert">{error}</p>}
+        </WorkspaceDialog>
       )}
     </div>
   );
