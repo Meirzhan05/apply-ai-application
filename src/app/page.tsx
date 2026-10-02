@@ -9,6 +9,7 @@ import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels }
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
+import { matchView, type MatchFilter } from "@/lib/match-view";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
 import {
@@ -39,7 +40,7 @@ type ViewState = AppState & {
   matches: { jobId: string; assessment: MatchAssessment }[];
 };
 type Section = "matches" | "applications" | "profile" | "settings";
-type Filter = "all" | "strong" | "possible" | "uncertain" | "saved";
+type Filter = MatchFilter;
 
 export default function Dashboard() {
   const router = useRouter();
@@ -137,15 +138,8 @@ export default function Dashboard() {
     [data],
   );
   const applications = data?.applications ?? [];
-  const filtered = jobs.filter(
-    (job) =>
-      job.active &&
-      feedback.get(job.id)?.kind !== "dismissed" &&
-      search.toLowerCase().trim().split(/\s+/).every(term => `${job.title} ${job.company}`.toLowerCase().includes(term)) &&
-      (filter === "all" ||
-        (filter === "saved" && feedback.get(job.id)?.kind === "saved") ||
-        matches.get(job.id)?.category === filter),
-  );
+  const view = matchView({ jobs, matches, feedback, filter, search });
+  const filtered = view.jobs;
   filtered.sort((a, b) => sort === "newest"
     ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
     : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
@@ -299,7 +293,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {jobs.length} roles in your catalog ·{" "}
+                    {view.availableCount} roles available · {jobs.length} in your catalog ·{" "}
                     {data.lastRefreshAt
                       ? `updated ${relative(data.lastRefreshAt)}`
                       : "ready for your review"}
@@ -381,17 +375,13 @@ export default function Dashboard() {
                         ? "All matches"
                         : item[0].toUpperCase() + item.slice(1)}{" "}
                       <span>
-                        {item === "all"
-                          ? jobs.filter((job) => job.active).length
-                          : data.matches.filter(
-                                (x) => x.assessment.category === item,
-                              ).length}
+                        {view.counts[item]}
                       </span>
                     </button>
                   ))}
                 </div>
                 <button className={`collection-filter ${filter === "saved" ? "selected" : ""}`} aria-pressed={filter === "saved"} onClick={() => setFilter("saved")}>
-                  <Bookmark size={16} aria-hidden="true" /> Saved <span>{data.feedback.filter(x => x.kind === "saved").length}</span>
+                  <Bookmark size={16} aria-hidden="true" /> Saved <span>{view.counts.saved}</span>
                 </button>
                 <label className="sort-control">Sort
                   <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}>
@@ -400,6 +390,7 @@ export default function Dashboard() {
                   </select>
                 </label>
               </div>
+              <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in this view{search.trim() && ` for “${search.trim()}”`}</p>
               <details className="fit-guide">
                 <summary>What do the fit labels mean?</summary>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>

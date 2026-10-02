@@ -37,6 +37,10 @@ async function main() {
       const query = page.getByRole("searchbox", { name: "Search roles or companies" });
       await query.fill("cedar engineering");
       assert.equal(await page.getByRole("article").count(), 1, "Search matches company and title case-insensitively");
+      assert.equal(await page.getByRole("button", { name: "All matches 1", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Possible 0", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("status").innerText(), '1 role in this view for “cedar engineering”');
       await query.fill("no-company-has-this-name");
       await page.getByRole("heading", { name: "No roles match your search", exact: true }).waitFor();
       await page.getByRole("button", { name: "Clear search", exact: true }).last().click();

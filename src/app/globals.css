@@ -368,6 +368,7 @@ input, textarea { caret-color: var(--forest); }
   margin-left: 3px;
 }
 .fit-guide { margin: 12px 0; color: #355750; font-size: 13px; line-height: 1.5; }
+.result-summary { color: #355750; font-size: 13px; margin: 12px 0; font-variant-numeric: tabular-nums; }
 .fit-guide summary { cursor: pointer; width: fit-content; font-weight: 600; }
 .fit-guide p { max-width: 70ch; }
 .fit-guide dl { display: grid; gap: 8px; margin: 12px 0; }
