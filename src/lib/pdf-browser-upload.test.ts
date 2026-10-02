@@ -4,13 +4,17 @@ import { rm } from "node:fs/promises";
 import type { Browser, Locator, Page } from "playwright-core";
 import { initialDemoState } from "@/lib/demo-data";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { parsePdfSource } from "@/lib/pdf-source";
+import { parseDocxSource } from "@/lib/docx-source";
+import { prepareDocxResumeBaseline } from "@/lib/docx-renderer";
 import { packetProfileHash, validatePacket } from "@/lib/drafting";
 import { withPacketFiles, reviewedPacketFile } from "@/lib/packet-files";
 import { saveDemoOriginalResume } from "@/lib/original-resume";
 import { sourceJobHash, sourceProfileHash } from "@/lib/resume-source-draft";
 import { hashJson } from "@/lib/crypto";
-import { bytesHash } from "@/lib/resume-artifacts";
+import { bytesHash, saveArtifact } from "@/lib/resume-artifacts";
+import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
 import { prepareBrowser } from "@/lib/browser-runner";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
@@ -102,9 +106,10 @@ async function sourcePacket() {
   const factId = facts.find((fact) => fact.sourceAnchorId === bullet.id)!.id;
   const editText = "Built search index for 1,200 users.";
   claims.find((claim) => claim.anchorId === bullet.id)!.text = editText;
+  const sourceLayout = pdfSourceLayout(source)!;
   const plan: ResumeSourcePlan = { version: 1, format: "pdf", sourceHash: source.sourceHash, representationVersion: source.version,
     profileHash: sourceProfileHash(profile), factsHash: hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))),
-    settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(job), claims,
+    settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(job), sourceLayout, layoutHash: sourceLayoutHash(sourceLayout), claims,
     edits: [{ anchorId: bullet.id, text: editText, factIds: [factId] }],
     grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
       findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported" as const, reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) },
@@ -117,6 +122,115 @@ async function sourcePacket() {
     cleanupPaths.push(`.data/application-files/${packet.resumeArtifact.baseline.storageKey}`, `.data/application-files/${packet.resumeArtifact.source.storageKey}`);
   }
   return { state, profile, job, originalBytes, packet };
+}
+
+async function legacyV1Packet() {
+  const state = initialDemoState();
+  const job = { ...state.jobs[0], url: "https://jobs.example/apply", applyUrl: "https://jobs.example/apply" };
+  state.jobs = [job];
+  const profile = state.profile;
+  const originalBytes = await createPdfSourceFixture();
+  const sourceKey = `${profile.id}/${randomUUID()}.pdf`;
+  await saveDemoOriginalResume(sourceKey, originalBytes);
+  cleanupPaths.push(`.data/resumes/${sourceKey}`);
+  const source = await parsePdfSource(originalBytes);
+  source.version = 1;
+  source.parser = "pdfjs-text-1";
+  delete source.layout.pages;
+  for (const anchor of source.anchors) {
+    delete anchor.regionId;
+    delete anchor.readingOrder;
+  }
+  const facts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({
+    id: `legacy-pdf-fact-${index}`, text: anchor.text, verified: true, source: "resume" as const, sourceAnchorId: anchor.id,
+  }));
+  profile.facts = facts;
+  profile.resumeFileName = "source-resume.pdf";
+  profile.resumeSource = { storageKey: sourceKey, sha256: bytesHash(originalBytes), size: originalBytes.length, mimeType: "application/pdf" };
+  profile.resumeText = source.text;
+  profile.resumeSourceDocument = source;
+  const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({ anchorId: anchor.id, text: anchor.text,
+    factIds: [facts.find((fact) => fact.sourceAnchorId === anchor.id)!.id] }));
+  const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source: factSource, sourceAnchorId }) => ({ id, text, source: factSource, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+  const plan: ResumeSourcePlan = { version: 1, format: "pdf", sourceHash: source.sourceHash, representationVersion: 1,
+    profileHash: sourceProfileHash(profile), factsHash, settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(job), claims, edits: [],
+    grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
+      findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported" as const, reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) },
+    model: "legacy-v1-fixture" };
+  const inputHash = hashJson({ kind: "source-preserving-pdf", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
+    profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+    layoutPolicy: "pdf-single-column-one-page-v1", claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+  const finalFile = await saveArtifact(profile.id, inputHash, originalBytes, "pdf");
+  const sourceFile = await saveArtifact(profile.id, inputHash, originalBytes, "pdf");
+  const baselineFile = await saveArtifact(profile.id, inputHash, originalBytes, "pdf");
+  cleanupPaths.push(`.data/application-files/${finalFile.storageKey}`);
+  const packet = {
+    schemaVersion: 3 as const, version: 1, summary: "Legacy v1 PDF attachment", resumeMode: "tailored" as const, resumeSourcePlan: plan,
+    resumeLines: claims.map(({ text, factIds }) => ({ text, factIds })), answers: [], createdAt: new Date().toISOString(), model: plan.model,
+    profileHash: packetProfileHash(profile), files: [{ kind: "resume" as const, filename: "tailored-resume.pdf", mimeType: "application/pdf" as const,
+      ...finalFile, factIds: [...new Set(claims.flatMap((claim) => claim.factIds))] }],
+    resumeArtifact: { format: "pdf" as const, inputHash, pageCount: 1, renderer: "apache-pdfbox" as const, rendererVersion: "3.0.8",
+      javaVersion: "21.0.12.1+1-LTS", runtimeArchitecture: `${process.platform}-${process.arch}`, sourceHash: source.sourceHash, representationVersion: 1 as const,
+      profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+      layoutPolicy: "pdf-single-column-one-page-v1" as const, layoutValidation: { outcome: "passed" as const, pageWidthPt: 612, pageHeightPt: 792,
+        unchangedAnchorTolerancePt: 0.5 as const, pageSizeTolerancePt: 0.5 as const, visualMaskPaddingPt: 1.5 as const, visualOutsideEditTolerance: 0 as const,
+        visualOutsideEditDifferenceAt144Dpi: 0 as const, visualOutsideEditDifferenceAt300Dpi: 0 as const, baselinePdfHash: bytesHash(originalBytes) },
+      baseline: { ...baselineFile, mimeType: "application/pdf" as const }, source: { ...sourceFile, mimeType: "application/pdf" as const } },
+  };
+  return { state, profile, job, originalBytes, packet };
+}
+
+async function legacyDocxV1Packet() {
+  const state = initialDemoState();
+  const job = { ...state.jobs[0], url: "https://jobs.example/apply", applyUrl: "https://jobs.example/apply" };
+  state.jobs = [job];
+  const profile = state.profile;
+  const originalBytes = await createDocxSourceFixture();
+  const sourceKey = `${profile.id}/${randomUUID()}.docx`;
+  await saveDemoOriginalResume(sourceKey, originalBytes);
+  cleanupPaths.push(`.data/resumes/${sourceKey}`);
+  const source = await parseDocxSource(originalBytes);
+  const facts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({
+    id: `legacy-docx-fact-${index}`, text: anchor.text, verified: true, source: "resume" as const, sourceAnchorId: anchor.id,
+  }));
+  profile.facts = facts;
+  profile.resumeFileName = "source-resume.docx";
+  profile.resumeSource = { storageKey: sourceKey, sha256: bytesHash(originalBytes), size: originalBytes.length,
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  profile.resumeText = source.text;
+  profile.resumeSourceDocument = source;
+  const baseline = await prepareDocxResumeBaseline(originalBytes, source);
+  const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({ anchorId: anchor.id, text: anchor.text,
+    factIds: [facts.find((fact) => fact.sourceAnchorId === anchor.id)!.id] }));
+  const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source: factSource, sourceAnchorId }) => ({ id, text, source: factSource, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+  const plan: ResumeSourcePlan = { version: 1, format: "docx", sourceHash: source.sourceHash, representationVersion: 1,
+    profileHash: sourceProfileHash(profile), factsHash, settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(job), claims, edits: [],
+    grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
+      findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported" as const, reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) },
+    model: "legacy-v1-fixture" };
+  const inputHash = hashJson({ kind: "source-preserving-docx", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
+    profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+    layoutPolicy: "docx-single-column-one-page-v1", claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+  const finalFile = await saveArtifact(profile.id, inputHash, baseline.baselinePdf, "pdf");
+  const sourceFile = await saveArtifact(profile.id, inputHash, originalBytes, "docx");
+  const baselineFile = await saveArtifact(profile.id, inputHash, baseline.baselinePdf, "pdf");
+  cleanupPaths.push(`.data/application-files/${finalFile.storageKey}`, `.data/application-files/${sourceFile.storageKey}`);
+  const rendererVersion = process.env.DOCX_RENDERER_VERSION ?? "26.8.0.3";
+  const packet = {
+    schemaVersion: 3 as const, version: 1, summary: "Legacy v1 DOCX attachment", resumeMode: "tailored" as const, resumeSourcePlan: plan,
+    resumeLines: claims.map(({ text, factIds }) => ({ text, factIds })), answers: [], createdAt: new Date().toISOString(), model: plan.model,
+    profileHash: packetProfileHash(profile), files: [{ kind: "resume" as const, filename: "tailored-resume.pdf", mimeType: "application/pdf" as const,
+      ...finalFile, storageBucket: "application-files" as const, factIds: [...new Set(claims.flatMap((claim) => claim.factIds))] }],
+    resumeArtifact: { format: "docx" as const, inputHash, pageCount: 1, renderer: `libreoffice-${rendererVersion}`, rendererVersion: baseline.rendererVersion,
+      sourceHash: source.sourceHash, representationVersion: 1 as const, profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash,
+      jobHash: plan.jobHash, layoutPolicy: "docx-single-column-one-page-v1" as const,
+      layoutValidation: { outcome: "passed" as const, pageWidthPt: 612, pageHeightPt: 792, unchangedAnchorTolerancePt: 1 as const,
+        pageSizeTolerancePt: 0.5 as const, visualOutsideEditTolerance: 0.001 as const, visualOutsideEditDifference: 0,
+        baselinePdfHash: bytesHash(baseline.baselinePdf) },
+      baseline: { ...baselineFile, mimeType: "application/pdf" as const },
+      source: { ...sourceFile, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" as const } },
+  };
+  return { state, profile, job, baselinePdf: baseline.baselinePdf, packet };
 }
 
 beforeAll(async () => {
@@ -169,4 +283,50 @@ it("rejects a schema-3 packet without its current fill approval before opening b
   await expect(prepareBrowser(app, fixture.job, fixture.profile)).rejects.toThrow(/requires fill approval/i);
   expect(transport.launch).not.toHaveBeenCalled();
   expect(transport.uploaded).toEqual([]);
+}, 180_000);
+
+it("keeps a valid legacy v1 source artifact readable and attaches its exact saved bytes under the 1.5pt policy", async () => {
+  transport.uploaded = [];
+  const fixture = await legacyV1Packet();
+  const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  cleanupPaths.push(`.data/screenshots/${app.id}.png`);
+  setPacket(fixture.state, app, fixture.packet);
+  approveFill(app, fixture.profile.id, app.packetHash!, fixture.job.applyUrl);
+  validatePacket(fixture.profile, app.packet!);
+  const expected = await reviewedPacketFile(fixture.profile, app.packet!, "resume");
+  const page = fakePage(app);
+  transport.launch.mockResolvedValue(page.browser);
+
+  await prepareBrowser(app, fixture.job, fixture.profile);
+
+  expect(app.packet?.resumeArtifact).toMatchObject({ format: "pdf", representationVersion: 1, layoutPolicy: "pdf-single-column-one-page-v1",
+    layoutValidation: { visualMaskPaddingPt: 1.5 } });
+  expect(expected.bytes).toEqual(fixture.originalBytes);
+  expect(transport.uploaded).toHaveLength(1);
+  expect(transport.uploaded[0].buffer).toEqual(expected.bytes);
+  expect(uploadedField.fileHashes).toEqual([`${expected.filename}:${expected.bytes.length}:${bytesHash(expected.bytes)}`]);
+}, 180_000);
+
+it("keeps a legacy one-page DOCX artifact readable and attaches its exact saved bytes without new page-map metadata", async () => {
+  transport.uploaded = [];
+  const fixture = await legacyDocxV1Packet();
+  const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  cleanupPaths.push(`.data/screenshots/${app.id}.png`);
+  setPacket(fixture.state, app, fixture.packet);
+  approveFill(app, fixture.profile.id, app.packetHash!, fixture.job.applyUrl);
+  validatePacket(fixture.profile, app.packet!);
+  const expected = await reviewedPacketFile(fixture.profile, app.packet!, "resume");
+  const page = fakePage(app);
+  transport.launch.mockResolvedValue(page.browser);
+
+  await prepareBrowser(app, fixture.job, fixture.profile);
+
+  expect(app.packet?.resumeArtifact).toMatchObject({ format: "docx", representationVersion: 1, layoutPolicy: "docx-single-column-one-page-v1",
+    layoutValidation: { outcome: "passed" } });
+  expect(app.packet?.resumeSourcePlan?.sourceLayout).toBeUndefined();
+  expect(app.packet?.resumeSourcePlan?.layoutHash).toBeUndefined();
+  expect(expected.bytes).toEqual(fixture.baselinePdf);
+  expect(transport.uploaded).toHaveLength(1);
+  expect(transport.uploaded[0].buffer).toEqual(expected.bytes);
+  expect(uploadedField.fileHashes).toEqual([`${expected.filename}:${expected.bytes.length}:${bytesHash(expected.bytes)}`]);
 }, 180_000);

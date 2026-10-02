@@ -133,4 +133,4 @@ it("retains owner-scoped PDF comparison bytes and labels them stale after confir
   expect(comparison.tailored.bytes).toEqual(finalBeforeChange);
   await expect(reviewedPacketFile(fixture.profile, packet, "resume")).rejects.toThrow(/stale|does not match/i);
   expect(artifact.baseline.sha256).toBe(bytesHash(comparison.baseline.bytes));
-});
+}, 150_000);

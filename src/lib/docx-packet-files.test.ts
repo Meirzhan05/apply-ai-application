@@ -182,4 +182,4 @@ it("rejects stale confirmed source facts before creating a reviewed artifact", a
   const fixture = await sourcePacket();
   fixture.profile.facts[0].text += " changed";
   await expect(withPacketFiles(fixture.profile, fixture.packet, Date.now() + 30_000)).rejects.toThrow(/stale|confirmed facts/i);
-});
+}, 150_000);

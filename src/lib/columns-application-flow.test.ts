@@ -71,7 +71,10 @@ const publicAction = (action: string, payload: Record<string, unknown>) => actio
 
 type ModelRequest = { input: Array<{ content: string }>; text: { format: { name: string } }; model: string };
 type AnchoredPlanInput = {
-  sourceDocument: { anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean; entryId?: string; entryHeading?: string; regionId?: string }> };
+  sourceDocument: {
+    anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean; entryId?: string; entryHeading?: string }>;
+    sourceLayout: { anchors: Array<{ anchorId: string; pageNumber: number; regionId: string; readingOrder: number }> };
+  };
   confirmedFacts: Array<{ id: string; sourceAnchorId?: string }>;
 };
 
@@ -278,25 +281,28 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   expect(writerCall).toBeDefined();
   expect(writerCall!.input[1].content).toContain("regionId");
   expect(writerCall!.input[1].content).toContain("pageNumber");
-  const writerInput = JSON.parse(writerCall!.input[1].content) as { sourceDocument: { anchors: Array<{
-    id: string; text: string; entryId: string; entryHeading: string; regionId: string; pageNumber: number; readingOrder: number;
-  }> } };
+  const writerInput = JSON.parse(writerCall!.input[1].content) as AnchoredPlanInput;
   const orbit = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Built ranking service for 1,200 users."));
   const campus = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Created accessibility scanner for 40 students."));
   const continuation = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Improved keyboard navigation coverage to 96%."));
   const aster = writerInput.sourceDocument.anchors.find((anchor) => anchor.text.includes("Aster Systems — Software Intern, 2021–2022"));
   const languages = writerInput.sourceDocument.anchors.find((anchor) => anchor.text === "Languages");
-  expect(orbit).toMatchObject({ pageNumber: 1, regionId: "page-1-column-1" });
-  expect(campus).toMatchObject({ pageNumber: 1, regionId: "page-1-column-2" });
-  expect(continuation).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
-  expect(aster).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
+  const layoutByAnchor = new Map(writerInput.sourceDocument.sourceLayout.anchors.map((anchor) => [anchor.anchorId, anchor]));
+  const orbitLayout = layoutByAnchor.get(orbit!.id);
+  const campusLayout = layoutByAnchor.get(campus!.id);
+  const continuationLayout = layoutByAnchor.get(continuation!.id);
+  const asterLayout = layoutByAnchor.get(aster!.id);
+  expect(orbitLayout).toMatchObject({ pageNumber: 1, regionId: "page-1-column-1" });
+  expect(campusLayout).toMatchObject({ pageNumber: 1, regionId: "page-1-column-2" });
+  expect(continuationLayout).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
+  expect(asterLayout).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
   expect(orbit!.entryId).not.toBe(campus!.entryId);
   expect(continuation!.entryId).toBe(campus!.entryId);
   expect(continuation!.entryHeading).toBe("Campus Access Checker");
   expect(aster!.entryId).not.toBe(continuation!.entryId);
   expect(aster!.entryHeading).toBe("Aster Systems — Software Intern, 2021–2022");
   expect(languages).toMatchObject({ kind: "section", sectionHeading: "Languages", entryHeading: "Languages" });
-  expect(orbit!.readingOrder).toBeLessThan(campus!.readingOrder);
+  expect(orbitLayout!.readingOrder).toBeLessThan(campusLayout!.readingOrder);
   const sourceFacts = new Map(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => [fact.id, fact.sourceAnchorId]));
   const confirmedContinuationFact = flow.state!.profile.facts.find((fact) => fact.sourceAnchorId === continuation!.id);
   expect(confirmedContinuationFact?.verified).toBe(true);
