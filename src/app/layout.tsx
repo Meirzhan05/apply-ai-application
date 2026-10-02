@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SessionRefresh } from "@/components/session-refresh";
 import "./globals.css";
 import "./auth.css";
 
@@ -12,7 +13,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><SessionRefresh />{children}</body>
     </html>
   );
 }

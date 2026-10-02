@@ -8,12 +8,62 @@ import {
   canSubmit,
   formDigest,
   hasFillApproval,
+  hasSubmissionApproval,
   selectApplication,
   setFormSnapshot,
   setPacket,
+  authorizeAutonomous,
+  hasAutonomousAuthorization,
 } from "@/lib/workflow";
+import type { ApplicationPacket, DocxResumeArtifact, PdfResumeArtifact, ResumeSourcePlan } from "@/lib/types";
+
+function sourcePlan(format: "docx" | "pdf"): ResumeSourcePlan {
+  return {
+    version: 1, format, sourceHash: "a".repeat(64), representationVersion: 1,
+    profileHash: "b".repeat(64), factsHash: "c".repeat(64), settingsHash: "d".repeat(64), jobHash: "e".repeat(64),
+    claims: [], edits: [], grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0, findings: [] }, model: "fixture",
+  };
+}
+
+function sourceArtifact(format: "docx" | "pdf"): DocxResumeArtifact | PdfResumeArtifact {
+  const common = {
+    inputHash: "f".repeat(64), pageCount: 1 as const, sourceHash: "a".repeat(64), representationVersion: 1 as const,
+    profileHash: "b".repeat(64), factsHash: "c".repeat(64), settingsHash: "d".repeat(64), jobHash: "e".repeat(64),
+    baseline: { storageKey: "owner/baseline.pdf", sha256: "1".repeat(64), size: 100, mimeType: "application/pdf" as const },
+  };
+  if (format === "docx") return {
+    ...common, format, renderer: "libreoffice-26.8", rendererVersion: "26.8", layoutPolicy: "docx-single-column-one-page-v1",
+    layoutValidation: { outcome: "passed", pageWidthPt: 612, pageHeightPt: 792, unchangedAnchorTolerancePt: 1, pageSizeTolerancePt: 0.5, visualOutsideEditTolerance: 0.001, visualOutsideEditDifference: 0, baselinePdfHash: "1".repeat(64) },
+    source: { storageKey: "owner/source.docx", sha256: "2".repeat(64), size: 200, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+  };
+  return {
+    ...common, format, renderer: "apache-pdfbox", rendererVersion: "3.0.8", javaVersion: "21.0.12", runtimeArchitecture: "linux-x64",
+    layoutPolicy: "pdf-single-column-one-page-v1",
+    layoutValidation: { outcome: "passed", pageWidthPt: 612, pageHeightPt: 792, unchangedAnchorTolerancePt: 0.5, pageSizeTolerancePt: 0.5, visualMaskPaddingPt: 1.5, visualOutsideEditTolerance: 0, visualOutsideEditDifferenceAt144Dpi: 0, visualOutsideEditDifferenceAt300Dpi: 0, baselinePdfHash: "1".repeat(64) },
+    source: { storageKey: "owner/source.pdf", sha256: "2".repeat(64), size: 200, mimeType: "application/pdf" },
+  };
+}
+
+function attachSourceMetadata(packet: ApplicationPacket, format: "docx" | "pdf"): void {
+  packet.schemaVersion = 3;
+  packet.resumeMode = "tailored";
+  packet.resumeSourcePlan = sourcePlan(format);
+  packet.resumeArtifact = sourceArtifact(format);
+}
 
 describe("application approval gates", () => {
+  it("records autonomous authorization without changing legacy reviewed approvals", () => {
+    const state = initialDemoState();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+
+    authorizeAutonomous(app, state.profile.id, 7, state.jobs[0].applyUrl);
+
+    expect(app.approvals).toEqual([]);
+    expect(hasAutonomousAuthorization(app, state.profile.id, 7, state.jobs[0].applyUrl)).toBe(true);
+    expect(hasAutonomousAuthorization(app, "another-owner", 7, state.jobs[0].applyUrl)).toBe(false);
+    expect(hasAutonomousAuthorization(app, state.profile.id, 6, state.jobs[0].applyUrl)).toBe(false);
+  });
+
   it("refuses a second application through a tracking alias of the same posting", () => {
     const state = initialDemoState();
     const job = state.jobs[0];
@@ -91,6 +141,30 @@ describe("application approval gates", () => {
     Object.assign(app.approvals[1], { version: 2 });
     expect(canSubmit(app)).toBe(false);
     Object.assign(app.approvals[1], { version: null });
+    expect(canSubmit(app)).toBe(false);
+  });
+
+  it.each(["docx", "pdf"] as const)("preserves fill and final-submission approval for source-aware %s packets", async (format) => {
+    const state = initialDemoState();
+    const job = state.jobs[0];
+    const app = selectApplication(state, job.id, state.profile.id);
+    const packet = await draftPacket(state.profile, job);
+    packet.answers = [];
+    setPacket(state, app, packet);
+    attachSourceMetadata(app.packet!, format);
+    app.packetHash = hashJson(app.packet);
+
+    approveFill(app, state.profile.id, app.packetHash!, job.applyUrl);
+    setFormSnapshot(app, { version: 1, url: job.applyUrl, fields: [], attachments: ["tailored-resume.pdf"], capturedAt: new Date().toISOString() });
+    approveSubmit(app, state.profile.id, app.form!.hash);
+
+    expect(hasFillApproval(app, state.profile.id, job.applyUrl)).toBe(true);
+    expect(hasSubmissionApproval(app)).toBe(true);
+    expect(canSubmit(app)).toBe(true);
+
+    app.approvals[0].targetUrl = `${job.applyUrl}/other`;
+    expect(hasFillApproval(app, state.profile.id, job.applyUrl)).toBe(false);
+    expect(hasSubmissionApproval(app)).toBe(false);
     expect(canSubmit(app)).toBe(false);
   });
 

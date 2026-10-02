@@ -69,4 +69,23 @@ describe("eligibility changes after form review", () => {
     expect(await run({ userId: app.userId, applicationId: app.id })).toEqual({ skipped: true });
     expect(mocks.cancel).toHaveBeenCalledOnce();
   });
+  it("retains the session and records a hold when pre-click cleanup is unconfirmed", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    mocks.state = initialDemoState();
+    const state = mocks.state;
+    const job = state.jobs[0];
+    const app = selectApplication(state, job.id, state.profile.id);
+    const packet = await draftPacket(state.profile, job); packet.answers = [];
+    setPacket(state, app, packet); approveFill(app, app.userId, app.packetHash!, job.applyUrl);
+    setFormSnapshot(app, { version: 1, url: job.applyUrl, fields: [], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: true });
+    approveSubmit(app, app.userId, app.form!.hash); transition(app, ["approved_to_submit"], "submitting");
+    app.submissionStartedAt = new Date().toISOString(); app.browserSessionId = "synthetic-held-session"; job.active = false;
+    mocks.cancel.mockRejectedValueOnce(new Error("provider release timeout"));
+    const result = await run({ userId: app.userId, applicationId: app.id });
+    expect(result.blocked).toBe(true);
+    expect(app.status).toBe("needs_user_action");
+    expect(app.browserSessionId).toBe("synthetic-held-session");
+    expect(app.browserReleasePending?.sessionId).toBe("synthetic-held-session");
+    expect(app.blockers?.some((item) => item.reason === "resource_hold")).toBe(true);
+  });
 });

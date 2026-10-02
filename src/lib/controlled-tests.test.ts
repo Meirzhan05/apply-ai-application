@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { issueControlledTestGrant, verifyControlledTestGrant } from "@/lib/controlled-tests";
+import { controlledReceiverUrl, issueControlledTestGrant, verifyControlledTestGrant } from "@/lib/controlled-tests";
 
 const owner = "bcd5ea6e-12f3-4768-a09f-fc5bc892b48a";
 const app = "d7b8253c-a80c-48a2-b64a-944d00b8a5ea";
@@ -26,5 +26,11 @@ describe("controlled cloud test grants", () => {
     expect(verifyControlledTestGrant(token)).toBeNull();
     vi.stubEnv("INTERNAL_TASK_SECRET", "");
     expect(verifyControlledTestGrant(token)).toBeNull();
+  });
+  it("binds receiver scope to the configured synthetic path", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://apply.example");
+    expect(controlledReceiverUrl("https://apply.example/api/internal/controlled-form?token=fixture")?.pathname).toBe("/api/internal/controlled-form");
+    expect(controlledReceiverUrl("https://employer.example/jobs/42?token=fixture")).toBeNull();
+    expect(controlledReceiverUrl("https://apply.example/api/internal/other?token=fixture")).toBeNull();
   });
 });

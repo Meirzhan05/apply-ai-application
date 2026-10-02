@@ -4,8 +4,9 @@ import type {
   submitApplicationForm,
 } from "../../../../trigger/browser";
 import { queueMatchAssessment } from "@/lib/match-queue";
+import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
-import { newId } from "@/lib/crypto";
+import { hashJson, newId } from "@/lib/crypto";
 import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
 import { sendActionNeeded } from "@/lib/email";
@@ -19,7 +20,6 @@ import { adminSupabase } from "@/lib/supabase-admin";
 import {
   refreshBrowserSnapshot,
   repairEducationFields,
-  submitBrowser,
   cancelBrowser,
 } from "@/lib/browser-runner";
 import {
@@ -27,6 +27,7 @@ import {
   validatePacket,
   packetProfileHash,
 } from "@/lib/drafting";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import {
   currentUserId,
   isDemo,
@@ -35,6 +36,16 @@ import {
 } from "@/lib/repository";
 import { canonicalJobUrl } from "@/lib/sources";
 import { newImportedJob, refreshImportedJobs } from "@/lib/import-jobs";
+import { runImportedPreflight } from "@/lib/import-preflight";
+import { resumeBlockedApplication } from "@/lib/application-blockers";
+import { recordApplicationBlocker } from "@/lib/application-blockers";
+import {
+  activateAutomation,
+  bumpAutomationVersion,
+  pauseAutomation,
+  saveOnboarding,
+  updateAutomationSettings,
+} from "@/lib/onboarding";
 import {
   approveFill,
   approveSubmit,
@@ -46,6 +57,7 @@ import {
   transition,
 } from "@/lib/workflow";
 import type { AppState, Application, Job, Profile } from "@/lib/types";
+import { enrollPilot, withdrawPilot } from "@/lib/pilot";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -77,12 +89,104 @@ const findJob = (state: AppState, app: Application): Job => {
   if (!job) throw new Error("Job not found.");
   return job;
 };
+const assertSourcePlanJobCurrent = (state: AppState, app: Application) => assertSourceJobCurrent(app, findJob(state, app));
+
+// Storage/rendering happens before CAS; only the unchanged review can publish it.
+const materialReviewHash = (state: AppState, app: Application) => hashJson({
+  profile: packetProfileHash(state.profile), job: findJob(state, app),
+  packet: app.packet, packetHash: app.packetHash, status: app.status,
+  queuedRun: app.queuedRun, needsCoverLetter: app.needsCoverLetter,
+  browserSessionId: app.browserSessionId,
+});
+const assertMaterialReviewCurrent = (state: AppState, app: Application, expected: string) => {
+  if (materialReviewHash(state, app) !== expected)
+    throw new Error("The application or confirmed facts changed while preparing files. Review it again.");
+};
 
 async function perform(
   userId: string,
   action: string,
   payload: Record<string, unknown>,
 ) {
+  const ownerContext = { actor: { kind: "owner" as const, userId }, action };
+  if (action === "enrollPilot") {
+    return mutateState(userId, (state) => {
+      const input = z.object({ consentVersion: z.string().max(80), confirmed: z.literal(true) }).parse(payload);
+      const episode = enrollPilot(state, userId, input);
+      activity(state, "Pilot enrollment saved", `Participation episode ${episode.id} is active. Automation settings were not changed.`);
+    }, ownerContext);
+  }
+  if (action === "withdrawPilot") {
+    return mutateState(userId, (state) => {
+      withdrawPilot(state, userId);
+      activity(state, "Pilot participation withdrawn", "Future pilot initiations are paused; existing evidence is retained.");
+    }, ownerContext);
+  }
+  if (action === "onboarding") {
+    return mutateState(userId, (state) => {
+      const questionnaire = z
+        .object({
+          workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
+          requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
+          availability: z.string().max(200).optional(),
+          graduationYear: z.string().max(20).optional(),
+        })
+        .parse(payload.questionnaire ?? payload);
+      const facts = payload.facts === undefined
+        ? undefined
+        : z
+            .array(
+              z.object({
+                id: z.string(),
+                text: z.string().min(1).max(500),
+                verified: z.boolean(),
+                source: z.enum(["resume", "user"]),
+                sourceAnchorId: z.string().max(160).optional(),
+              }),
+            )
+            .max(80)
+            .parse(payload.facts);
+      const currentAnchors = new Set(state.profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
+      if (facts?.some((fact) => fact.sourceAnchorId && (!currentAnchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
+      saveOnboarding(state.profile, { questionnaire, facts });
+      state.profile.updatedAt = new Date().toISOString();
+      state.matchCache = {};
+      activity(state, "Onboarding saved", "Your questionnaire and confirmed facts were saved.");
+    }, ownerContext);
+  }
+  if (action === "activateAutomation" || action === "activate") {
+    return mutateState(userId, (state) => {
+      const authorization = activateAutomation(state.profile, text(payload.reason, 200));
+      state.profile.updatedAt = new Date().toISOString();
+      activity(state, "Automation enabled", `Authorization version ${authorization.version} is active.`);
+    }, ownerContext);
+  }
+  if (action === "pauseAutomation" || action === "pause") {
+    return mutateState(userId, (state) => {
+      pauseAutomation(state.profile);
+      state.profile.updatedAt = new Date().toISOString();
+      activity(state, "Automation paused", "New autonomous application work is paused until you resume it.");
+    }, ownerContext);
+  }
+  if (action === "automationSettings") {
+    return mutateState(userId, (state) => {
+      const settings = z
+        .object({
+          resumeTailoring: z.boolean().optional(),
+          coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
+          essayMode: z.literal("automatic-truthful").optional(),
+          preferredTitles: z.array(z.string().max(120)).max(30).optional(),
+          preferredLocations: z.array(z.string().max(120)).max(30).optional(),
+          remoteOnly: z.boolean().optional(),
+          strictLocations: z.boolean().optional(),
+        })
+        .parse(payload.settings ?? payload);
+      updateAutomationSettings(state.profile, settings);
+      state.profile.updatedAt = new Date().toISOString();
+      state.matchCache = {};
+      activity(state, "Automation settings updated", "Your saved filters and material preferences were updated.");
+    }, ownerContext);
+  }
   if (action === "profile") {
     const verifiedEmail = isDemo()
       ? null
@@ -125,20 +229,40 @@ async function perform(
         new Intl.DateTimeFormat("en-US", { timeZone });
         profile.timeZone = timeZone;
       }
-      if ("facts" in payload)
-        profile.facts = z
+      const facts = "facts" in payload ? z
           .array(
             z.object({
               id: z.string(),
               text: z.string().min(1).max(500),
               verified: z.boolean(),
               source: z.enum(["resume", "user"]),
+              sourceAnchorId: z.string().max(160).optional(),
             }),
           )
           .max(80)
-          .parse(payload.facts);
+          .parse(payload.facts) : undefined;
+      if (facts) {
+        const anchors = new Set(profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
+        if (facts.some((fact) => fact.sourceAnchorId && (!anchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
+        profile.facts = facts;
+      }
       if ("sensitiveAnswers" in payload)
-        profile.sensitiveAnswers = z.record(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
+        profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
+      const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
+      const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
+        workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
+        requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
+        availability: z.string().max(200).optional(),
+        graduationYear: z.string().max(20).optional(),
+      }).parse(questionnaire);
+      const settings = payload.automationSettings && typeof payload.automationSettings === "object" ? z.object({
+        resumeTailoring: z.boolean().optional(),
+        coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
+        essayMode: z.literal("automatic-truthful").optional(),
+      }).parse(payload.automationSettings) : undefined;
+      if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
+      if (settings) updateAutomationSettings(profile, settings);
+      if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
@@ -146,7 +270,7 @@ async function perform(
         "Profile updated",
         "Search preferences and confirmed facts were saved.",
       );
-    });
+    }, ownerContext);
   }
   if (action === "feedback")
     return mutateState(userId, (state) => {
@@ -167,7 +291,7 @@ async function perform(
         kind === "saved" ? "Job saved" : "Job dismissed",
         state.jobs.find((job) => job.id === jobId)?.title ?? "",
       );
-    });
+    }, ownerContext);
   if (action === "labelMatch") return mutateState(userId, (state) => {
     const job = state.jobs.find((item) => item.id === text(payload.jobId, 200));
     if (!job) throw new Error("Job not found.");
@@ -176,12 +300,12 @@ async function perform(
     state.matchLabels = state.matchLabels.filter((item) => item.jobId !== job.id);
     state.matchLabels.push({ jobId: job.id, label, profile: structuredClone(state.profile), job: structuredClone(job), labeledAt: new Date().toISOString() });
     state.matchLabels = state.matchLabels.slice(-100);
-  });
+  }, ownerContext);
   if (action === "timeSaved") return mutateState(userId, (state) => {
     const app = findApp(state, text(payload.applicationId, 100), userId);
     if (app.status !== "submitted") throw new Error("Record time saved after a confirmed submission.");
     app.timeSavedMinutes = z.number().finite().min(0).max(240).parse(payload.minutes);
-  });
+  }, ownerContext);
   if (action === "import") {
     const pending = newImportedJob({ url: text(payload.url, 2048),
       company: text(payload.company, 120), title: text(payload.title, 160),
@@ -198,104 +322,103 @@ async function perform(
       state.importedJobs ??= [];
       state.importedJobs.unshift(job);
       activity(state, "Link imported", job.title);
-    });
+    }, ownerContext);
+  }
+  if (action === "startAutonomous") return startAutonomousApplication(userId, text(payload.jobId, 200), ownerContext);
+  if (action === "preflightImportedPosting") {
+    const jobId = text(payload.jobId, 200);
+    const result = await runImportedPreflight(userId, jobId);
+    if (result.status === "reachable") await startAutonomousApplication(userId, jobId, ownerContext);
+    return result;
   }
   if (action === "select")
     return mutateState(userId, (state) => {
       const app = selectApplication(state, text(payload.jobId, 200), userId);
       activity(state, "Job selected", findJob(state, app).title);
-    });
+    }, ownerContext);
   if (action === "draft") {
-    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode));
+    await queueApplicationRun(userId, text(payload.applicationId, 100), "draft", z.enum(["resume", "essays"]).optional().parse(payload.draftMode), ownerContext);
     return;
   }
-  if (action === "editPacket")
-    return mutateState(userId, async (state) => {
-      const app = findApp(state, text(payload.applicationId, 100), userId);
-      if (app.status !== "draft_review" || app.queuedRun || !app.packet)
-        throw new Error("Open the current packet review after drafting finishes.");
-      const answers = z
-        .array(
-          z.object({
-            question: z.string().max(500),
-            answer: z.string().max(4000),
-            factIds: z.array(z.string()),
-            requiresUserInput: z.boolean(),
-            userProvided: z.boolean().optional(),
-          }),
-        )
-        .max(30)
-        .parse(payload.answers);
-      const packet = await withPacketFiles(state.profile, {
-        ...app.packet,
-        schemaVersion: app.packet.schemaVersion,
-        answers: applyHumanAnswerEdits(app.packet.answers, answers),
-        profileHash: packetProfileHash(state.profile),
-        version: app.packet.version + 1,
-        createdAt: new Date().toISOString(),
-      });
-      validatePacket(state.profile, packet);
-      setPacket(state, app, packet);
-      activity(state, "Packet revised", packet.summary);
-    });
-  if (action === "confirmEssay")
-    return mutateState(userId, async (state) => {
-      const app = findApp(state, text(payload.applicationId, 100), userId);
-      if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
-        throw new Error("The packet changed. Review it again before confirming this essay.");
-      const index = z.number().int().min(0).parse(payload.answerIndex);
-      const answer = app.packet.answers[index];
-      if (!answer?.aiDraft || answer.aiDraft.contentHash !== text(payload.answerHash, 100))
-        throw new Error("The essay changed. Review its latest draft.");
-      validatePacket(state.profile, app.packet);
-      const answers = [...app.packet.answers];
-      answers[index] = confirmAiEssay(state.profile, answer);
-      const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
-      setPacket(state, app, packet);
-      activity(state, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
-    });
-  if (action === "addCoverLetter") {
-    const appId = text(payload.applicationId, 100);
+  if (action === "editPacket") {
     const state = await loadState(userId);
-    const app = findApp(state, appId, userId);
-    if (
-      app.status !== "needs_user_action" ||
-      !app.needsCoverLetter ||
-      !app.packet
-    )
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
+    if (app.status !== "draft_review" || app.queuedRun || !app.packet)
+      throw new Error("Open the current packet review after drafting finishes.");
+    const answers = z.array(z.object({
+      question: z.string().max(500), answer: z.string().max(4000),
+      factIds: z.array(z.string()), requiresUserInput: z.boolean(),
+      userProvided: z.boolean().optional(),
+    })).max(30).parse(payload.answers);
+    const expected = materialReviewHash(state, app);
+    const packet = await withPacketFiles(state.profile, {
+      ...app.packet, answers: applyHumanAnswerEdits(app.packet.answers, answers),
+      profileHash: packetProfileHash(state.profile), version: app.packet.version + 1,
+      createdAt: new Date().toISOString(),
+    });
+    validatePacket(state.profile, packet);
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
+      setPacket(current, target, packet);
+      activity(current, "Packet revised", packet.summary);
+    }, ownerContext);
+  }
+  if (action === "confirmEssay") {
+    const state = await loadState(userId);
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
+    if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
+      throw new Error("The packet changed. Review it again before confirming this essay.");
+    const index = z.number().int().min(0).parse(payload.answerIndex);
+    const answer = app.packet.answers[index];
+    if (!answer?.aiDraft || answer.aiDraft.contentHash !== text(payload.answerHash, 100))
+      throw new Error("The essay changed. Review its latest draft.");
+    validatePacket(state.profile, app.packet);
+    const expected = materialReviewHash(state, app);
+    const answers = [...app.packet.answers];
+    answers[index] = confirmAiEssay(state.profile, answer);
+    const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
+      setPacket(current, target, packet);
+      activity(current, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
+    }, ownerContext);
+  }
+  if (action === "addCoverLetter") {
+    const state = await loadState(userId);
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
+    if (app.status !== "needs_user_action" || app.queuedRun || !app.needsCoverLetter || !app.packet)
       throw new Error("No required cover letter is awaiting review.");
+    const expected = materialReviewHash(state, app);
     await cancelBrowser(app);
-    return mutateState(userId, async (current) => {
-      const target = findApp(current, appId, userId);
-      if (!target.packet) throw new Error("Application packet is missing.");
-      const letter = coverLetterFromFacts(
-        current.profile,
-        findJob(current, target),
-      );
+    const job = findJob(state, app);
+    const letter = coverLetterFromFacts(state.profile, job);
+    const packet = await withPacketFiles(state.profile, {
+      ...app.packet, coverLetter: letter.text, coverLetterFactIds: letter.factIds,
+      coverLetterContext: { title: job.title, company: job.company },
+      version: app.packet.version + 1, createdAt: new Date().toISOString(),
+    });
+    validatePacket(state.profile, packet);
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
       transition(target, ["needs_user_action"], "draft_review");
       target.browserSessionId = undefined;
       target.browserConnectUrl = undefined;
       target.browserLiveUrl = undefined;
       target.needsCoverLetter = false;
-      setPacket(current, target, await withPacketFiles(current.profile, {
-        ...target.packet,
-        schemaVersion: target.packet.schemaVersion,
-        coverLetter: letter.text,
-        coverLetterFactIds: letter.factIds,
-        coverLetterContext: { title: findJob(current, target).title, company: findJob(current, target).company },
-        version: target.packet.version + 1,
-        createdAt: new Date().toISOString(),
-      }));
-      activity(
-        current,
-        "Cover letter added",
-        "Review the revised packet and approve it before a new form fill.",
-      );
-    });
+      setPacket(current, target, packet);
+      activity(current, "Cover letter added", "Review the revised packet and approve it before a new form fill.");
+    }, ownerContext);
   }
   if (action === "approveFill")
     return mutateState(userId, (state) => {
       const app = findApp(state, text(payload.applicationId, 100), userId);
+      assertSourcePlanJobCurrent(state, app);
       if (app.packet) validatePacket(state.profile, app.packet);
       approveFill(
         app,
@@ -308,18 +431,32 @@ async function perform(
         "Fill approved",
         "The approved packet may now be entered on the target form.",
       );
-    });
+    }, ownerContext);
   if (action === "startBrowser") {
-    await queueApplicationRun(userId, text(payload.applicationId, 100), "fill");
+    await queueApplicationRun(userId, text(payload.applicationId, 100), "fill", undefined, ownerContext);
     return;
   }
   if (action === "answerBrowserQuestions") {
     const answers = z.array(z.object({ questionId: z.string().max(5000), value: z.string().max(4000).optional(), confirmEssay: z.boolean().optional(), answerHash: z.string().max(100).optional() }).strict()).min(1).max(20).parse(payload.answers);
-    await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers);
+    await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers, ownerContext);
     return;
   }
   if (action === "draftBrowserEssays") {
     await writeBrowserQuestionEssays(userId, text(payload.applicationId, 100), text(payload.formHash, 100));
+    return;
+  }
+  if (action === "resolveBlocker" || action === "resumeBlocked") {
+    const answer = payload.answer === undefined ? undefined : z.object({
+      question: z.object({
+        identifier: z.string().min(1).max(200),
+        label: z.string().min(1).max(500),
+        kind: z.string().min(1).max(40),
+        options: z.array(z.string().max(300)).max(100),
+      }),
+      value: z.string().min(1).max(500),
+    }).parse(payload.answer);
+    const freshReconstruct = payload.freshReconstruct === undefined ? false : z.boolean().parse(payload.freshReconstruct);
+    await resumeBlockedApplication(userId, text(payload.applicationId, 100), text(payload.blockerId, 100), answer, { freshReconstruct });
     return;
   }
   if (action === "resumeBrowser") {
@@ -345,7 +482,7 @@ async function perform(
         "Form refreshed",
         "Review the latest fields before approving submission.",
       );
-    });
+    }, ownerContext);
   }
   if (action === "checkSubmissionResult" || action === "stopSubmissionVerification") {
     await checkSubmissionResult(userId, text(payload.applicationId, 100), action === "stopSubmissionVerification");
@@ -358,7 +495,7 @@ async function perform(
       if (app.packet) validatePacket(state.profile, app.packet);
       approveSubmit(app, userId, text(payload.formHash, 100));
       activity(state, "Final form approved", findJob(state, app).title);
-    });
+    }, ownerContext);
   if (action === "submit") {
     const appId = text(payload.applicationId, 100);
     await mutateState(userId, (state) => {
@@ -369,7 +506,7 @@ async function perform(
         throw new Error("The current form needs final approval.");
       transition(app, ["approved_to_submit"], "submitting");
       app.submissionStartedAt = new Date().toISOString();
-    });
+    }, ownerContext);
     if (!isDemo()) {
       try {
         await tasks.trigger<typeof submitApplicationForm>(
@@ -388,69 +525,27 @@ async function perform(
         throw error;
       }
     }
-    const state = await loadState(userId);
-    const app = findApp(state, appId, userId);
-    try {
-      const result = await submitBrowser(app);
-      return mutateState(userId, (current) => {
-        const target = findApp(current, appId, userId);
-        transition(
-          target,
-          ["submitting"],
-          result.confirmed ? "submitted" : result.verification ? "awaiting_verification" : "uncertain",
-        );
-        target.confirmation = result.evidence;
-        target.submissionReceipt = result.receipt;
-        target.submissionVerification = result.verification;
-        target.submissionAttemptedAt = app.submissionAttemptedAt;
-        if (result.confirmed) target.submittedAt = new Date().toISOString();
-        activity(
-          current,
-          result.confirmed ? "Submission confirmed" : result.verification ? "Complete employer verification" : "Submission uncertain",
-          result.evidence,
-        );
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "FORM_CHANGED") {
-        const form = await refreshBrowserSnapshot(app);
-        return mutateState(userId, (current) => {
-          const target = findApp(current, appId, userId);
-          target.submissionStartedAt = undefined;
-          target.submissionWorkerClaimedAt = undefined;
-          setFormSnapshot(target, form);
-          activity(
-            current,
-            "Form changed",
-            "Review the new form state and approve again.",
-          );
-        });
-      }
-      await mutateState(userId, (current) => {
-        const target = findApp(current, appId, userId);
-        transition(target, ["submitting"], "uncertain");
-        target.error =
-          error instanceof Error ? error.message : "Submission result unknown.";
-        target.submissionAttemptedAt = app.submissionAttemptedAt;
-        activity(
-          current,
-          "Submission needs review",
-          "The result is uncertain. No automatic retry will occur.",
-        );
-      });
-      throw error;
-    }
+    return (await import("@/lib/application-submission")).runSubmission({ userId, applicationId: appId });
   }
   if (action === "cancel") {
     const appId = text(payload.applicationId, 100);
     const state = await loadState(userId);
     const app = findApp(state, appId, userId);
     if (
-      ["submitting", "awaiting_verification", "submitted", "uncertain", "cancelled"].includes(app.status)
+      ["awaiting_verification", "submitted", "uncertain", "cancelled"].includes(app.status) || (app.status === "submitting" && (!app.autonomousAuthorization || app.submissionAttemptedAt))
     )
       throw new Error("This application can no longer be cancelled.");
     await mutateState(userId, (current) => {
       const target = findApp(current, appId, userId);
+      if (target.submissionAttemptedAt) throw new Error("A submission was already attempted; its outcome must be observed.");
       target.queuedRun = undefined;
+      for (const blocker of target.blockers ?? []) {
+        if (blocker.progress === "blocked" || blocker.progress === "resuming") {
+          blocker.progress = "resolved";
+          blocker.resolvedAt = new Date().toISOString();
+          blocker.updatedAt = blocker.resolvedAt;
+        }
+      }
       transition(
         target,
         [
@@ -462,6 +557,7 @@ async function perform(
           "final_review",
           "approved_to_submit",
           "needs_user_action",
+          ...(target.autonomousAuthorization ? ["submitting" as const] : []),
         ],
         "cancelled",
       );
@@ -470,8 +566,22 @@ async function perform(
         "Application cancelled",
         findJob(current, target).title,
       );
-    });
-    await cancelBrowser(app);
+    }, ownerContext);
+    let released = true;
+    const releaseApp = { ...app, browserSessionId: app.browserSessionId ?? app.browserReleasePending?.sessionId };
+    try { await cancelBrowser(releaseApp, { strict: true }); }
+    catch { released = false; }
+    await mutateState(userId, (current) => {
+      const target = findApp(current, appId, userId);
+      if (released) {
+        target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
+        target.browserReleasePending = undefined;
+      } else if (releaseApp.browserSessionId) {
+        target.browserSessionId = releaseApp.browserSessionId;
+        target.browserReleasePending = { sessionId: releaseApp.browserSessionId, requestedAt: new Date().toISOString(), attempts: 1, lastError: "The provider did not confirm the browser release." };
+        recordApplicationBlocker(target, "resource_hold", "The browser provider has not confirmed release yet. The cancelled application will remain held until this session is stopped.", { sessionId: releaseApp.browserSessionId });
+      }
+    }, ownerContext);
     return;
   }
   if (action === "reviewManualFailure") {
@@ -484,7 +594,7 @@ async function perform(
       validatePacket(current.profile, app.packet);
       reopenManualAttempt(app, userId, confirmed);
       activity(current, "Manual attempt reviewed", "You confirmed the employer did not accept the application. Review and approve the saved packet before a new fill run.");
-    });
+    }, ownerContext);
     await cancelBrowser(before);
     return;
   }
@@ -500,7 +610,7 @@ async function perform(
       target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
       target.error = undefined;
       activity(current, "Browser closed", "Review and approve the packet again to start a new session.");
-    });
+    }, ownerContext);
     await cancelBrowser(app);
     return;
   }
@@ -544,7 +654,7 @@ export async function POST(request: Request) {
               : app?.status === "uncertain"
                 ? "Check an uncertain application result"
                 : null;
-      if (message)
+      if (message && !app?.autonomousAuthorization)
         await sendActionNeeded(state, message).catch(() => undefined);
     }
     if (action === "cancel" || action === "submit") await dispatchUserQueue(userId);

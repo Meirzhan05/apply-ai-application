@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { selectApplication } from "@/lib/workflow";
 import { recoverStaleRuns } from "@/lib/run-recovery";
+import { activeApplicationBlockers } from "@/lib/application-blockers";
 
 describe("stalled run recovery", () => {
   it("expires post-submit verification without authorizing another attempt", () => {
@@ -16,6 +17,18 @@ describe("stalled run recovery", () => {
     expect(app.submissionReceipt?.text).toBe("CAPTCHA");
     expect(app.browserSessionId).toBeUndefined();
     expect(app.confirmation).toMatch(/no automatic retry/);
+  });
+  it("persists expired autonomous verification as review-only evidence", async () => {
+    const state = initialDemoState(); const now = Date.now();
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.autonomousAuthorization = { version: 1, userId: app.userId, profileVersion: 1, targetUrl: state.jobs[0].applyUrl, authorizedAt: new Date(now).toISOString() };
+    app.status = "awaiting_verification"; app.browserSessionId = "saved-attempt";
+    app.browserSessionExpiresAt = new Date(now - 1).toISOString(); app.submissionAttemptedAt = new Date(now - 60_000).toISOString();
+    app.submissionVerification = { version: 1, kind: "captcha", sessionId: "saved-attempt", targetUrl: state.jobs[0].applyUrl, attemptedAt: app.submissionAttemptedAt, beforeHash: "before", beforeHadConfirmation: false };
+    recoverStaleRuns(state, now);
+    const [blocker] = activeApplicationBlockers(app);
+    expect(blocker).toMatchObject({ reason: "verification", progress: "expired", reviewOnly: true });
+    expect(blocker.reviewOnly).toBe(true);
   });
   it("keeps the same browser after a stopped question continuation and clears its lock", () => {
     const state = initialDemoState(); const now = Date.now();
@@ -81,4 +94,11 @@ describe("stalled run recovery", () => {
     expect(app.browserConnectUrl).toBeUndefined();
     expect(app.approvals).toHaveLength(0);
   });
+});
+
+it("recovers a durable pre-click claim as observation only without closing the original unexpired session", () => {
+  const state = initialDemoState(); const now = Date.now(); const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+  app.status = "submitting"; app.updatedAt = new Date(now - 11 * 60_000).toISOString(); app.browserSessionId = "original"; app.browserSessionExpiresAt = new Date(now + 60_000).toISOString(); app.submissionAttemptedAt = new Date(now - 11 * 60_000).toISOString();
+  app.submissionVerification = { version: 1, kind: "captcha", sessionId: "original", targetUrl: state.jobs[0].applyUrl, attemptedAt: app.submissionAttemptedAt, beforeHash: "before", beforeHadConfirmation: false };
+  expect(recoverStaleRuns(state, now)).toEqual([]); expect(app.status).toBe("awaiting_verification"); expect(app.browserSessionId).toBe("original"); expect(app.submissionAttemptedAt).toBeTruthy();
 });

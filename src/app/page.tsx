@@ -1,7 +1,10 @@
 "use client";
+import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
+import { OriginalResumeInspection } from "@/components/original-resume-inspection";
+import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
@@ -9,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
+import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
@@ -36,6 +40,13 @@ import type {
 
 type ViewState = AppState & {
   matches: { jobId: string; assessment: MatchAssessment }[];
+  onboarding: { complete: boolean; missing: string[]; confirmedFactCount: number };
+  automation: {
+    enabled: boolean;
+    paused: boolean;
+    version: number;
+    settings: NonNullable<Profile["automationSettings"]>;
+  };
 };
 type Section = "matches" | "applications" | "profile" | "settings";
 type Filter = "all" | "strong" | "possible" | "uncertain" | "saved";
@@ -61,6 +72,7 @@ export default function Dashboard() {
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerDraft, setAnswerDraft] = useState<ScreeningAnswer[]>([]);
+  const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -146,6 +158,8 @@ export default function Dashboard() {
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
+  const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
+  const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
@@ -155,6 +169,13 @@ export default function Dashboard() {
       app.status,
     ),
   );
+  const discoveryEvents = (data?.discovery?.events ?? [])
+    .filter((event) => event.kind === "arrived" || event.kind === "matched" || event.kind === "queued")
+    .slice(-3)
+    .reverse();
+  const blockers = applications.flatMap((app) => (app.blockers ?? [])
+    .filter((blocker) => (blocker.progress === "blocked" || blocker.progress === "resuming" || (blocker.reviewOnly && blocker.progress === "expired")) && blocker.userId === data?.profile.id)
+    .map((blocker) => ({ blocker, app })));
 
   if (!data)
     return (
@@ -165,6 +186,24 @@ export default function Dashboard() {
         {error ? (
           <div className="errorbox">
             {error} <a href="/login">Sign in</a>
+            <button
+              className="signout"
+              disabled={busy === "signout"}
+              onClick={async () => {
+                setBusy("signout");
+                try {
+                  const { error: signOutError } = await browserSupabase().auth.signOut({ scope: "local" });
+                  if (signOutError) throw signOutError;
+                  router.replace("/login");
+                  router.refresh();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Could not sign out. Please try again.");
+                  setBusy("");
+                }
+              }}
+            >
+              {busy === "signout" ? "Signing out…" : "Use another account"}
+            </button>
           </div>
         ) : (
           <p>Opening your workspace…</p>
@@ -172,7 +211,7 @@ export default function Dashboard() {
       </div>
     );
 
-  const applicationMaterials = activeApp?.packet && appJob &&
+  const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
                       [
                         "draft_review",
                         "authorized_to_fill",
@@ -190,7 +229,21 @@ export default function Dashboard() {
                             <h3>Application packet</h3>
                             <span>Version {activeApp.packet.version}</span>
                           </div>
-                          {activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
+                          {activeApp.packet.resumeMode === "original" ? (
+                            <OriginalResumeInspection packet={activeApp.packet} applicationId={activeApp.id} />
+                          ) : hasSourcePreservingResume(activeApp.packet) ? (
+                            <ResumeComparison
+                              applicationId={activeApp.id}
+                              profile={data.profile}
+                              packet={activeApp.packet}
+                              diagnostics={activeApp.resumeDraftDiagnostics}
+                              latestError={activeApp.resumeDraftDiagnostics ? activeApp.error : undefined}
+                              jobFingerprint={JSON.stringify(appJob)}
+                              onReviewProfile={() => setSection("profile")}
+                              onRebuildResume={activeApp.status === "draft_review" ? () => act("draft", { applicationId: activeApp.id, draftMode: "resume" }) : undefined}
+                              rebuildDisabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
+                            />
+                          ) : activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
                             <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
                           ) : <>
                           <p className="muted">
@@ -376,6 +429,7 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
+        <div style={{ display: "flex", gap: 18, padding: "16px 24px" }}><a href="/usage" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a><a href="/pilot" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>Autonomy pilot</a></div>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -467,6 +521,46 @@ export default function Dashboard() {
                   + Import a job link
                 </button>
               </div>
+              <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
+                <div>
+                  <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
+                  <p>{data.onboarding.complete ? "Your confirmed facts and saved settings are ready." : `Onboarding is incomplete: ${data.onboarding.missing.map(onboardingMissingLabel).join(", ")}.`}</p>
+                </div>
+                <button className="text-button" onClick={() => setSection("settings")}>Review settings <ArrowRight size={15} /></button>
+              </div>
+              {data.discovery && (
+                <section className="discovery-pulse" aria-label="Discovery freshness">
+                  <div className="discovery-pulse-head">
+                    <div>
+                      <strong>Public opportunity monitor</strong>
+                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for the first public catalog check."}</p>
+                    </div>
+                    <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>
+                  </div>
+                  <div className="discovery-sources">
+                    {data.discovery.sources.map((source) => (
+                      <span key={source.source} className={source.status === "available" ? "available" : "unavailable"}>
+                        <i aria-hidden="true" />
+                        {source.source.replace(/:/g, " · ").replace(/[-_]/g, " ")}
+                        {source.status === "unavailable" ? " unavailable" : " checked"}
+                      </span>
+                    ))}
+                  </div>
+                  {data.discovery.pendingMatches ? <p className="discovery-backlog">{data.discovery.pendingMatches} roles waiting for the next matching pass.</p> : null}
+                  {discoveryEvents.length ? (
+                    <ul className="discovery-events">
+                      {discoveryEvents.map((event) => (
+                        <li key={event.id}>
+                          <span>{event.kind === "arrived" ? "New listing" : event.kind === "matched" ? "Match assessed" : "Application queued"}</span>
+                          <small>{event.delayMs != null ? `${formatDelay(event.delayMs)} after discovery` : relative(event.at)}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="discovery-empty">New arrivals and matching delays will appear here.</p>
+                  )}
+                </section>
+              )}
               {(incompleteFacts > 0 || !data.profile.resumeFileName) && (
                 <div className="review-banner">
                   <div className="banner-icon">
@@ -550,6 +644,7 @@ export default function Dashboard() {
                       (app) =>
                         app.jobId === job.id && app.status !== "cancelled",
                     );
+                    const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
                     return (
                       <article className="job-row" key={job.id}>
                         <div className="company-block">
@@ -662,7 +757,7 @@ export default function Dashboard() {
                                 Boolean(busy) || match?.category === "excluded"
                               }
                               onClick={async () => {
-                                const next = await act("select", {
+                                const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
                                   jobId: job.id,
                                 });
                                 if (next) {
@@ -676,7 +771,7 @@ export default function Dashboard() {
                                 }
                               }}
                             >
-                              Prepare application
+                              {data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
                             </button>
                           )}
                           <a
@@ -745,11 +840,46 @@ export default function Dashboard() {
         )}
         {section === "applications" && (
           <main className="wide-panel">
+            {!hasAutomaticApplications && <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>}
             <h1>Your applications</h1>
             <p className="subheading">
-              Review the details before the agent enters a form, then review the
-              exact form before submission.
+              {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
+            {blockers.length > 0 && (
+              <section className="next-action" aria-label="Blocked applications" aria-live="polite">
+                <div className="next-icon"><CircleHelp size={20} /></div>
+                <div>
+                  <strong>{blockers.length} blocker{blockers.length === 1 ? "" : "s"} need your attention</strong>
+                  <div className="blocker-list">
+                    {blockers.map(({ blocker, app }) => {
+                      const job = jobs.find((item) => item.id === app.jobId);
+                      const jobTitle = job?.title ?? "Application";
+                      const question = blocker.context?.observedQuestion;
+                      const draft = blockerAnswers[blocker.id] ?? "";
+                      const canAnswer = Boolean(question) && !blocker.reviewOnly && blocker.reason === "missing_answer";
+                      const handoff = ["login", "verification", "unfamiliar_control"].includes(blocker.reason);
+                      const canRecheckImported = !blocker.reviewOnly && blocker.reason !== "resource_hold" && importedPreflightRecheckAvailable(app);
+                      return <div className="blocker-row" key={blocker.id}>
+                        <div className="blocker-copy">
+                          <strong>{jobTitle}</strong>
+                          <span className="blocker-reason">{blocker.reviewOnly ? "review only" : blocker.reason.replaceAll("_", " ")}</span>
+                          <span>{blocker.message}</span>
+                          {question && <small>Observed {question.kind} control “{question.label}”{question.options.length ? ` · options: ${question.options.join(", ")}` : ""}</small>}
+                        </div>
+                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small>{job?.url && <a className="text-button" href={job.url} target="_blank" rel="noreferrer">Open employer posting</a>}<button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
+                          {question!.options.length ? <select aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))}>
+                            <option value="">Choose an answer</option>
+                            {question!.options.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select> : <input aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))} placeholder="Your confirmed answer" />}
+                          <button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming" || !draft.trim()} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, answer: { question: { identifier: question!.identifier, label: question!.label, kind: question!.kind, options: question!.options }, value: draft } })}>Save answer and resume</button>
+                          <button className="text-button" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id, freshReconstruct: true })}>Refresh question</button>
+                        </div> : handoff ? <span className="blocker-handoff">Continue with browser takeover</span> : !blocker.reviewOnly && blocker.reason !== "resource_hold" ? <button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("resolveBlocker", { applicationId: app.id, blockerId: blocker.id })}>Resolve and resume</button> : null}
+                      </div>;
+                    })}
+                  </div>
+                </div>
+              </section>
+            )}
             <div className="app-layout">
               <div className="app-list" hidden={!applications.length}>
                 {applications.length ? (
@@ -770,7 +900,7 @@ export default function Dashboard() {
                         <span>
                           <strong>{job?.title ?? "Application"}</strong>
                           <small>
-                            {job?.company} · {statusLabel(app.status)}
+                            {job?.company} · {app.autonomousAuthorization || app.importedOutcome ? autonomousOutcome(app) : statusLabel(app.status)}
                           </small>
                         </span>
                         <ArrowRight size={16} />
@@ -801,11 +931,21 @@ export default function Dashboard() {
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
                       </div>
-                      <span className="status-pill">
-                        {statusLabel(activeApp.status)}
+                    <span className="status-pill">
+                        {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
-                    <div className="progress">
+                    {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && (!activeApp.importedOutcome || activeApp.importedOutcome.kind === "reachable") && !activeApp.autonomousAuthorization && (
+                      <div className="step-card" aria-label="Imported employer compatibility">
+                        <h3>Check the employer posting first</h3>
+                        <p>{activeApp.importedCompatibility?.status === "reachable"
+                          ? "The posting and supported form were checked. We’re ready to continue with your saved profile and chosen materials."
+                          : "We’ll check the public posting and supported form without filling or submitting anything. If everything still matches, we’ll continue with your saved profile and chosen materials."}</p>
+                        {activeApp.importedCompatibility?.status === "reachable" ? <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("startAutonomous", { jobId: appJob.id })}>{busy === "startAutonomous" ? "Starting…" : "Continue automatically"}</button> : <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("preflightImportedPosting", { jobId: appJob.id })}>{busy === "preflightImportedPosting" ? "Checking…" : "Verify and apply automatically"}</button>}
+                        {activeApp.importedCompatibility?.blocker && <p className="muted">{activeApp.importedCompatibility.blocker}</p>}
+                      </div>
+                    )}
+                    {!activeAppIsAutomatic && <div className="progress">
                       {[
                         "Selected",
                         "Packet",
@@ -827,7 +967,8 @@ export default function Dashboard() {
                           {item}
                         </span>
                       ))}
-                    </div>
+                    </div>}
+                    {(activeApp.autonomousAuthorization || activeApp.importedOutcome) && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
                     {activeApp.queuedRun && (
                       <div className="step-card" role="status">
                         <h3>Application run queued</h3>
@@ -835,7 +976,7 @@ export default function Dashboard() {
                       </div>
                     )}
                     {activeApp.status === "drafting" && <p role="status">Preparing your packet from confirmed facts…</p>}
-                    {activeApp.status === "selected" && !activeApp.queuedRun && (
+                    {!activeAppIsAutomatic && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Prepare your application packet</h3>
                         <p>
@@ -857,7 +998,7 @@ export default function Dashboard() {
                       </div>
                     )}
                     {activeApp.status === "draft_review" && applicationMaterials}
-                    {activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
+                    {!activeAppIsAutomatic && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
                         <p>
@@ -900,7 +1041,7 @@ export default function Dashboard() {
                         form…
                       </div>
                     )}
-                    {activeApp.status === "needs_user_action" && (
+                    {!activeAppIsAutomatic && activeApp.status === "needs_user_action" && (
                       <>
                       {activeApp.browserSessionId && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
@@ -949,7 +1090,7 @@ export default function Dashboard() {
                       </div>
                       </>
                     )}
-                    {activeApp.status === "submitted" && (
+                    {activeApp.status === "submitted" && !activeAppIsAutomatic && (
                       <div className="success-note">
                         <Check size={20} />
                         <div>
@@ -960,7 +1101,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
-                    {activeApp.form &&
+                    {!activeAppIsAutomatic && activeApp.form &&
                       [
                         "final_review",
                         "approved_to_submit",
@@ -1061,7 +1202,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    {activeApp.status === "uncertain" && (
+                    {activeApp.status === "uncertain" && !activeAppIsAutomatic && (
                       <div className="warning-note">
                         <CircleHelp size={20} />
                         <div>
@@ -1084,7 +1225,7 @@ export default function Dashboard() {
                             The previous browser run has stopped. No new form fill has started.
                             Your saved packet and confirmed essays are available for review.
                           </p>}
-                          {canReopenManualAttempt(activeApp) && <>
+                          {!activeApp.autonomousAuthorization && canReopenManualAttempt(activeApp) && <>
                             <p>Check the employer page or confirmation email first. Missing email alone does not confirm that an application failed.</p>
                             <label className="checkline">
                               <input type="checkbox" checked={confirmedUnacceptedId === activeApp.id} onChange={(event) => setConfirmedUnacceptedId(event.target.checked ? activeApp.id : null)} />
@@ -1112,7 +1253,7 @@ export default function Dashboard() {
                         {applicationMaterials}
                       </details>
                     )}
-                    {activeApp.error && activeApp.status !== "uncertain" && (
+                    {activeApp.error && activeApp.status !== "uncertain" && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
                     {![
@@ -1121,7 +1262,7 @@ export default function Dashboard() {
                       "awaiting_verification",
                       "uncertain",
                       "cancelled",
-                    ].includes(activeApp.status) && (
+                    ].includes(activeApp.status) || (activeApp.autonomousAuthorization && activeApp.status === "submitting" && !activeApp.submissionAttemptedAt) ? (
                       <button
                         className="subtle-danger"
                         onClick={() =>
@@ -1130,7 +1271,7 @@ export default function Dashboard() {
                       >
                         Cancel this application
                       </button>
-                    )}
+                    ) : null}
                   </>
                 ) : (
                   <div className="empty">
@@ -1247,6 +1388,81 @@ export default function Dashboard() {
                     <input maxLength={200} value={profileDraft.sensitiveAnswers[key] ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, sensitiveAnswers: { ...profileDraft.sensitiveAnswers, [key]: event.target.value } })} placeholder="Leave blank for manual entry" />
                   </label>
                 ))}
+                <h3>Required onboarding answers</h3>
+                <p className="muted">These answers are stored as explicit declarations. Leaving one blank keeps it missing; “No” is saved as a real answer.</p>
+                <label>
+                  Are you authorized to work in the United States?
+                  <select
+                    value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          workAuthorization: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
+                        },
+                      },
+                    })}
+                  >
+                    <option value="">Choose an answer</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                    <option value="unknown">I’m not sure yet</option>
+                  </select>
+                </label>
+                <label>
+                  Will you require sponsorship for employment?
+                  <select
+                    value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          requiresSponsorship: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
+                        },
+                      },
+                    })}
+                  >
+                    <option value="">Choose an answer</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                    <option value="unknown">I’m not sure yet</option>
+                  </select>
+                </label>
+                <label>
+                  When are you available to start?
+                  <input
+                    maxLength={200}
+                    value={profileDraft.onboarding?.questionnaire.availability ?? ""}
+                    onChange={(event) => setProfileDraft({
+                      ...profileDraft,
+                      onboarding: {
+                        questionnaire: {
+                          ...profileDraft.onboarding?.questionnaire,
+                          availability: event.target.value,
+                        },
+                      },
+                    })}
+                    placeholder="For example, May 2026 or immediately"
+                  />
+                </label>
+                {section === "settings" && <>
+                  <h3>Application materials</h3>
+                  <label className="checkline">
+                    <input type="checkbox" checked={profileDraft.automationSettings?.resumeTailoring ?? true} onChange={(event) => setProfileDraft({ ...profileDraft, automationSettings: { ...(profileDraft.automationSettings ?? { version: 1, coverLetterMode: "required-only", essayMode: "automatic-truthful" }), resumeTailoring: event.target.checked } })} />
+                    Tailor my resume to each role
+                  </label>
+                  <label>
+                    Cover letters
+                    <select value={profileDraft.automationSettings?.coverLetterMode ?? "required-only"} onChange={(event) => setProfileDraft({ ...profileDraft, automationSettings: { ...(profileDraft.automationSettings ?? { version: 1, resumeTailoring: true, essayMode: "automatic-truthful" }), coverLetterMode: event.target.value as "disabled" | "required-only" | "enabled" } })}>
+                      <option value="disabled">Never generate</option>
+                      <option value="required-only">Generate when required</option>
+                      <option value="enabled">Generate when supported</option>
+                    </select>
+                  </label>
+                  <p className="muted">Essay answers use confirmed facts and general truthful language when personal detail is unavailable.</p>
+                </>}
                 <button
                   className="dark-button"
                   onClick={() =>
@@ -1259,11 +1475,29 @@ export default function Dashboard() {
                   Save profile and preferences
                 </button>
               </div>
+              {section === "settings" && <section className="profile-card autonomy-card">
+                <h3>Automation authorization</h3>
+                <p className="muted">Automation acts only within your current confirmed facts and settings. You can pause future work at any time.</p>
+                <div className={`automation-state ${data.automation.enabled ? "on" : data.automation.paused ? "paused" : "off"}`} role="status">
+                  <strong>{data.automation.enabled ? "Enabled" : data.automation.paused ? "Paused" : "Not enabled"}</strong>
+                  <span>Settings version {data.automation.version}</span>
+                </div>
+                {data.automation.enabled ? (
+                  <button className="outline-action" disabled={Boolean(busy)} onClick={() => act("pauseAutomation")}>Pause automation</button>
+                ) : (
+                  <button className="dark-button" disabled={Boolean(busy) || !data.onboarding.complete} onClick={() => act("activateAutomation", { reason: "applicant-confirmed" })}>
+                    {data.automation.paused ? "Resume automation" : "Enable automation"}
+                  </button>
+                )}
+                {!data.onboarding.complete && <p className="muted">Complete the required answers and confirm at least one resume fact before enabling automation.</p>}
+              </section>}
               <div className="profile-card">
                 <h3>Resume and confirmed facts</h3>
                 <p className="muted">
                   Uploading extracts text for your review. It never confirms
-                  claims automatically.
+                  claims automatically. Source-preserving PDF and DOCX layouts
+                  support up to eight pages and two text columns per page; DOCX
+                  page count is checked after rendering.
                 </p>
                 <label className="upload-box">
                   <FileText size={24} />
@@ -1300,6 +1534,7 @@ export default function Dashboard() {
                     }}
                   />
                 </label>
+                {profileDraft.resumeSourceDocument && <ResumeSourceSupportNotice source={profileDraft.resumeSourceDocument} />}
                 {profileDraft.resumeText && (
                   <details className="resume-text">
                     <summary>Review extracted resume text</summary>
@@ -1478,7 +1713,7 @@ export default function Dashboard() {
             <h2 id="import-heading">Import a job link</h2>
             <p>
               Paste a Greenhouse, Lever, or Ashby job link to retrieve its details.
-              For other sites, add the title and company and verify the posting yourself.
+              For other sites, add the title and company. We’ll check the public posting and supported form before automatic application.
             </p>
             {(["url", "company", "title", "location"] as const).map((key) => (
               <label key={key}>
@@ -1538,6 +1773,12 @@ function relative(input: string) {
     Math.floor((Date.now() - new Date(input).getTime()) / 86400000),
   );
   return days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
+function formatDelay(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
 }
 function statusLabel(status: Application["status"]) {
   return {

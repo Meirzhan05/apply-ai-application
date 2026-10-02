@@ -4,13 +4,17 @@ import { createServer } from "node:http";
 import type { Page } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { draftPacket } from "../src/lib/drafting";
-import { prepareBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, checkBrowserSubmission, cancelBrowser, fillApprovedBrowserAnswers } from "../src/lib/browser-runner";
+import { prepareBrowser, preflightBrowser, repairEducationFields, refreshBrowserSnapshot, submitBrowser, checkBrowserSubmission, cancelBrowser, fillApprovedBrowserAnswers } from "../src/lib/browser-runner";
 import { browserQuestions, browserTakeoverReasons } from "../src/lib/browser-questions";
 import { approveBrowserAnswers } from "../src/lib/browser-question-approval";
 import { approveFill, approveSubmit, selectApplication, setFormSnapshot, setPacket } from "../src/lib/workflow";
+import { activateAutomation, saveOnboarding } from "../src/lib/onboarding";
+import { authorizeKnownAnswerApplication, sealAutonomousPacket } from "../src/lib/autonomous-policy";
+import { createImportedCompatibilityRecord, importedAutonomyJob } from "../src/lib/import-compatibility";
 import type { Application } from "../src/lib/types";
 import { hashJson } from "../src/lib/crypto";
 import { essayContentHash, essayEvidenceHash } from "../src/lib/answer-policy";
+import { canonicalJobUrl } from "../src/lib/sources";
 
 async function main() {
 process.env.DEMO_MODE = "true";
@@ -58,6 +62,19 @@ const server = createServer((request, response) => {
   }
   if (scenario === "posting-page") {
     response.end('<html><body><h1>Public job posting</h1><button type="button">Apply</button></body></html>');
+    return;
+  }
+  if (scenario === "imported-preflight") {
+    response.end('<html><body><h1>Data Analyst</h1><div data-company="Example Employer">Example Employer</div><form method="POST" enctype="multipart/form-data"><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" required></label><button>Submit application</button></form></body></html>');
+    return;
+  }
+  if (scenario === "imported-unverified") {
+    response.end('<html><body><h1>Different Role</h1><div data-company="Different Employer">Different Employer</div><form method="POST"><label>Email<input name="email" type="email" required></label><button>Submit application</button></form></body></html>');
+    return;
+  }
+  if (scenario === "imported-e2e") {
+    if (url.pathname === "/posting") response.end('<html><body><h1>Data Analyst</h1><div data-company="Example Employer">Example Employer</div><a href="/apply?scenario=imported-e2e">Apply for this role</a></body></html>');
+    else response.end('<html><body><h1>Apply to Example Employer</h1><div data-company="Example Employer">Example Employer</div><form method="POST" action="/submit?scenario=imported-e2e" enctype="multipart/form-data"><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" required></label><button>Submit application</button></form></body></html>');
     return;
   }
   if (url.pathname === "/recaptcha/api2/bframe" || url.pathname === "/recaptcha/api2/anchor" || url.pathname === "/hcaptcha-enclave.html") {
@@ -460,6 +477,83 @@ try {
     assert.equal(pageFor(app).isClosed(), false);
     assert.equal(submissions.get("posting-page"), undefined);
     await cancelBrowser(app);
+  });
+  await test("an imported employer preflight observes identity and exact action without writing or submitting", async () => {
+    const state = initialDemoState();
+    const job = { ...state.jobs[0], source: "imported" as const, sourceLabel: "Imported link", company: "Example Employer", title: "Data Analyst", url: `${base}/apply?scenario=imported-preflight`, applyUrl: `${base}/apply?scenario=imported-preflight`, importUrl: `${base}/apply?scenario=imported-preflight` };
+    const app = selectApplication({ ...state, jobs: [job] }, job.id, state.profile.id);
+    const observed = await preflightBrowser(app, job);
+    assert.equal(observed.postingEvidence.title, "Data Analyst");
+    assert.equal(observed.postingEvidence.company, "Example Employer");
+    assert.equal(observed.form.submitControl?.action, job.applyUrl);
+    assert.equal(app.browserSessionId, undefined);
+    assert.equal(submissions.get("imported-preflight"), undefined);
+  });
+  await test("an imported employer preflight exposes unverified identity for blocking", async () => {
+    const state = initialDemoState();
+    const job = { ...state.jobs[0], source: "imported" as const, sourceLabel: "Imported link", company: "Example Employer", title: "Data Analyst", url: `${base}/apply?scenario=imported-unverified`, applyUrl: `${base}/apply?scenario=imported-unverified`, importUrl: `${base}/apply?scenario=imported-unverified` };
+    const app = selectApplication({ ...state, jobs: [job] }, job.id, state.profile.id);
+    const observed = await preflightBrowser(app, job);
+    assert.equal(observed.postingEvidence.title, "Different Role");
+    assert.equal(observed.postingEvidence.company, "Different Employer");
+    assert.equal(observed.form.submitControl?.action, job.applyUrl);
+    assert.equal(submissions.get("imported-unverified"), undefined);
+  });
+  await test("an imported employer preflight authorizes the observed alternate form and submits one attachment", async () => {
+    const state = initialDemoState();
+    saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
+    activateAutomation(state.profile, "controlled imported e2e");
+    const job = {
+      ...state.jobs[0],
+      source: "imported" as const,
+      sourceLabel: "Imported link",
+      company: "Example Employer",
+      title: "Data Analyst",
+      description: "Owner supplied description must not establish eligibility.",
+      requirements: ["Owner supplied requirement"],
+      url: `${base}/posting?scenario=imported-e2e`,
+      applyUrl: `${base}/apply?scenario=imported-e2e`,
+      importUrl: `${base}/posting?scenario=imported-e2e`,
+    };
+    const app = selectApplication({ ...state, jobs: [job] }, job.id, state.profile.id);
+    const observed = await preflightBrowser(app, job);
+    assert.equal(observed.postingEvidence.postingUrl, canonicalJobUrl(job.url));
+    assert.equal(observed.postingEvidence.title, "Data Analyst");
+    assert.equal(observed.form.url, `${base}/apply?scenario=imported-e2e`);
+    app.importedCompatibility = createImportedCompatibilityRecord({
+      application: app,
+      job,
+      observed: {
+        url: observed.form.url,
+        hash: hashJson(observed.form),
+        submitControl: observed.form.submitControl,
+        contextHash: observed.contextHash,
+        postingEvidence: observed.postingEvidence,
+        observedContext: observed.postingContext,
+      },
+      status: "reachable",
+    });
+    const safeJob = importedAutonomyJob(app, job);
+    assert.match(safeJob.description, /Data Analyst/);
+    assert.doesNotMatch(safeJob.description, /Owner supplied/);
+    authorizeKnownAnswerApplication(app, state.profile, job);
+    const packet = await draftPacket(state.profile, safeJob);
+    packet.answers = [];
+    setPacket(state, app, packet);
+    sealAutonomousPacket(app);
+    approveFill(app, state.profile.id, app.packetHash!, job.applyUrl);
+    const prepared = await prepareBrowser(app, job, state.profile, undefined, async () => true);
+    assert.ok(prepared.form.fields.find((field) => field.kind === "file")?.fileHashes?.length, "The approved résumé must be attached to the observed form");
+    setFormSnapshot(app, prepared.form);
+    app.autonomousAuthorization!.formHash = app.form!.hash;
+    const outcome = await submitBrowser(app, {
+      profile: state.profile,
+      job,
+      beforeAttempt: async () => true,
+    });
+    assert.equal(outcome.confirmed, true);
+    assert.match(outcome.receipt?.text ?? "", /Application received/);
+    assert.equal(submissions.get("imported-e2e"), 1);
   });
   await test("an unrelated Submit button cannot replace the actual application's Apply action", async () => {
     const { app, result } = await fill("ambiguous-action");

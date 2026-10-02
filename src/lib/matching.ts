@@ -1,3 +1,4 @@
+import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -36,8 +37,10 @@ export function explicitConflict(profile: Profile, job: Job): string | null {
   return null;
 }
 
-function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
+export function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
   const uncertainty: string[] = [];
+  if (!["authorized to work in the us", "requires sponsorship"].includes(profile.workAuthorization.trim().toLowerCase()))
+    uncertainty.push("Work authorization has not been confirmed.");
   if (job.importCheck && ["manual", "unavailable"].includes(job.importCheck.status))
     uncertainty.push(job.importCheck.message || "The imported posting needs verification.");
   if (profile.workAuthorization.trim().toLowerCase() === "requires sponsorship" &&
@@ -122,8 +125,6 @@ export function assessMatchLocally(
       : [];
   // A visa/student status or a free-form note does not answer employment
   // authorization or sponsorship. Only explicit search answers resolve this.
-  if (!["authorized to work in the us", "requires sponsorship"].includes(profile.workAuthorization.trim().toLowerCase()))
-    uncertainty.push("Work authorization has not been confirmed.");
   const hardRuleUncertainty = requiredRuleUncertainty(profile, job);
   uncertainty.push(...hardRuleUncertainty);
   const category =
@@ -143,16 +144,22 @@ export function assessMatchLocally(
 export async function assessMatch(
   profile: Profile,
   job: Job,
+  options?: { beforeModelCall?: () => void | Promise<void> },
 ): Promise<MatchAssessment> {
   const base = assessMatchLocally(profile, job);
   if (base.category === "excluded" || !process.env.OPENAI_API_KEY) return base;
   const facts = profile.facts
     .filter((fact) => fact.verified)
     .map((fact) => ({ id: fact.id, text: fact.text }));
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
+  let freshnessGuardPassed = !options?.beforeModelCall;
   try {
-    const result = await client.responses.parse({
+    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", "gpt-6-luna", async () => {
+      await options?.beforeModelCall?.();
+      freshnessGuardPassed = true;
+      return client.responses.parse({
       model: "gpt-6-luna",
+      service_tier: "default",
       input: [
         {
           role: "system",
@@ -176,6 +183,7 @@ export async function assessMatch(
         },
       ],
       text: { format: zodTextFormat(FitSchema, "fit_assessment") },
+      });
     });
     const value = result.output_parsed;
     if (!value) return base;
@@ -193,7 +201,8 @@ export async function assessMatch(
       evaluatedAt: new Date().toISOString(),
       model: "gpt-6-luna",
     };
-  } catch {
+  } catch (error) {
+    if (!freshnessGuardPassed) throw error;
     return base;
   }
 }

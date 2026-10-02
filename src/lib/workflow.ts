@@ -3,6 +3,7 @@ import { answerNeedsAction } from "@/lib/answer-responsibility";
 import { validatePacket } from "@/lib/drafting";
 import { explicitConflict } from "@/lib/matching";
 import { canonicalJobUrl } from "@/lib/sources";
+import { attachPilotAttempt } from "@/lib/pilot";
 import type {
   AppState,
   Application,
@@ -56,6 +57,7 @@ export function selectApplication(
     updatedAt: now,
   };
   state.applications.unshift(application);
+  attachPilotAttempt(state, application);
   return application;
 }
 
@@ -138,6 +140,44 @@ export function formDigest(
   });
 }
 
+export function authorizeAutonomous(
+  application: Application,
+  userId: string,
+  profileVersion: number,
+  targetUrl: string,
+): void {
+  if (application.userId !== userId)
+    throw new Error("This application belongs to another user.");
+  if (!targetUrl.trim()) throw new Error("An application target is required.");
+  application.autonomousAuthorization = {
+    version: 1,
+    userId,
+    profileVersion,
+    targetUrl,
+    authorizedAt: new Date().toISOString(),
+  };
+}
+
+export function hasAutonomousAuthorization(
+  application: Application,
+  userId: string,
+  profileVersion: number,
+  targetUrl: string | undefined,
+): boolean {
+  // Metadata identity only. Consequential actions use the complete, current
+  // profile/job/material/form policy in assertAutonomous.
+  const authorization = application.autonomousAuthorization;
+  return Boolean(
+    authorization &&
+      authorization.version === 1 &&
+      authorization.userId === userId &&
+      application.userId === userId &&
+      authorization.profileVersion === profileVersion &&
+      targetUrl &&
+      authorization.targetUrl === targetUrl,
+  );
+}
+
 export function approveSubmit(
   application: Application,
   userId: string,
@@ -176,7 +216,9 @@ function supportedApproval(approval: Approval): boolean {
 
 export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined): boolean {
   return Boolean(targetUrl && application.userId === userId && application.packet &&
-    (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 || (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact)) &&
+    (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 ||
+      (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact) ||
+      (application.packet.schemaVersion === 3 && application.packet.resumeSourcePlan && application.packet.resumeArtifact)) &&
     application.packetHash === hashJson(application.packet) &&
     application.approvals.some((approval) => supportedApproval(approval) &&
       approval.kind === "fill" && approval.userId === userId &&

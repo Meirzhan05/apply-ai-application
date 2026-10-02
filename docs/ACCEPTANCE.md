@@ -165,3 +165,30 @@ Two real Browser Use Cloud workflows passed through production Trigger worker `2
 Production web deployment: `apply-pcvt65g1g-meirzhans-projects.vercel.app`, alias <https://apply-ai-chi.vercel.app>. The provider API key is stored only in ignored local files and server deployment secrets. Provider invoice reconciliation, real applicant CAPTCHA/login takeover, and employer acceptance remain beta gates.
 
 Final production readback returned HTTP 200 for the dashboard and 401 for anonymous state access. The same desktop/mobile viewer and screenshot-refresh checks passed against the deployed web app using intercepted synthetic state. The disposable live-test account and screenshots were removed after verification; both cloud sessions were stopped.
+
+## October 1: invited autonomy pilot software
+
+The pilot surface requires completed onboarding and explicit versioned consent at `/pilot`. Consent is stored as an owner-bound episode with its timestamp, onboarding completion time, automation-version snapshot, profile evidence hash, bounded factual snapshot, questionnaire declarations and original-resume content hash. Enrollment does not enable automation or alter saved preferences; withdrawal stops future pilot initiations while retaining prior evidence. At the owner's request on October 1, 2026, the production email invitation restriction was removed. Any authenticated account can access its own workspace; operator access and pilot consent requirements remain enforced. Earlier references to invitation-only test deployments record the policy in effect at the time of those tests.
+
+Each application selected after enrollment receives one immutable pilot attempt snapshot in the same state mutation as selection. It keeps posting identity/evidence, conservative internship/new-grad classification, authorization/profile snapshot and origin. Retries and worker reconstruction reuse the same attempt. Controlled/demo origins and late controlled markers remain excluded from real totals, and unknown imported origins remain visible without being upgraded from owner-entered hints. A before/after CAS observer appends service and authenticated owner lifecycle evidence while rejecting deletion or rewriting of prior attempts, consent episodes, events or reviews.
+
+The report route and pilot page separate real initiated, confirmed, unattended, intervention, controlled and unknown counts. The v1 gate reports insufficient evidence, missing cohorts, unattended-rate failures and review gaps instead of inventing pilot success. Reports and CSV exports are scoped to the signed-in owner unless a server-configured `USAGE_OPERATOR_USER_IDS` identity captures a service report or review. No real pilot result is claimed by this implementation; the 20-real-application gate remains open pending actual invited participants.
+
+## October 1, 2026: final autonomy pilot acceptance evidence
+
+The final candidate is committed in `d4ccbba0ef96b78cb88643db6b40a70f32ceca61` and deployed at <https://apply-ai-chi.vercel.app> (`dpl_864bQLnaXdzghVN8BkzE2ZoQcrd7`). The worker deployment is `20261001.22`. This section records software and controlled-fixture evidence separately from the external pilot gate.
+
+### Software and production verification
+
+- [x] Parent verification: 570 tests across 69 files, TypeScript, zero-warning ESLint, and webpack production build passed.
+- [x] Actual production Chrome checks passed for owner and operator roles on desktop and mobile. Enrollment/withdrawal, operator report capture, review save, report refresh, visible report errors, mobile overflow and runtime-error checks passed. The checks used intercepted synthetic API transport and made zero employer or provider requests. See `pilot-production-UI-proof.json`.
+- [x] Production authorization checks returned the expected 401/403/404 responses for anonymous access, unauthenticated capture/review, forged operator attempts and cross-owner evidence access. No owner or provider records were created. See `pilot-production-auth-proof.json`.
+- [x] Supabase migrations `20261001140000_pilot_reports` and `20261001141000_restrict_pilot_report_mutations` passed live RLS, append-only, duplicate identity and least-privilege checks. Service access is limited to SELECT/INSERT; UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER are denied. The live test retained zero fixture rows. See `pilot-live-sql-proof.json`.
+- [x] Controlled Browser Use proof completed one explicit human answer, one confirmed receipt, replay refusal, original-PDF hash preservation, sealed profile/event evidence, separated cost estimates, two stopped provider sessions, storage cleanup and owner cleanup. It remained controlled evidence with `realEvidence: false`; no employer was contacted. See the controlled proof recorded in the final publish handoff.
+- [x] Costs UI race/filter/CSV/sizing/reset regression passed against production with mocked transport.
+
+### External pilot gate remains open
+
+The implementation does not claim the real 20-application pilot gate. Actual invited participants, owner identity, authorized friends/cohorts and the required real employer applications remain pending. Controlled fixtures, intercepted browser checks and synthetic reports are excluded from that denominator.
+
+The separate Standards and Spec review is recorded in [docs/reviews/autonomy-2026-10-01.md](reviews/autonomy-2026-10-01.md). Both review axes report zero remaining software findings; the external real-20 evidence limitation is recorded separately.
