@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,11 @@ try {
   await mkdir(root, { recursive: true });
   for (const name of lock.libreOfficePackageNames) {
     execFileSync("dpkg-deb", ["--extract", selected.get(name), root], { timeout: 240_000, stdio: "inherit" });
+  }
+  try {
+    await access(path.join(root, lock.uiLanguageRegistryRelativePath));
+  } catch {
+    throw new Error("The pinned LibreOffice runtime is missing its required English UI language resources.");
   }
 
   await mkdir(path.join(root, "fonts"), { recursive: true });
