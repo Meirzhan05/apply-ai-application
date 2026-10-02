@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { initialDemoState } from "@/lib/demo-data";
 import { parseDocxSource } from "@/lib/docx-source";
+import { prepareDocxResumeBaseline } from "@/lib/docx-renderer";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { packetProfileHash, validatePacket } from "@/lib/drafting";
 import { reviewedPacketFile, reviewedResumeSource, withPacketFiles } from "@/lib/packet-files";
@@ -66,6 +67,7 @@ async function sourcePacket(imported = false) {
   await saveDemoOriginalResume(originalKey, originalBytes);
   cleanups.push(`.data/resumes/${originalKey}`);
   const source = await parseDocxSource(originalBytes);
+  const baseline = renderer ? await prepareDocxResumeBaseline(originalBytes, source, Date.now() + 90_000) : undefined;
   const sourceFacts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({
     id: `source-fact-${index}`, text: anchor.text, verified: true, source: "resume" as const, sourceAnchorId: anchor.id,
   }));
@@ -82,6 +84,7 @@ async function sourcePacket(imported = false) {
   const editedClaim = claims.find((claim) => claim.anchorId === bullet.id)!;
   editedClaim.text = editText;
   const plan: ResumeSourcePlan = { version: 1, format: "docx", sourceHash: source.sourceHash, representationVersion: source.version,
+    ...(baseline ? { sourceLayout: baseline.sourceLayout, layoutHash: baseline.layoutHash } : {}),
     profileHash: sourceProfileHash(profile), factsHash: hashJson(profile.facts.map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))), settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(application ? importedAutonomyJob(application, job) : job),
     claims, edits: [{ anchorId: bullet.id, text: editText, factIds: editedClaim.factIds }], grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
       findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported", reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) }, model: "gpt-6-sol" };
