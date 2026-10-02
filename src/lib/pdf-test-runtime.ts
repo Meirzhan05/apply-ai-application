@@ -52,9 +52,9 @@ async function prepareProvidedRuntime(configuredRoot: string) {
   let javaOutput: string;
   let helperOutput: string;
   try {
-    const javaResult = await execFile(java, ["-version"], { timeout: 10_000, maxBuffer: 4096 });
+    const javaResult = await execFile(java, ["-Djava.awt.headless=true", "-version"], { timeout: 10_000, maxBuffer: 4096 });
     javaOutput = `${javaResult.stdout}\n${javaResult.stderr}`;
-    const helperResult = await execFile(java, ["-cp", `${classes}${path.delimiter}${jarPath}`, "PdfSourceRewrite", "--version"], { timeout: 10_000, maxBuffer: 4096 });
+    const helperResult = await execFile(java, ["-Djava.awt.headless=true", "-cp", `${classes}${path.delimiter}${jarPath}`, "PdfSourceRewrite", "--version"], { timeout: 10_000, maxBuffer: 4096 });
     helperOutput = helperResult.stdout.trim();
   } catch {
     throw new Error("The supplied PDFBox test runtime's Java executable or compiled helper failed its version check.");
@@ -112,7 +112,7 @@ export async function ensurePdfTestRuntime() {
     }
   }
   java ??= "java";
-  const { stdout, stderr } = await execFile(java, ["-version"], { timeout: 10_000, maxBuffer: 4096 });
+  const { stdout, stderr } = await execFile(java, ["-Djava.awt.headless=true", "-version"], { timeout: 10_000, maxBuffer: 4096 });
   const major = `${stdout}\n${stderr}`.match(/version "(\d+)/)?.[1];
   if (!major) throw new Error("The PDFBox test runtime could not identify the local Java version.");
   process.env.PDFBOX_JAVA_MAJOR = major;

@@ -117,7 +117,7 @@ function parseMetrics(output: string) {
 async function assertRuntime(directory: string, deadline: number) {
   const runtime = resolveRuntime();
   try {
-    const { stdout } = await execute(runtime.java, ["-Xms32m", "-Xmx768m", "-Djava.io.tmpdir=" + directory, "-cp", `${runtime.classes}${path.delimiter}${runtime.jar}`, "PdfSourceRewrite", "--version"], {
+    const { stdout } = await execute(runtime.java, ["-Djava.awt.headless=true", "-Xms32m", "-Xmx768m", "-Djava.io.tmpdir=" + directory, "-cp", `${runtime.classes}${path.delimiter}${runtime.jar}`, "PdfSourceRewrite", "--version"], {
       cwd: directory, env: childEnvironment(directory), timeout: boundedTimeout(deadline, 12_000), killSignal: "SIGKILL", maxBuffer: 4096,
     });
     const match = stdout.match(/^pdfbox=([^\t\r\n]+)\tjava=([^\t\r\n]+)/);
@@ -175,7 +175,7 @@ export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: Pdf
     await beforeProcess?.();
     let stdout: string;
     try {
-      const result = await execute(runtime.java, ["-Xms32m", "-Xmx768m", "-Djava.io.tmpdir=" + directory,
+      const result = await execute(runtime.java, ["-Djava.awt.headless=true", "-Xms32m", "-Xmx768m", "-Djava.io.tmpdir=" + directory,
         "-cp", `${runtime.classes}${path.delimiter}${runtime.jar}`, "PdfSourceRewrite", input, output, manifest], {
         cwd: directory, env: childEnvironment(directory), timeout: boundedTimeout(deadline, 60_000), killSignal: "SIGKILL", maxBuffer: 32 * 1024,
       });

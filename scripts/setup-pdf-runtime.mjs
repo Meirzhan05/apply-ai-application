@@ -103,7 +103,7 @@ try {
     const noticePath = await findFile(jreNoticeRoot, notice);
     if (noticePath) await copyFile(noticePath, path.join(licenses, `Temurin-${notice}.txt`));
   }
-  const version = await execFile(javaBin, ["-cp", `${classes}${path.delimiter}${jarPath}`, "PdfSourceRewrite", "--version"], { timeout: 20_000, maxBuffer: 4096 });
+  const version = await execFile(javaBin, ["-Djava.awt.headless=true", "-cp", `${classes}${path.delimiter}${jarPath}`, "PdfSourceRewrite", "--version"], { timeout: 20_000, maxBuffer: 4096 });
   if (!version.stdout.includes(`pdfbox=${lock.pdfbox.version}`) || (!local && !version.stdout.includes("java=21."))) throw new Error("The compiled PDF worker does not match the pinned Java/PDFBox versions.");
   await writeFile(path.join(target, "runtime-manifest.json"), JSON.stringify({ version: 1, java: lock.java.version, pdfbox: lock.pdfbox.version, architecture: local ? `${process.platform}-${process.arch}` : "linux-x64" }, null, 2) + "\n", { mode: 0o600 });
   if (!local) await chmod(javaBin, 0o755);
