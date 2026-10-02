@@ -1565,3 +1565,14 @@ a {
 .detail-head .employer-name { color: var(--forest); font-weight: 600; margin-bottom: 8px; }
 .app-layout:has(.app-list[hidden]) { grid-template-columns: minmax(0, 1fr); }
 .app-list[hidden] { display: none; }
+
+.packet-readiness { margin: 24px 0 16px; padding-top: 20px; border-top: 1px solid var(--line); }
+.packet-readiness h4 { margin: 0 0 8px; font-size: 16px; }
+.packet-readiness p, .packet-readiness li { font-size: 14px; line-height: 1.6; }
+.packet-readiness p { margin: 8px 0; }
+.packet-readiness ul { margin: 8px 0; padding-left: 20px; }
+.packet-readiness ul:empty { display: none; }
+.packet-readiness a { color: var(--forest); text-underline-offset: 3px; }
+.material-tools { flex-basis: 100%; order: 3; }
+.material-tools summary { cursor: pointer; padding: 12px 0; font-size: 14px; }
+.material-tools button { margin: 8px 8px 0 0; }

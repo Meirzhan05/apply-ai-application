@@ -2,6 +2,7 @@
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
@@ -60,6 +61,7 @@ export default function Dashboard() {
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("Wrong role");
@@ -114,6 +116,7 @@ export default function Dashboard() {
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusy(action);
     setError("");
+    setNotice("");
     try {
       const response = await fetch("/api/actions", {
         method: "POST",
@@ -125,6 +128,8 @@ export default function Dashboard() {
       const next = await reload();
       if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
       if (["editPacket", "confirmEssay", "draft"].includes(action)) setAnswerDraft([]);
+      if (action === "editPacket") setNotice("Your answers are saved.");
+      if (action === "confirmEssay") setNotice("Essay confirmed. Your application has not been submitted.");
       return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed.");
@@ -210,6 +215,8 @@ export default function Dashboard() {
         )}
       </div>
     );
+
+  const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
                       [
@@ -330,17 +337,20 @@ export default function Dashboard() {
                                   <details><summary>Facts used in this essay</summary><ul>{answer.factIds.map((id) => <li key={id}>{data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source fact unavailable"}</li>)}</ul></details>
                                 )}
                                 {answerOwner(answer.question) === "ai" && answer.aiDraft && !answer.confirmedAt && activeApp.status === "draft_review" && (
-                                  <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet!.answers))}
+                                  <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
                                     onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answer.aiDraft!.contentHash })}>Confirm essay</button>
                                 )}
                               </div>
                             ))}
                           </div>
                           {activeApp.status === "draft_review" && (
+                            <>
+                            <PacketReadiness application={activeApp} dirty={answersDirty} busy={busy} notice={notice} />
                             <div className="action-row">
                               <button
+                                id={`save-answers-${activeApp.id}`}
                                 className="outline-action"
-                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
+                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || !answersDirty}
                                 onClick={() =>
                                   act("editPacket", {
                                     applicationId: activeApp.id,
@@ -350,12 +360,14 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                Save my answers
+                                {busy === "editPacket" ? "Saving answers…" : "Save my answers"}
                               </button>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
+                              <details className="material-tools"><summary>Revise or rebuild materials</summary>
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
+                              </details>
                               <p className="target-url">
                                 Approved destination:{" "}
                                 <a
@@ -370,7 +382,7 @@ export default function Dashboard() {
                                 className="dark-button"
                                 disabled={
                                   Boolean(busy) || Boolean(activeApp.queuedRun) ||
-                                  (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers)) ||
+                                  answersDirty ||
                                   activeApp.packet.answers.some(answerNeedsAction)
                                 }
                                 onClick={() =>
@@ -380,9 +392,10 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                Approve packet for form fill
+                                {busy === "approveFill" ? "Recording approval…" : "Approve packet for form fill"}
                               </button>
                             </div>
+                            </>
                           )}
                         </div>
                       );
@@ -766,6 +779,7 @@ export default function Dashboard() {
                                   );
                                   if (app) {
                                     setSelected(app.id);
+                          setNotice("");
                                     setSection("applications");
                                   }
                                 }
@@ -1158,6 +1172,11 @@ export default function Dashboard() {
                             {activeApp.form.attachments.join(", ") || "None"}
                           </p>
                           {activeApp.status === "final_review" && (
+                            <>
+                            {activeApp.form.readyToSubmit === false && <div className="packet-readiness" role="status">
+                              <h4>Complete the employer form before approving</h4>
+                              <ul>{(activeApp.form.blockers?.length ? activeApp.form.blockers : ["Some employer fields still need attention. Check the browser, then refresh the form state."]).map((blocker, index) => <li key={index}>{blocker}</li>)}</ul>
+                            </div>}
                             <div className="action-row">
                               <button
                                 className="outline-action"
@@ -1182,6 +1201,7 @@ export default function Dashboard() {
                                 Approve this form
                               </button>
                             </div>
+                            </>
                           )}
                           {activeApp.status === "approved_to_submit" && (
                             <div className="action-row">
