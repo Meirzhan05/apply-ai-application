@@ -380,6 +380,16 @@ export default function Dashboard() {
                 </div>
                 <span className="sort-label">Most relevant first</span>
               </div>
+              <details className="fit-guide">
+                <summary>What do the fit labels mean?</summary>
+                <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
+                <dl>
+                  <div><dt>Strong fit</dt><dd>Substantial overlap with your profile and preferences.</dd></div>
+                  <div><dt>Possible fit</dt><dd>Some overlap, with requirements to review.</dd></div>
+                  <div><dt>Uncertain</dt><dd>Important information is missing or needs verification.</dd></div>
+                  <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
+                </dl>
+              </details>
               <div className="job-list">
                 {filtered.length ? (
                   filtered.map((job) => {
@@ -410,11 +420,11 @@ export default function Dashboard() {
                               className={`match-badge ${match?.category ?? "uncertain"}`}
                             >
                               {match?.category === "strong"
-                                ? "Strong match"
+                                ? "Strong fit"
                                 : match?.category === "possible"
-                                  ? "Possible match"
+                                  ? "Possible fit"
                                   : match?.category === "excluded"
-                                    ? "Hard rule conflict"
+                                    ? "Search rule conflict"
                                     : "Uncertain"}
                             </span>
                             <span className="source-badge">
@@ -452,6 +462,15 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="job-actions">
+                          {(match?.uncertainty.length || match?.gaps.length) ? (
+                            <div className="job-review-note">
+                              <strong>{match?.category === "excluded" ? "Search rule to review" : "Review before applying"}</strong>
+                              <p>{match?.uncertainty[0] ?? match?.gaps[0]}</p>
+                              <button className="text-button" onClick={() => setSection(match?.category === "excluded" ? "settings" : "profile")}>
+                                {match?.category === "excluded" ? "Review search settings" : "Review profile"}
+                              </button>
+                            </div>
+                          ) : null}
                           <div className="small-actions">
                             <button
                               onClick={() =>
@@ -517,6 +536,7 @@ export default function Dashboard() {
                               Prepare application
                             </button>
                           )}
+                          {!application && <p className="preparation-note">Opens an application workspace. You approve materials and the filled form before submission.</p>}
                           <a
                             className="job-link"
                             href={job.url}

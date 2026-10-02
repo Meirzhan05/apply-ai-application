@@ -358,6 +358,16 @@ a {
   color: #586b64;
   font-size: 12px;
 }
+.fit-guide { margin: 12px 0; color: #355750; font-size: 13px; line-height: 1.5; }
+.fit-guide summary { cursor: pointer; width: fit-content; font-weight: 600; }
+.fit-guide p { max-width: 70ch; }
+.fit-guide dl { display: grid; gap: 8px; margin: 12px 0; }
+.fit-guide dt { font-weight: 700; }
+.fit-guide dd { margin: 2px 0 0; }
+.job-review-note { color: #355750; font-size: 12px; line-height: 1.5; }
+.job-review-note p { margin: 4px 0; }
+.job-review-note .text-button { padding: 4px 0; text-align: left; font-size: 12px; }
+.preparation-note { margin: 0; font-size: 12px; line-height: 1.5; color: #355750; }
 .job-row {
   display: grid;
   grid-template-columns: 200px minmax(240px, 1fr) 174px;
