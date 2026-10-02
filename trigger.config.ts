@@ -40,7 +40,8 @@ export default defineConfig({
   runtime: "node-24",
   maxDuration: 300,
   build: {
-    external: ["playwright-core"],
+    // Let the Linux runtime install choose the matching native Canvas binary.
+    external: ["playwright-core", "@napi-rs/canvas"],
     extensions: [
       additionalFiles({ files: ["./src/assets/fonts/*", "./scripts/setup-latex.mjs", "./scripts/setup-docx-runtime.mjs", "./runtime/docx-runtime.lock.json"] }),
       aptGet({ packages: ["fontconfig"] }),
