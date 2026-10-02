@@ -8,7 +8,7 @@ import type { ResumeLayoutFeedback } from "@/lib/resume-layout-feedback";
 import type { Job, Profile, ResumeDraftAttempts, ResumeGroundingFinding, ResumeSourceAnchor, ResumeSourceClaim, ResumeSourceDocument, ResumeSourceEdit, ResumeSourceLayoutMap, ResumeSourcePlan } from "@/lib/types";
 import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
 import { confirmedFactIdsForAnchor, sourceWithCurrentEvidenceClaims, validateSourcePlanEvidence } from "@/lib/source-plan-evidence";
-import { isPdfRendererDiagnostic } from "@/lib/pdf-renderer-diagnostics";
+import { isResumeRendererDiagnostic } from "@/lib/resume-renderer-diagnostics";
 
 const PlanSchema = z.object({
   claims: z.array(z.object({ anchorId: z.string().min(1).max(200), text: z.string().trim().min(1).max(500), factIds: z.array(z.string().min(1).max(160)).min(1).max(80) }).strict()).max(80),
@@ -64,13 +64,7 @@ function providerFailure(counts: Counts, deadline: number) {
   return new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: Date.now() >= deadline ? "deadline" : "provider" });
 }
 function actionableRendererMessage(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const safeMessages = [
-    /^The source font for “[^”]{1,60}” cannot be identified\. Upload an editable DOCX rather than substituting a font\.$/,
-    /^The rendered paragraph “[^”]{1,70}” uses [\p{L}\p{N} ,._-]+ instead of source font [\p{L}\p{N} ,._-]+\. Upload a DOCX using the pinned Noto Sans source font\.$/u,
-  ];
-  if (isPdfRendererDiagnostic(error)) return error.message;
-  return safeMessages.some((pattern) => pattern.test(error.message)) ? error.message : undefined;
+  return isResumeRendererDiagnostic(error) ? error.message : undefined;
 }
 function auditFindings(parsed: unknown, claims: DraftClaim[], byId: Map<string, Profile["facts"][number]>, preservationChecks: SourceActivityCheck[]): ValidatedAudit | undefined {
   const result = AuditSchema.safeParse(parsed);

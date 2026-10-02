@@ -1,3 +1,5 @@
+import type { RendererDiagnosticPayload } from "@/lib/resume-renderer-diagnostics";
+
 export type MatchCategory = "strong" | "possible" | "uncertain" | "excluded";
 export type JobSource = "demo" | "greenhouse" | "lever" | "ashby" | "imported";
 export type ApplicationStatus =
@@ -159,7 +161,7 @@ export interface PdfSourceRepresentation {
   format: "pdf";
   sourceHash: string;
   text: string;
-  support: { status: "candidate" | "blocked"; reason?: string };
+  support: { status: "candidate" | "blocked"; reason?: string; diagnostic?: Extract<RendererDiagnosticPayload, { code: "pdf_source_font_unidentified" }> };
   layout: {
     columns: number;
     pageCount: number;

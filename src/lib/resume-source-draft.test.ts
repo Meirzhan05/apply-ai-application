@@ -7,7 +7,7 @@ import { parsePdfSource } from "@/lib/pdf-source";
 import { draftResumeSourcePlan } from "@/lib/resume-source-draft";
 import { pdfSourceLayout } from "@/lib/resume-source-layout";
 import { renderPdfSourceBytes } from "@/lib/pdf-renderer";
-import { PdfRendererDiagnosticError } from "@/lib/pdf-renderer-diagnostics";
+import { ResumeRendererDiagnosticError } from "@/lib/resume-renderer-diagnostics";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
@@ -124,9 +124,43 @@ it("does not trust renderer prose without a typed safe diagnostic", async () => 
 it("forwards a recognized typed PDF renderer diagnostic", async () => {
   const { profile, job, source } = await pdfFixture();
   mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
-  const actionable = new PdfRendererDiagnosticError("unembedded_font");
+  const actionable = new ResumeRendererDiagnosticError({ code: "unembedded_font" });
   await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw actionable; }))
     .rejects.toMatchObject({ message: actionable.message, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+});
+
+it("forwards typed DOCX and source-parser font guidance from the shared diagnostic catalog", async () => {
+  const { profile, job, source } = await pdfFixture();
+  const docxFont = new ResumeRendererDiagnosticError({ code: "docx_rendered_font_mismatch",
+    text: "Built a search index for 1,200 users.", renderedFonts: ["Arial"], sourceFont: "Noto Sans",
+  });
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw docxFont; }))
+    .rejects.toMatchObject({ message: docxFont.message, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+
+  mocks.parse.mockReset();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+  const sourceFont = new ResumeRendererDiagnosticError({ code: "pdf_source_font_unidentified", text: "Built a search index for 1,200 users." });
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw sourceFont; }))
+    .rejects.toMatchObject({ message: sourceFont.message, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+});
+
+it("does not allow plain Errors to spoof DOCX or source-parser font guidance", async () => {
+  const { profile, job, source } = await pdfFixture();
+  const messages = [
+    "The source font for “Built a search index for 1,200 users.” cannot be identified. Upload an editable DOCX rather than substituting a font.",
+    "The rendered paragraph “Built a search index for 1,200 users.” uses Arial instead of source font Noto Sans. Upload a DOCX using the pinned Noto Sans source font.",
+  ];
+
+  for (const message of messages) {
+    mocks.parse.mockReset();
+    mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+    await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error(message); }))
+      .rejects.toMatchObject({ message: "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.",
+        diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+  }
 });
 
 it("shows an actionable font diagnostic for a real PDFBox missing-glyph failure", async () => {
@@ -161,7 +195,7 @@ it("shows the source font limitation for a real PDFBox unembedded-font rejection
     return undefined;
   }).catch((error: unknown) => error);
 
-  expect(rendererFailure).toMatchObject({ name: "PdfRendererDiagnosticError", diagnosticCode: "unembedded_font" });
+  expect(rendererFailure).toMatchObject({ name: "ResumeRendererDiagnosticError", diagnosticCode: "unembedded_font" });
   expect(failure).toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
   expect((failure as Error).message).toMatch(/source font .* not embedded/i);
   expect((failure as Error).message).not.toMatch(/Command failed:|PdfSourceRewrite|\/tmp\//);

@@ -7,7 +7,7 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { readOriginalResume } from "@/lib/original-resume";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
 import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
-import { PdfRendererDiagnosticError } from "@/lib/pdf-renderer-diagnostics";
+import { ResumeRendererDiagnosticError } from "@/lib/resume-renderer-diagnostics";
 import { planEvidencePolicy, sourceEvidenceAnchors, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { PdfSourceAnchor, PdfSourceRepresentation, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
@@ -19,18 +19,18 @@ function safePdfWorkerError(error: unknown): Error | undefined {
   if (!error || typeof error !== "object" || !("stderr" in error) || typeof error.stderr !== "string") return undefined;
   const stderr = error.stderr;
   if (/No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(stderr))
-    return new PdfRendererDiagnosticError("unsupported_glyph");
-  if (/The source font for an edited résumé bullet is not embedded as a supported outline font\./.test(stderr)) return new PdfRendererDiagnosticError("unembedded_font");
-  if (/The PDF source font changed after inspection\./.test(stderr)) return new PdfRendererDiagnosticError("changed_source_font");
+    return new ResumeRendererDiagnosticError({ code: "unsupported_glyph" });
+  if (/The source font for an edited résumé bullet is not embedded as a supported outline font\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "unembedded_font" });
+  if (/The PDF source font changed after inspection\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "changed_source_font" });
   if (stderr.includes("The PDF renderer changed page dimensions after editing."))
-    return new PdfRendererDiagnosticError("page_dimensions");
+    return new ResumeRendererDiagnosticError({ code: "page_dimensions" });
   if (stderr.includes("The PDF rewrite changed the original page count; no content may be added or removed."))
-    return new PdfRendererDiagnosticError("page_count");
+    return new ResumeRendererDiagnosticError({ code: "page_count" });
 
   const pageDimensions = stderr.match(/The PDF rewrite changed page (\d{1,2}) dimensions beyond 0\.5 pt\./);
-  if (pageDimensions) return new PdfRendererDiagnosticError("page_dimensions", { page: Number(pageDimensions[1]) });
+  if (pageDimensions) return new ResumeRendererDiagnosticError({ code: "page_dimensions", page: Number(pageDimensions[1]) });
   const outsidePixels = stderr.match(/The PDF render changed page (\d{1,2}) pixels outside edited text boxes \(144 dpi: ([\d.]+), 300 dpi: ([\d.]+)\)\. No font substitution or overlay will be used\./);
-  if (outsidePixels) return new PdfRendererDiagnosticError("outside_edit_pixels", { page: Number(outsidePixels[1]), at144Dpi: outsidePixels[2], at300Dpi: outsidePixels[3] });
+  if (outsidePixels) return new ResumeRendererDiagnosticError({ code: "outside_edit_pixels", page: Number(outsidePixels[1]), at144Dpi: outsidePixels[2], at300Dpi: outsidePixels[3] });
   return undefined;
 }
 

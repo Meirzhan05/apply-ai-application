@@ -3,6 +3,7 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { hashJson } from "@/lib/crypto";
 import { groupPositionedSpansIntoRegions } from "@/lib/source-regions";
 import { readablePdfFontFamily } from "@/lib/pdf-fonts";
+import { rendererDiagnosticMessage, type RendererDiagnosticPayload } from "@/lib/resume-renderer-diagnostics";
 import { isResumeSectionHeading, isSubstantiveSourceText } from "@/lib/resume-source-semantics";
 import type { PdfSourceAnchor, PdfSourceRepresentation, ResumeSourcePageLayout } from "@/lib/types";
 
@@ -67,6 +68,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     pdf = await loadingTask.promise;
     if (pdf.numPages < 1 || pdf.numPages > 50) throw new Error("This PDF has an unsupported page count.");
     let reason: string | undefined;
+    let supportDiagnostic: Extract<RendererDiagnosticPayload, { code: "pdf_source_font_unidentified" }> | undefined;
     if (pdf.isPureXfa) reason = "This PDF is an XFA form rather than a plain résumé. Save it as a text-based PDF or upload an editable DOCX.";
     if (pdf.numPages > MAX_SUPPORTED_PAGES) reason = appendReason(reason, `This PDF has ${pdf.numPages} pages. The source-preserving worker supports up to ${MAX_SUPPORTED_PAGES} pages; no content was dropped.`);
     const fontFamilies = new Set<string>();
@@ -127,7 +129,11 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         located.push({ item: { ...item, str: text }, rawSourceText, style, resolvedFontName, fontFamily, bold, italic, index, pageNumber, left, top, right, bottom, baseline: y });
         if (left < -0.5 || top < -0.5 || right > viewport.width + 0.5 || bottom > viewport.height + 0.5) reason = appendReason(reason, `The source text “${text.slice(0, 60)}” extends outside the visible page, so the full source cannot be safely edited. Shorten or reposition it in the original PDF, or upload an editable DOCX.`);
         if (fontFamily) fontFamilies.add(fontFamily);
-        else reason = appendReason(reason, `The source font for “${text.slice(0, 60)}” cannot be identified. Upload an editable DOCX rather than substituting a font.`);
+        else {
+          const diagnostic = { code: "pdf_source_font_unidentified", text } as const;
+          if (!reason) supportDiagnostic = diagnostic;
+          reason = appendReason(reason, rendererDiagnosticMessage(diagnostic));
+        }
       }
       located.sort((left, right) => left.top - right.top || left.left - right.left || left.index - right.index);
       if (!located.length) reason = appendReason(reason, "This PDF has no extractable text and appears scanned or image-only. Upload an editable DOCX; OCR and image reconstruction are not supported.");
@@ -301,7 +307,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     if (grouping.status === "blocked") reason = appendReason(reason, grouping.reason);
     if (!sections.length) sections.push({ id: `pdf-section-${hashJson([sourceHash, "default"]).slice(0, 12)}`, heading: "Résumé", anchorIds: anchors.map((anchor) => anchor.id) });
     if (anchors.some((anchor) => anchor.candidateClaim && !anchor.font.family)) reason = appendReason(reason, "A required source font could not be identified. Upload an editable DOCX rather than substituting a font.");
-    return { version: 2, parser: "pdfjs-text-2", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason } : { status: "candidate" },
+    return { version: 2, parser: "pdfjs-text-2", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason, ...(supportDiagnostic ? { diagnostic: supportDiagnostic } : {}) } : { status: "candidate" },
       layout: { columns: detectedColumns, pageCount: pdf.numPages, pageSizePt: firstPageSize, marginsPt: margins, fontFamilies: [...fontFamilies].sort(), pages: pageLayouts }, sections, anchors };
   } catch (error) {
     if (error instanceof Error && /above the|Choose a PDF/.test(error.message)) throw error;

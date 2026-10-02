@@ -18,6 +18,7 @@ import { originalResumeManifest, readOriginalResume } from "@/lib/original-resum
 import { applyDocxEdits, parseDocxSource } from "@/lib/docx-source";
 import { ResumeDraftError } from "@/lib/resume-document";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
+import { ResumeRendererDiagnosticError } from "@/lib/resume-renderer-diagnostics";
 import { planEvidencePolicy, sourceEvidenceAnchors } from "@/lib/source-plan-evidence";
 import type { DocxSourceRepresentation, Profile, ResumePageValidation, ResumeSourceLayoutMap, ResumeSourcePlan, VerifiedFact } from "@/lib/types";
 
@@ -266,7 +267,8 @@ function validateAnchorGeometry(source: DocxSourceRepresentation, sourceLayout: 
       if (!insideRegion(before.box)) throw new Error(`Baseline paragraph “${anchor.text.slice(0, 70)}” falls outside its mapped page region.`);
       const beforeFont = anchor.font?.family.toLowerCase();
       const afterFonts = after.fontFamilies.map((family) => family.toLowerCase());
-      if (!beforeFont || afterFonts.some((family) => family !== beforeFont)) throw new Error(`The rendered paragraph “${anchor.text.slice(0, 70)}” uses ${afterFonts.join(", ") || "an unknown font"} instead of source font ${beforeFont || "unknown"}. Upload a DOCX using the pinned Noto Sans source font.`);
+      if (!beforeFont || afterFonts.some((family) => family !== beforeFont)) throw new ResumeRendererDiagnosticError({ code: "docx_rendered_font_mismatch",
+        text: anchor.text, renderedFonts: afterFonts, sourceFont: beforeFont || "unknown" });
       if (after.fontSizes.some((size) => Math.abs(size - (anchor.font?.sizePt ?? 0)) > 0.5)) throw new Error(`The rendered paragraph “${anchor.text.slice(0, 70)}” changed font size by more than 0.5 pt.`);
       if (!insideRegion(after.box)) {
         if (replacement) throw new ResumeLayoutFeedbackError({ anchorId: anchor.id, pageNumber: mapping.pageNumber, regionId: mapping.regionId, reason: "The revised wording crosses its original page or column region." });
@@ -316,7 +318,10 @@ export async function prepareDocxResumeBaseline(originalBytes: Buffer, source: D
     await beforeProcess?.();
     const baselinePdf = await convertDocx(directory, originalBytes, "baseline", deadline);
     const parsedBaseline = await parsePdfSource(baselinePdf, trustedName);
-    if (parsedBaseline.support.status !== "candidate") throw new Error(parsedBaseline.support.reason ?? "The rendered baseline PDF is outside the supported page and region profile.");
+    if (parsedBaseline.support.status !== "candidate") {
+      if (parsedBaseline.support.diagnostic) throw new ResumeRendererDiagnosticError(parsedBaseline.support.diagnostic);
+      throw new Error(parsedBaseline.support.reason ?? "The rendered baseline PDF is outside the supported page and region profile.");
+    }
     const mapped = mapDocxSourceToPdfLayout(currentSource, parsedBaseline);
     if (mapped.status !== "supported") throw new Error(mapped.reason);
     if (mapped.layout.pages.length < 1 || mapped.layout.pages.length > 8) throw new Error("The DOCX baseline exceeds the eight-page source-preserving limit.");
@@ -348,8 +353,7 @@ export async function renderDocxSourceBytes(originalBytes: Buffer, source: DocxS
       baselinePdfHash: bytesHash(preparedBaseline.baselinePdf), pageWidthPt: finalLayout[0].width, pageHeightPt: finalLayout[0].height,
       pageCount: finalLayout.length, pages, sourceLayout: plan.sourceLayout, layoutHash: plan.layoutHash, visualOutsideEditDifference: Math.max(...pages.map((page) => page.visualOutsideEditDifference ?? 1)) };
   } catch (error) {
-    if (error instanceof ResumeLayoutFeedbackError) throw error;
-    if (error instanceof Error && /^(?:This DOCX|The DOCX|The rendered|Unchanged source|Edited wording|LibreOffice|Rotated text|The pinned DOCX)/.test(error.message)) throw error;
+    if (error instanceof ResumeLayoutFeedbackError || error instanceof ResumeRendererDiagnosticError || error instanceof ResumeDraftError) throw error;
     throw new ResumeDraftError({ version: 1, outcome: "technical_failure", writerAttempts: plan.grounding.writerAttempts, checkerAttempts: plan.grounding.checkerAttempts,
       repairAttempts: plan.grounding.repairAttempts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, "The DOCX layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source DOCX.");
   } finally { await rm(directory, { recursive: true, force: true }); }
