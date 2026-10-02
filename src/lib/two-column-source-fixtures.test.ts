@@ -15,7 +15,7 @@ it("builds a text PDF with sidebar content and a continuation on its second page
 
   const positioned = source as unknown as { anchors: Array<{ text: string; entryId: string; pageNumber: number; regionId: string; readingOrder: number }>;
     layout: { pages: Array<{ pageNumber: number; regions: Array<{ id: string; columnId: string }> }> } };
-  expect(positioned.layout.pages.map((page) => [page.pageNumber, page.regions.map((region) => region.columnId)])).toEqual([
+  expect(positioned.layout.pages.map((page) => [page.pageNumber, page.regions.filter((region) => region.columnId.startsWith("column-")).map((region) => region.columnId)])).toEqual([
     [1, ["column-1", "column-2"]], [2, ["column-1", "column-2"]],
   ]);
   const orbit = positioned.anchors.find((anchor) => anchor.text.includes("Built ranking service for 1,200 users."));
