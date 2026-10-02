@@ -5,6 +5,7 @@ export function createOwnerScanTransport() {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   let pageFailure: Error | undefined;
   const queryRows = (table: string, selection: string, cursor?: string, userId?: string) => {
+    if (table === "catalog_revision") return [{ revision: 1 }];
     if (table === "jobs") return [];
     if (userId) {
       const row = rows.get(userId);
@@ -30,6 +31,10 @@ export function createOwnerScanTransport() {
               return Promise.resolve({ data: response.data.slice(from, to + 1), error: response.error });
             },
             maybeSingle() {
+              const response = read(table, selection, cursor, userId);
+              return Promise.resolve({ data: response.data[0] ?? null, error: response.error });
+            },
+            single() {
               const response = read(table, selection, cursor, userId);
               return Promise.resolve({ data: response.data[0] ?? null, error: response.error });
             },

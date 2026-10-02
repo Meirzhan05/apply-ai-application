@@ -26,6 +26,7 @@
     "test:match-queue": "node --env-file=.env --import tsx scripts/test-match-queue.ts",
     "test:match-owner-removed": "node --env-file=.env --import tsx scripts/test-match-owner-removed.ts",
     "test:dashboard": "node --env-file=.env --import tsx scripts/test-dashboard.ts",
+    "test:state-refresh": "node --env-file=.env --import tsx scripts/test-state-refresh.ts",
     "test:answer-review": "node --env-file=.env --import tsx scripts/test-answer-review.ts",
     "setup:latex": "node scripts/setup-latex.mjs",
     "test:latex": "node --import tsx scripts/test-latex.ts",

@@ -19,7 +19,7 @@ export async function currentUserId(): Promise<string> {
 }
 
 async function catalog(): Promise<Job[]> {
-  const rows = await readActiveCatalogRows();
+  const rows = await readActiveCatalogRows({ cache: true });
   return rows.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at) || a.id.localeCompare(b.id)).map((row) => row.data);
 }
 
