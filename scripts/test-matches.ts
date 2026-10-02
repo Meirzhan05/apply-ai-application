@@ -6,7 +6,9 @@ import { publicState } from "../src/lib/public-state";
 
 async function main() {
   const origin = process.env.TEST_MATCHES_URL || "http://localhost:3008";
-  const fixture = publicState(initialDemoState());
+  const demoState = initialDemoState();
+  demoState.jobs.forEach((job, index) => { job.postedAt = new Date(Date.now() - index * 86400000).toISOString(); });
+  const fixture = publicState(demoState);
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -27,6 +29,23 @@ async function main() {
       assert.equal(await strongRole.locator(".preparation-note").isVisible(), true, "Explain preparation and later approvals before the action");
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
+      await page.locator(".fit-guide summary").click();
+      assert.equal(await strongRole.locator(".match-reasons").isVisible(), false, "Full reasoning is disclosed on request");
+      await strongRole.locator(".fit-evidence summary").click();
+      assert.equal(await strongRole.locator(".match-reasons").getByText("No confirmed evidence yet for TypeScript.", { exact: true }).isVisible(), true, "Disclosure must preserve every missing requirement");
+      await strongRole.locator(".fit-evidence summary").click();
+      const query = page.getByRole("searchbox", { name: "Search roles or companies" });
+      await query.fill("cedar engineering");
+      assert.equal(await page.getByRole("article").count(), 1, "Search matches company and title case-insensitively");
+      await query.fill("no-company-has-this-name");
+      await page.getByRole("heading", { name: "No roles match your search", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Clear search", exact: true }).last().click();
+      assert.equal(await page.getByRole("article").count(), 3);
+      await page.getByRole("combobox", { name: "Sort roles" }).selectOption("newest");
+      assert.equal(await page.getByRole("article").first().getByRole("heading").innerText(), "Junior Product Analyst");
+      await page.getByRole("combobox", { name: "Sort roles" }).selectOption("relevant");
+      const savedBox = await page.getByRole("button", { name: "Saved 0", exact: true }).boundingBox();
+      assert.ok(savedBox && savedBox.x >= 0 && savedBox.x + savedBox.width <= width, "Saved must be visible without horizontal filter scrolling");
       const launcher = page.getByRole("button", { name: "+ Import a job link", exact: true });
       await launcher.click();
       const dialog = page.getByRole("dialog", { name: "Import a job link" });

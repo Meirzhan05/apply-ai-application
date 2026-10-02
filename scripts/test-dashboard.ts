@@ -29,8 +29,10 @@ async function main() {
     for (const [label, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]] as const) {
       await page.setViewportSize({ width, height });
       await page.goto(origin);
-      await page.getByText(gap, { exact: true }).waitFor();
-      assert.equal(await page.getByText(unknown, { exact: true }).isVisible(), true, "Uncertainty must remain visible alongside a gap");
+      await page.locator(".fit-evidence summary").click();
+      const reasons = page.locator(".match-reasons");
+      await reasons.getByText(gap, { exact: true }).waitFor();
+      assert.equal(await reasons.getByText(unknown, { exact: true }).isVisible(), true, "Uncertainty must remain visible alongside a gap");
       assert.equal(await page.getByText("Gaps and unknowns", { exact: true }).isVisible(), true);
       assert.ok((await page.locator(".match-badge").innerText()).includes("Uncertain"));
       await page.screenshot({ path: `.data/dashboard-uncertainty-${label}.png`, fullPage: true });

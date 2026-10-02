@@ -46,6 +46,8 @@ export default function Dashboard() {
   const [data, setData] = useState<ViewState | null>(null);
   const [section, setSection] = useState<Section>("matches");
   const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
@@ -139,11 +141,14 @@ export default function Dashboard() {
     (job) =>
       job.active &&
       feedback.get(job.id)?.kind !== "dismissed" &&
+      search.toLowerCase().trim().split(/\s+/).every(term => `${job.title} ${job.company}`.toLowerCase().includes(term)) &&
       (filter === "all" ||
         (filter === "saved" && feedback.get(job.id)?.kind === "saved") ||
         matches.get(job.id)?.category === filter),
   );
-  filtered.sort((a, b) => compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
+  filtered.sort((a, b) => sort === "newest"
+    ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
+    : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
@@ -292,7 +297,6 @@ export default function Dashboard() {
             <main className="main-panel">
               <div className="page-heading">
                 <div>
-                  <p className="eyebrow">YOUR SEARCH, IN MOTION</p>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
                     {jobs.length} roles in your catalog ·{" "}
@@ -308,7 +312,7 @@ export default function Dashboard() {
                   + Import a job link
                 </button>
               </div>
-              {(incompleteFacts > 0 || !data.profile.resumeFileName) && (
+              {(incompleteFacts > 0 || !data.profile.facts.some(fact => fact.verified)) && (
                 <div className="review-banner">
                   <div className="banner-icon">
                     <FileText size={27} />
@@ -349,6 +353,14 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+              <div className="job-search">
+                <label htmlFor="job-search">Search roles or companies</label>
+                <div>
+                  <Search size={18} aria-hidden="true" />
+                  <input id="job-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Job title or company" />
+                  {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
+                </div>
+              </div>
               <div className="filterbar">
                 <div className="filters">
                   {(
@@ -357,7 +369,6 @@ export default function Dashboard() {
                       "strong",
                       "possible",
                       "uncertain",
-                      "saved",
                     ] as Filter[]
                   ).map((item) => (
                     <button
@@ -372,21 +383,27 @@ export default function Dashboard() {
                       <span>
                         {item === "all"
                           ? jobs.filter((job) => job.active).length
-                          : item === "saved"
-                            ? data.feedback.filter((x) => x.kind === "saved")
-                                .length
-                            : data.matches.filter(
+                          : data.matches.filter(
                                 (x) => x.assessment.category === item,
                               ).length}
                       </span>
                     </button>
                   ))}
                 </div>
-                <span className="sort-label">Most relevant first</span>
+                <button className={`collection-filter ${filter === "saved" ? "selected" : ""}`} aria-pressed={filter === "saved"} onClick={() => setFilter("saved")}>
+                  <Bookmark size={16} aria-hidden="true" /> Saved <span>{data.feedback.filter(x => x.kind === "saved").length}</span>
+                </button>
+                <label className="sort-control">Sort
+                  <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}>
+                    <option value="relevant">Most relevant</option>
+                    <option value="newest">Newest first</option>
+                  </select>
+                </label>
               </div>
               <details className="fit-guide">
                 <summary>What do the fit labels mean?</summary>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
+                <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
                 <dl>
                   <div><dt>Strong fit</dt><dd>Substantial overlap with your profile and preferences.</dd></div>
                   <div><dt>Possible fit</dt><dd>Some overlap, with requirements to review.</dd></div>
@@ -440,6 +457,17 @@ export default function Dashboard() {
                               </span>
                             )}
                           </div>
+                          {(match?.uncertainty.length || match?.gaps.length) ? (
+                            <div className="job-review-note">
+                              <strong>{match?.category === "excluded" ? "Search rule to review" : "Review before applying"}</strong>
+                              <p>{match?.uncertainty[0] ?? match?.gaps[0]}</p>
+                              <button className="text-button" onClick={() => setSection(match?.category === "excluded" ? "settings" : "profile")}>
+                                {match?.category === "excluded" ? "Review search settings" : "Review profile"}
+                              </button>
+                            </div>
+                          ) : null}
+                          <details className="fit-evidence">
+                          <summary>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
                           <div className="match-reasons">
                             <div>
                               <strong>Why it fits</strong>
@@ -464,17 +492,9 @@ export default function Dashboard() {
                               </ul>
                             </div>
                           </div>
+                          </details>
                         </div>
                         <div className="job-actions">
-                          {(match?.uncertainty.length || match?.gaps.length) ? (
-                            <div className="job-review-note">
-                              <strong>{match?.category === "excluded" ? "Search rule to review" : "Review before applying"}</strong>
-                              <p>{match?.uncertainty[0] ?? match?.gaps[0]}</p>
-                              <button className="text-button" onClick={() => setSection(match?.category === "excluded" ? "settings" : "profile")}>
-                                {match?.category === "excluded" ? "Review search settings" : "Review profile"}
-                              </button>
-                            </div>
-                          ) : null}
                           <div className="small-actions">
                             <button
                               onClick={() =>
@@ -556,8 +576,9 @@ export default function Dashboard() {
                 ) : (
                   <div className="empty">
                     <Search size={28} />
-                    <h3>No jobs in this view</h3>
-                    <p>Try another filter or import a job link.</p>
+                    <h3>{search.trim() ? "No roles match your search" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : "Try another filter or import a job link."}</p>
+                    {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
                   </div>
                 )}
               </div>
