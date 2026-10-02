@@ -379,7 +379,7 @@ export interface PdfResumeArtifact {
     layoutHash?: string;
     unchangedAnchorTolerancePt: 0.5;
     pageSizeTolerancePt: 0.5;
-    visualMaskPaddingPt: 2.5;
+    visualMaskPaddingPt: 1.5 | 2.5;
     visualOutsideEditTolerance: 0;
     visualOutsideEditDifferenceAt144Dpi: 0;
     visualOutsideEditDifferenceAt300Dpi: 0;

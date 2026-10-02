@@ -10,6 +10,7 @@ import { sourceJobHash, sourceProfileHash } from "@/lib/resume-source-draft";
 import { saveDemoOriginalResume } from "@/lib/original-resume";
 import { hashJson } from "@/lib/crypto";
 import { bytesHash, readArtifact } from "@/lib/resume-artifacts";
+import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import type { ApplicationPacket, ResumeSourcePlan } from "@/lib/types";
 
@@ -49,8 +50,10 @@ async function pdfPacket() {
   const editedClaim = claims.find((claim) => claim.anchorId === bullet.id)!;
   editedClaim.text = revisedText;
   const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+  const sourceLayout = pdfSourceLayout(source)!;
   const plan: ResumeSourcePlan = { version: 1, format: "pdf", sourceHash: source.sourceHash, representationVersion: source.version,
     profileHash: sourceProfileHash(profile), factsHash, settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(job),
+    sourceLayout, layoutHash: sourceLayoutHash(sourceLayout),
     claims, edits: [{ anchorId: bullet.id, text: revisedText, factIds: editedClaim.factIds }],
     grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
       findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported" as const, reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) },
@@ -68,7 +71,7 @@ it("saves, previews, downloads, and compares the exact PDFBox artifact and basel
   if (packet.resumeArtifact?.format === "pdf") cleanups.push(`.data/application-files/${packet.resumeArtifact.baseline.storageKey}`, `.data/application-files/${packet.resumeArtifact.source.storageKey}`);
 
   expect(packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "pdf", pageCount: 1, renderer: "apache-pdfbox", rendererVersion: "3.0.8",
-    layoutPolicy: "pdf-single-column-one-page-v1", layoutValidation: { outcome: "passed", pageWidthPt: 612, pageHeightPt: 792,
+    layoutPolicy: "pdf-page-regions-v2", layoutValidation: { outcome: "passed", pageWidthPt: 612, pageHeightPt: 792, visualMaskPaddingPt: 2.5,
       visualOutsideEditDifferenceAt144Dpi: 0, visualOutsideEditDifferenceAt300Dpi: 0 } } });
   if (packet.resumeArtifact?.format !== "pdf") throw new Error("The PDF résumé artifact metadata is missing.");
   const finalFile = packet.files!.find((file) => file.kind === "resume")!;

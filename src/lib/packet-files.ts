@@ -5,28 +5,74 @@ import { coverLetterPdf, resumePdf } from "@/lib/resume-pdf";
 import { fitResume } from "@/lib/latex-compiler";
 import { resumeFactIds, resumeFields, resumeInputHash, validateResumeDocument } from "@/lib/resume-document";
 import { bytesHash, readArtifact, saveArtifact } from "@/lib/resume-artifacts";
-import { renderDocxResume } from "@/lib/docx-renderer";
-import { renderPdfResume } from "@/lib/pdf-renderer";
+import { renderDocxResume, type RenderedDocxResume } from "@/lib/docx-renderer";
+import { renderPdfResume, type RenderedPdfResume } from "@/lib/pdf-renderer";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
-import type { ApplicationPacket, PacketFile, Profile, ResumeSourcePlan } from "@/lib/types";
+import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
+import type { ApplicationPacket, PacketFile, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
 export type PacketFileKind = PacketFile["kind"];
+type ValidatedSourceRender =
+  | { plan: ResumeSourcePlan; format: "pdf"; rendered: RenderedPdfResume }
+  | { plan: ResumeSourcePlan; format: "docx"; rendered: RenderedDocxResume };
 const legacyResumeInputHash = (profile: Profile, packet: ApplicationPacket) => hashJson({ kind: "resume", profile: { name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills }, lines: packet.resumeLines });
 const coverInputHash = (packet: ApplicationPacket) => hashJson({ kind: "cover-letter", text: packet.coverLetter });
 const docxLayoutPolicy = "docx-single-column-one-page-v1" as const;
 const pdfLayoutPolicy = "pdf-single-column-one-page-v1" as const;
+const docxPageLayoutPolicy = "docx-page-regions-v2" as const;
+const pdfPageLayoutPolicy = "pdf-page-regions-v2" as const;
+function policyFor(plan: ResumeSourcePlan) {
+  return plan.format === "pdf" ? pdfPolicyFor(plan) : docxPolicyFor(plan);
+}
+function pdfPolicyFor(plan: ResumeSourcePlan): typeof pdfLayoutPolicy | typeof pdfPageLayoutPolicy { return plan.layoutHash && plan.sourceLayout ? pdfPageLayoutPolicy : pdfLayoutPolicy; }
+function docxPolicyFor(plan: ResumeSourcePlan): typeof docxLayoutPolicy | typeof docxPageLayoutPolicy { return plan.layoutHash && plan.sourceLayout ? docxPageLayoutPolicy : docxLayoutPolicy; }
 function docxInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-docx", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: docxLayoutPolicy, claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function pdfInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-pdf", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: pdfLayoutPolicy, claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function sourceInputHash(plan: ResumeSourcePlan) { return plan.format === "pdf" ? pdfInputHash(plan) : docxInputHash(plan); }
 const filename = (kind: PacketFileKind) => kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
+function pageRecords(pages: ResumePageValidation[] | undefined) {
+  return pages?.map((page) => {
+    const record = { ...page };
+    delete record.visualOutsideEditDifference;
+    delete record.visualOutsideEditDifferenceAt144Dpi;
+    delete record.visualOutsideEditDifferenceAt300Dpi;
+    return record;
+  });
+}
+function sourceLayoutMatchesPlan(plan: ResumeSourcePlan, source: NonNullable<Profile["resumeSourceDocument"]>) {
+  if (!plan.sourceLayout && !plan.layoutHash) return !(source.format === "pdf" && source.version === 2);
+  if (!plan.sourceLayout || !plan.layoutHash || sourceLayoutHash(plan.sourceLayout) !== plan.layoutHash) return false;
+  const { pages, anchors } = plan.sourceLayout;
+  if (pages.length < 1 || pages.length > 8 || pages.some((page, index) => page.pageNumber !== index + 1 || page.rotation !== 0 ||
+    !Number.isFinite(page.widthPt) || page.widthPt <= 0 || !Number.isFinite(page.heightPt) || page.heightPt <= 0 || page.regions.length < 1 ||
+    new Set(page.regions.map((region) => region.id)).size !== page.regions.length || page.regions.some((region) => region.pageIndex !== index || !region.id ||
+      !Number.isFinite(region.bounds.left) || !Number.isFinite(region.bounds.top) || !Number.isFinite(region.bounds.right) || !Number.isFinite(region.bounds.bottom) ||
+      region.bounds.right <= region.bounds.left || region.bounds.bottom <= region.bounds.top))) return false;
+  const sourceAnchors = new Map(source.anchors.map((anchor) => [anchor.id, anchor]));
+  if (anchors.some((anchor) => !sourceAnchors.has(anchor.anchorId) || !Number.isInteger(anchor.pageNumber) || anchor.pageNumber < 1 || anchor.pageNumber > pages.length ||
+    !pages[anchor.pageNumber - 1].regions.some((region) => region.id === anchor.regionId) || !Number.isInteger(anchor.readingOrder) || anchor.readingOrder < 0 ||
+    ![anchor.boundsPt.left, anchor.boundsPt.top, anchor.boundsPt.right, anchor.boundsPt.bottom].every(Number.isFinite) ||
+    anchor.boundsPt.right <= anchor.boundsPt.left || anchor.boundsPt.bottom <= anchor.boundsPt.top)) return false;
+  if (source.anchors.some((anchor) => {
+    const mapped = anchors.filter((layout) => layout.anchorId === anchor.id);
+    const repeated = "repeatedRole" in anchor && (anchor.repeatedRole === "header" || anchor.repeatedRole === "footer");
+    return anchor.candidateClaim ? mapped.length !== 1 : repeated ? mapped.length !== pages.length : mapped.length !== 1;
+  })) return false;
+  if (new Set(anchors.map((anchor) => `${anchor.anchorId}:${anchor.pageNumber}`)).size !== anchors.length) return false;
+  if (source.format === "pdf") {
+    const expected = pdfSourceLayout(source);
+    return Boolean(expected && sourceLayoutHash(expected) === plan.layoutHash);
+  }
+  return true;
+}
 async function render(profile: Profile, packet: ApplicationPacket, kind: PacketFileKind) {
   if (kind === "resume") return resumePdf(profile, packet);
   if (!packet.coverLetter) throw new Error("This packet has no cover letter.");
@@ -47,7 +93,10 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
     const claimIds = new Set(plan.claims.map((claim) => claim.anchorId));
     const editMap = new Map(plan.edits.map((edit) => [edit.anchorId, edit]));
     const verified = new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+    const expectedPageCount = plan.sourceLayout?.pages.length ?? 1;
+    const expectedLayoutPolicy = policyFor(plan);
     if (plan.version !== 1 || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
+      !sourceLayoutMatchesPlan(plan, source) ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
       !/^[a-f0-9]{64}$/.test(plan.jobHash) || candidateAnchors.length !== plan.claims.length || candidateAnchors.some((anchor) => !claimIds.has(anchor.id)) ||
       plan.claims.some((claim) => {
@@ -65,11 +114,13 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
     const inputHash = pdfInputHash(plan);
     const valid = (key: string | undefined, hash: string, size: number) => /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 && key === `${profile.id}/${inputHash}/${hash}.pdf`;
     const layout = artifact.layoutValidation;
-    if (artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.renderer !== "apache-pdfbox" || artifact.rendererVersion !== "3.0.8" ||
+    const artifactPages = pageRecords(layout?.pages);
+    if (artifact.inputHash !== inputHash || artifact.pageCount !== expectedPageCount || artifact.renderer !== "apache-pdfbox" || artifact.rendererVersion !== "3.0.8" ||
       !/^\d+(?:\.\d+){1,3}(?:\+\S+)?$/.test(artifact.javaVersion) || !/^(?:linux|darwin)-(?:x64|arm64)$/.test(artifact.runtimeArchitecture) ||
       artifact.sourceHash !== source.sourceHash || artifact.representationVersion !== source.version || artifact.profileHash !== plan.profileHash || artifact.factsHash !== plan.factsHash ||
-      artifact.settingsHash !== plan.settingsHash || artifact.jobHash !== plan.jobHash || artifact.layoutPolicy !== pdfLayoutPolicy || layout?.outcome !== "passed" ||
-      layout.unchangedAnchorTolerancePt !== 0.5 || layout.pageSizeTolerancePt !== 0.5 || layout.visualMaskPaddingPt !== 1.5 || layout.visualOutsideEditTolerance !== 0 ||
+      artifact.settingsHash !== plan.settingsHash || artifact.jobHash !== plan.jobHash || artifact.layoutPolicy !== expectedLayoutPolicy || layout?.outcome !== "passed" ||
+      artifact.layoutValidation.layoutHash !== plan.layoutHash || (plan.sourceLayout && hashJson(artifactPages) !== hashJson(plan.sourceLayout.pages)) ||
+      layout.unchangedAnchorTolerancePt !== 0.5 || layout.pageSizeTolerancePt !== 0.5 || layout.visualMaskPaddingPt !== (plan.layoutHash && plan.sourceLayout ? 2.5 : 1.5) || layout.visualOutsideEditTolerance !== 0 ||
       layout.visualOutsideEditDifferenceAt144Dpi !== 0 || layout.visualOutsideEditDifferenceAt300Dpi !== 0 || !/^[a-f0-9]{64}$/.test(layout.baselinePdfHash) ||
       !Number.isFinite(layout.pageWidthPt) || layout.pageWidthPt <= 0 || !Number.isFinite(layout.pageHeightPt) || layout.pageHeightPt <= 0 ||
       artifact.baseline.mimeType !== "application/pdf" || artifact.baseline.sha256 !== layout.baselinePdfHash || artifact.baseline.sha256 !== source.sourceHash ||
@@ -108,9 +159,15 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
       /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 && key === `${profile.id}/${inputHash}/${hash}.${extension}`;
     const expectedRendererVersion = process.env.DOCX_RENDERER_VERSION ?? "26.8.0.3";
     const rendererName = expectedRendererVersion.includes("alpha") ? "LibreOfficeDev" : "LibreOffice";
-    if (artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.renderer !== `libreoffice-${expectedRendererVersion}` || !artifact.rendererVersion.startsWith(`${rendererName} ${expectedRendererVersion}`) || artifact.sourceHash !== source.sourceHash ||
+    const expectedPageCount = plan.sourceLayout?.pages.length ?? 1;
+    const expectedLayoutPolicy = docxPolicyFor(plan);
+    const artifactPages = pageRecords(artifact.layoutValidation.pages);
+    const pageValidationMatches = plan.sourceLayout
+      ? artifact.layoutValidation.layoutHash === plan.layoutHash && hashJson(artifactPages) === hashJson(plan.sourceLayout.pages) && artifact.layoutValidation.pages?.length === expectedPageCount
+      : artifact.layoutValidation.layoutHash === undefined && artifact.layoutValidation.pages === undefined;
+    if (artifact.inputHash !== inputHash || artifact.pageCount !== expectedPageCount || artifact.renderer !== `libreoffice-${expectedRendererVersion}` || !artifact.rendererVersion.startsWith(`${rendererName} ${expectedRendererVersion}`) || artifact.sourceHash !== source.sourceHash ||
       artifact.representationVersion !== source.version || artifact.profileHash !== plan.profileHash || artifact.factsHash !== plan.factsHash || artifact.settingsHash !== plan.settingsHash ||
-      artifact.jobHash !== plan.jobHash || artifact.layoutPolicy !== docxLayoutPolicy || artifact.layoutValidation?.outcome !== "passed" ||
+      artifact.jobHash !== plan.jobHash || artifact.layoutPolicy !== expectedLayoutPolicy || !sourceLayoutMatchesPlan(plan, source) || !pageValidationMatches || artifact.layoutValidation?.outcome !== "passed" ||
       artifact.layoutValidation?.unchangedAnchorTolerancePt !== 1 || artifact.layoutValidation?.pageSizeTolerancePt !== 0.5 || artifact.layoutValidation?.visualOutsideEditTolerance !== 0.001 ||
       !Number.isFinite(artifact.layoutValidation?.visualOutsideEditDifference) || artifact.layoutValidation.visualOutsideEditDifference < 0 || artifact.layoutValidation.visualOutsideEditDifference > 0.001 ||
       !/^[a-f0-9]{64}$/.test(artifact.layoutValidation?.baselinePdfHash ?? "") || artifact.layoutValidation.pageWidthPt <= 0 || artifact.layoutValidation.pageHeightPt <= 0 ||
@@ -131,7 +188,7 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
   if (artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.compiler !== "tectonic-0.17.0" ||
     !valid(file.storageKey, file.sha256, file.size, "pdf") || !valid(artifact.source.storageKey, artifact.source.sha256, artifact.source.size, "tex")) throw new Error("The saved resume does not match its reviewed content. Rebuild the packet.");
 }
-export async function withPacketFiles(profile: Profile, original: ApplicationPacket, deadline = Date.now() + 90_000, beforeRender?: () => Promise<void>): Promise<ApplicationPacket> {
+export async function withPacketFiles(profile: Profile, original: ApplicationPacket, deadline = Date.now() + 90_000, beforeRender?: () => Promise<void>, validatedSourceRender?: ValidatedSourceRender): Promise<ApplicationPacket> {
   let packet = { ...original };
   let resumeFile: PacketFile;
   if (packet.resumeMode === "original") {
@@ -178,7 +235,7 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
       validateResumeArtifactInputs(profile, packet);
       if (plan.format === "pdf") {
         let rendered: Awaited<ReturnType<typeof renderPdfResume>>;
-        try { rendered = await renderPdfResume(profile, plan, deadline, beforeRender); }
+        try { rendered = validatedSourceRender?.plan === plan && validatedSourceRender.format === "pdf" ? validatedSourceRender.rendered : await renderPdfResume(profile, plan, deadline, beforeRender); }
         catch (error) {
           if (error instanceof ResumeDraftError) throw error;
           throw new ResumeDraftError({ version: 1, outcome: "technical_failure", writerAttempts: plan.grounding.writerAttempts, checkerAttempts: plan.grounding.checkerAttempts,
@@ -188,17 +245,17 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
         const pdf = await saveArtifact(profile.id, inputHash, rendered.pdf, "pdf");
         const baseline = await saveArtifact(profile.id, inputHash, rendered.baselinePdf, "pdf");
         const source = await saveArtifact(profile.id, inputHash, rendered.sourcePdf, "pdf");
-        packet = { ...packet, resumeArtifact: { format: "pdf", inputHash, pageCount: 1, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion,
+        packet = { ...packet, resumeArtifact: { format: "pdf", inputHash, pageCount: rendered.pages.length, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion,
           javaVersion: rendered.javaVersion, runtimeArchitecture: rendered.runtimeArchitecture, sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
-          profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash, layoutPolicy: pdfLayoutPolicy,
+          profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash, layoutPolicy: pdfPolicyFor(plan),
           layoutValidation: { outcome: "passed", pageWidthPt: rendered.pageWidthPt, pageHeightPt: rendered.pageHeightPt, unchangedAnchorTolerancePt: 0.5,
-            pageSizeTolerancePt: 0.5, visualMaskPaddingPt: 1.5, visualOutsideEditTolerance: 0, visualOutsideEditDifferenceAt144Dpi: 0,
-            visualOutsideEditDifferenceAt300Dpi: 0, baselinePdfHash: rendered.baselinePdfHash },
+            pageSizeTolerancePt: 0.5, visualMaskPaddingPt: 2.5, visualOutsideEditTolerance: 0, visualOutsideEditDifferenceAt144Dpi: 0,
+            visualOutsideEditDifferenceAt300Dpi: 0, baselinePdfHash: rendered.baselinePdfHash, pages: rendered.pages, ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}) },
           baseline: { ...baseline, mimeType: "application/pdf" }, source: { ...source, mimeType: "application/pdf" } } };
         resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", ...pdf, factIds: [...new Set(plan.claims.flatMap((claim) => claim.factIds))] };
       } else {
         let rendered: Awaited<ReturnType<typeof renderDocxResume>>;
-        try { rendered = await renderDocxResume(profile, plan, deadline, beforeRender); }
+        try { rendered = validatedSourceRender?.plan === plan && validatedSourceRender.format === "docx" ? validatedSourceRender.rendered : await renderDocxResume(profile, plan, deadline, beforeRender); }
         catch (error) {
           if (error instanceof ResumeDraftError) throw error;
           throw new ResumeDraftError({ version: 1, outcome: "technical_failure", writerAttempts: plan.grounding.writerAttempts, checkerAttempts: plan.grounding.checkerAttempts,
@@ -208,9 +265,9 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
         const pdf = await saveArtifact(profile.id, inputHash, rendered.pdf, "pdf");
         const baseline = await saveArtifact(profile.id, inputHash, rendered.baselinePdf, "pdf");
         const source = await saveArtifact(profile.id, inputHash, rendered.docx, "docx");
-        packet = { ...packet, resumeArtifact: { format: "docx", inputHash, pageCount: 1, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion, sourceHash: plan.sourceHash,
+        packet = { ...packet, resumeArtifact: { format: "docx", inputHash, pageCount: rendered.pageCount, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion, sourceHash: plan.sourceHash,
           representationVersion: plan.representationVersion, profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-          layoutPolicy: docxLayoutPolicy, layoutValidation: { outcome: "passed", pageWidthPt: rendered.pageWidthPt, pageHeightPt: rendered.pageHeightPt,
+          layoutPolicy: docxPolicyFor(plan), layoutValidation: { outcome: "passed", pageWidthPt: rendered.pageWidthPt, pageHeightPt: rendered.pageHeightPt, pages: rendered.pages, layoutHash: rendered.layoutHash,
             unchangedAnchorTolerancePt: 1, pageSizeTolerancePt: 0.5, visualOutsideEditTolerance: 0.001, visualOutsideEditDifference: rendered.visualOutsideEditDifference, baselinePdfHash: rendered.baselinePdfHash },
           baseline: { ...baseline, mimeType: "application/pdf" },
           source: { ...source, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" } } };
@@ -298,14 +355,19 @@ export async function reviewedResumeComparisonFiles(profile: Profile, packet: Ap
     /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 &&
     key === `${profile.id}/${inputHash}/${hash}.${extension}`;
   const layout = artifact.layoutValidation;
+  const expectedPageCount = plan.sourceLayout?.pages.length ?? 1;
+  const expectedLayoutPolicy = policyFor(plan);
+  const artifactPages = pageRecords(layout?.pages);
   const layoutMatches = artifact.format === "pdf"
     ? artifact.renderer === "apache-pdfbox" && artifact.rendererVersion === "3.0.8" && /^\d+(?:\.\d+){1,3}(?:\+\S+)?$/.test(artifact.javaVersion) &&
-      /^(?:linux|darwin)-(?:x64|arm64)$/.test(artifact.runtimeArchitecture) && artifact.layoutPolicy === pdfLayoutPolicy && layout?.outcome === "passed" &&
-      layout.unchangedAnchorTolerancePt === 0.5 && layout.pageSizeTolerancePt === 0.5 && layout.visualMaskPaddingPt === 1.5 && layout.visualOutsideEditTolerance === 0 &&
+      /^(?:linux|darwin)-(?:x64|arm64)$/.test(artifact.runtimeArchitecture) && artifact.layoutPolicy === expectedLayoutPolicy && layout?.outcome === "passed" &&
+      layout.unchangedAnchorTolerancePt === 0.5 && layout.pageSizeTolerancePt === 0.5 && layout.visualMaskPaddingPt === (plan.layoutHash && plan.sourceLayout ? 2.5 : 1.5) && layout.visualOutsideEditTolerance === 0 &&
       layout.visualOutsideEditDifferenceAt144Dpi === 0 && layout.visualOutsideEditDifferenceAt300Dpi === 0 &&
+      layout.layoutHash === plan.layoutHash && (!plan.sourceLayout || hashJson(artifactPages) === hashJson(plan.sourceLayout.pages)) &&
       Number.isFinite(layout.pageWidthPt) && layout.pageWidthPt > 0 && Number.isFinite(layout.pageHeightPt) && layout.pageHeightPt > 0
-    : artifact.renderer === `libreoffice-${process.env.DOCX_RENDERER_VERSION ?? "26.8.0.3"}` && artifact.layoutPolicy === docxLayoutPolicy && layout?.outcome === "passed" &&
+    : artifact.renderer === `libreoffice-${process.env.DOCX_RENDERER_VERSION ?? "26.8.0.3"}` && artifact.layoutPolicy === expectedLayoutPolicy && layout?.outcome === "passed" &&
       layout.unchangedAnchorTolerancePt === 1 && layout.pageSizeTolerancePt === 0.5 && layout.visualOutsideEditTolerance === 0.001 &&
+      layout.layoutHash === plan.layoutHash && (plan.sourceLayout ? layout.pages?.length === expectedPageCount && hashJson(artifactPages) === hashJson(plan.sourceLayout.pages) : layout.pages === undefined && layout.layoutHash === undefined) &&
       Number.isFinite(layout.visualOutsideEditDifference) && layout.visualOutsideEditDifference >= 0 && layout.visualOutsideEditDifference <= 0.001 &&
       Number.isFinite(layout.pageWidthPt) && layout.pageWidthPt > 0 && Number.isFinite(layout.pageHeightPt) && layout.pageHeightPt > 0;
   const sourceExtension = plan.format === "pdf" ? "pdf" : "docx";
@@ -314,7 +376,7 @@ export async function reviewedResumeComparisonFiles(profile: Profile, packet: Ap
     artifact.source.size === artifact.baseline.size && layout?.baselinePdfHash === plan.sourceHash);
   if (plan.version !== 1 || !/^[a-f0-9]{64}$/.test(plan.sourceHash) || !/^[a-f0-9]{64}$/.test(plan.profileHash) ||
       !/^[a-f0-9]{64}$/.test(plan.factsHash) || !/^[a-f0-9]{64}$/.test(plan.settingsHash) || !/^[a-f0-9]{64}$/.test(plan.jobHash) ||
-      artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.sourceHash !== plan.sourceHash || artifact.representationVersion !== plan.representationVersion ||
+      artifact.inputHash !== inputHash || artifact.pageCount !== expectedPageCount || artifact.sourceHash !== plan.sourceHash || artifact.representationVersion !== plan.representationVersion ||
       artifact.profileHash !== plan.profileHash || artifact.factsHash !== plan.factsHash || artifact.settingsHash !== plan.settingsHash || artifact.jobHash !== plan.jobHash ||
       !layoutMatches || !sourceConsistent || !/^[a-f0-9]{64}$/.test(layout.baselinePdfHash) ||
       artifact.baseline.mimeType !== "application/pdf" || artifact.baseline.sha256 !== layout.baselinePdfHash ||
@@ -333,6 +395,7 @@ export async function reviewedResumeComparisonFiles(profile: Profile, packet: Ap
   const source = profile.resumeSourceDocument;
   if (!source || source.support.status !== "candidate" || source.sourceHash !== plan.sourceHash || profile.resumeSource?.sha256 !== plan.sourceHash) staleReasons.push("source");
   if (!source || source.format !== plan.format || source.version !== plan.representationVersion) staleReasons.push("representation");
+  if (!source || !sourceLayoutMatchesPlan(plan, source)) staleReasons.push("layout");
   const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
   if (factsHash !== plan.factsHash) staleReasons.push("facts");
   if (hashJson(profile.automationSettings ?? null) !== plan.settingsHash) staleReasons.push("settings");
@@ -371,6 +434,7 @@ function validateResumeArtifactInputs(profile: Profile, packet: ApplicationPacke
   if (!plan || !source || source.format !== plan.format || source.support.status !== "candidate" || plan.profileHash !== sourceProfileHash(profile) || plan.sourceHash !== source.sourceHash ||
     plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) ||
     plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error(`The inspected ${formatLabel} source is unavailable or stale. Re-upload and confirm it before tailoring.`);
+  if (!sourceLayoutMatchesPlan(plan, source)) throw new Error(`The inspected ${formatLabel} page/region map is missing, stale, or invalid. Re-upload and confirm it before tailoring.`);
   const claims = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
   const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
   if (claims.size !== anchors.length || anchors.some((anchor) => !claims.has(anchor.id)) ||
