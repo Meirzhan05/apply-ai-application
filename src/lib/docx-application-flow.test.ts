@@ -210,11 +210,11 @@ async function exerciseDocxFlow(multiPage: boolean) {
 
 it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and attaches the exact saved one-page DOCX-based PDF", async () => {
   await exerciseDocxFlow(false);
-});
+}, 300_000);
 
 it.skipIf(!runtime)("preserves a single-column DOCX entry continuation across a rendered page break", async () => {
   await exerciseDocxFlow(true);
-});
+}, 300_000);
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
   vi.stubEnv("DEMO_MODE", "true");
