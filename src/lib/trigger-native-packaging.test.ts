@@ -3,8 +3,14 @@ import { build } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import type { BuildContext, BuildExtension } from "@trigger.dev/core/v3/build";
 import config from "../../trigger.config";
+import docxRuntimeLock from "../../runtime/docx-runtime.lock.json";
 
 describe("Trigger native package deployment", () => {
+  it("pins LibreOffice's English UI resources for headless conversion", () => {
+    const series = docxRuntimeLock.libreOfficeVersion.split(".").slice(0, 2).join(".");
+    expect(docxRuntimeLock.libreOfficePackageNames).toContain(`libobasis${series}-en-us`);
+  });
+
   it("keeps Canvas external so the Linux image can select its matching optional binary", async () => {
     const result = await build({
       stdin: {

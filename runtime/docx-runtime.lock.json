@@ -1,6 +1,7 @@
 {
   "libreOfficeVersion": "26.8.0.3",
   "sofficeRelativePath": "opt/libreoffice26.8/program/soffice",
+  "uiLanguageRegistryRelativePath": "opt/libreoffice26.8/share/registry/Langpack-en-US.xcd",
   "fontconfigRelativePath": "fonts.conf",
   "libreOfficePackageNames": [
     "libreoffice26.8-writer",
@@ -8,6 +9,7 @@
     "libobasis26.8-writer",
     "libreoffice26.8-ure",
     "libobasis26.8-core",
+    "libobasis26.8-en-us",
     "libobasis26.8-images",
     "libobasis26.8-ooofonts"
   ],
