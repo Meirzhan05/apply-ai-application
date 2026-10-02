@@ -1,7 +1,6 @@
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
-import type { Browser, Locator, Page } from "playwright-core";
 import { initialDemoState } from "@/lib/demo-data";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
@@ -16,70 +15,22 @@ import { hashJson } from "@/lib/crypto";
 import { bytesHash, saveArtifact } from "@/lib/resume-artifacts";
 import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
-import { prepareBrowser } from "@/lib/browser-runner";
+import { cancelBrowser, prepareBrowser } from "@/lib/browser-runner";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
-import type { Application, FormFieldSnapshot, ResumeSourcePlan } from "@/lib/types";
+import type { Application, ResumeSourcePlan } from "@/lib/types";
+import { createControlledEmployerBrowser } from "@/lib/test-support/controlled-employer-browser";
 
-const transport = vi.hoisted(() => ({ launch: vi.fn(), uploaded: [] as Array<{ name: string; mimeType: string; buffer: Buffer }> }));
+const transport = vi.hoisted(() => ({ launch: vi.fn() }));
 vi.mock("playwright-core", () => ({ chromium: { launch: transport.launch, connectOverCDP: vi.fn() } }));
 
 const cleanupPaths: string[] = [];
-let uploadedField: FormFieldSnapshot & { optionLabel: string; stableIdentifier: boolean; autocomplete: boolean };
+const activeApplications: Application[] = [];
+const formHtml = "<title>Apply</title><main><h1>Application</h1><form action=\"https://jobs.example/apply\" method=\"post\" enctype=\"multipart/form-data\">" +
+  "<label for=\"resume\">Resume</label><input id=\"resume\" name=\"resume\" type=\"file\" accept=\".pdf,application/pdf\" required>" +
+  "<button type=\"submit\">Submit application</button></form></main>";
 
-function fakePage(application: Application) {
-  uploadedField = { label: "Resume", identifier: "resume", kind: "file", value: "", required: false, checked: false, valid: true,
-    options: [], fileHashes: [], editable: true, optionLabel: "Resume", stableIdentifier: true, autocomplete: false };
-  let structureReads = 0;
-  const inputLocator = {
-    getAttribute: async (name: string) => name === "accept" ? "application/pdf" : null,
-    setInputFiles: async (file: { name: string; mimeType: string; buffer: Buffer }) => {
-      transport.uploaded.push({ ...file, buffer: Buffer.from(file.buffer) });
-      uploadedField = { ...uploadedField, value: file.name, fileHashes: [`${file.name}:${file.buffer.length}:${bytesHash(file.buffer)}`] };
-    },
-    fill: vi.fn(),
-    check: vi.fn(),
-    selectOption: vi.fn(),
-    setChecked: vi.fn(),
-    isVisible: async () => true,
-    isEnabled: async () => true,
-    first() { return this; },
-    nth() { return this; },
-    count: async () => 0,
-    evaluateAll: async () => [],
-    evaluate: async () => undefined,
-  };
-  const locator = (selector: string) => ({
-    evaluateAll: async () => {
-      if (selector === "input, textarea, select") {
-        if (structureReads++ < 6) return "input:resume:file";
-        return [{ ...uploadedField, index: 0 }];
-      }
-      return [];
-    },
-    count: async () => 0,
-    nth: () => inputLocator,
-    first: () => inputLocator,
-    getAttribute: inputLocator.getAttribute,
-    setInputFiles: inputLocator.setInputFiles,
-    isVisible: inputLocator.isVisible,
-    isEnabled: inputLocator.isEnabled,
-    evaluate: inputLocator.evaluate,
-    fill: inputLocator.fill,
-  });
-  const submitButton = { count: async () => 0, first: () => inputLocator, nth: () => inputLocator, evaluateAll: async () => [], evaluate: async () => undefined };
-  const context = { route: vi.fn(), pages: () => [page], newPage: async () => page };
-  const page = {
-    context: () => context,
-    url: () => application.jobSnapshot!.applyUrl,
-    goto: vi.fn().mockResolvedValue(undefined),
-    waitForFunction: vi.fn().mockResolvedValue(undefined),
-    waitForTimeout: async (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
-    locator,
-    getByRole: () => submitButton,
-    screenshot: async () => Buffer.from("test screenshot"),
-  };
-  const browser = { newPage: async () => page, close: vi.fn().mockResolvedValue(undefined) };
-  return { browser: browser as unknown as Browser, page: page as unknown as Page, inputLocator: inputLocator as unknown as Locator };
+function controlledBrowser(url: string) {
+  return createControlledEmployerBrowser({ targetUrl: url, html: formHtml });
 }
 
 async function sourcePacket() {
@@ -240,7 +191,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   transport.launch.mockReset();
-  transport.uploaded = [];
+});
+
+afterEach(async () => {
+  for (const application of activeApplications.splice(0)) await cancelBrowser(application);
 });
 
 afterAll(async () => {
@@ -249,75 +203,79 @@ afterAll(async () => {
 }, 30_000);
 
 it("passes the real source-aware browser guard and uploads the exact saved artifact bytes", async () => {
-  transport.uploaded = [];
   const fixture = await sourcePacket();
   const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  activeApplications.push(app);
   cleanupPaths.push(`.data/screenshots/${app.id}.png`);
   setPacket(fixture.state, app, fixture.packet);
   approveFill(app, fixture.profile.id, app.packetHash!, fixture.job.applyUrl);
   validatePacket(fixture.profile, app.packet!);
   const expected = await reviewedPacketFile(fixture.profile, app.packet!, "resume");
-  const page = fakePage(app);
-  transport.launch.mockResolvedValue(page.browser);
+  const employer = controlledBrowser(fixture.job.applyUrl);
+  transport.launch.mockResolvedValue(employer.browser);
 
   const result = await prepareBrowser(app, fixture.job, fixture.profile);
 
   expect(result.sessionId).toBe(`local-${app.id}`);
-  expect(transport.uploaded).toHaveLength(1);
-  expect(transport.uploaded[0]).toMatchObject({ name: expected.filename, mimeType: expected.mimeType });
-  expect(transport.uploaded[0].buffer).toEqual(expected.bytes);
-  expect(uploadedField.fileHashes).toEqual([`${expected.filename}:${expected.bytes.length}:${bytesHash(expected.bytes)}`]);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: expected.filename, mimeType: expected.mimeType, size: expected.bytes.length, sha256: bytesHash(expected.bytes) });
+  expect(attached[0].bytes).toEqual(expected.bytes);
+  expect(employer.observations().submitClicks).toBe(0);
+  expect(employer.observations().formSubmissions).toBe(0);
   expect(transport.launch).toHaveBeenCalledOnce();
 }, 180_000);
 
 it("rejects a schema-3 packet without its current fill approval before opening browser transport", async () => {
-  transport.uploaded = [];
   const fixture = await sourcePacket();
   const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  activeApplications.push(app);
   cleanupPaths.push(`.data/screenshots/${app.id}.png`);
   setPacket(fixture.state, app, fixture.packet);
   app.status = "authorized_to_fill";
-  const page = fakePage(app);
-  transport.launch.mockResolvedValue(page.browser);
+  const employer = controlledBrowser(fixture.job.applyUrl);
+  transport.launch.mockResolvedValue(employer.browser);
 
   await expect(prepareBrowser(app, fixture.job, fixture.profile)).rejects.toThrow(/requires fill approval/i);
   expect(transport.launch).not.toHaveBeenCalled();
-  expect(transport.uploaded).toEqual([]);
+  expect(await employer.attachedFiles()).toEqual([]);
 }, 180_000);
 
 it("keeps a valid legacy v1 source artifact readable and attaches its exact saved bytes under the 1.5pt policy", async () => {
-  transport.uploaded = [];
   const fixture = await legacyV1Packet();
   const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  activeApplications.push(app);
   cleanupPaths.push(`.data/screenshots/${app.id}.png`);
   setPacket(fixture.state, app, fixture.packet);
   approveFill(app, fixture.profile.id, app.packetHash!, fixture.job.applyUrl);
   validatePacket(fixture.profile, app.packet!);
   const expected = await reviewedPacketFile(fixture.profile, app.packet!, "resume");
-  const page = fakePage(app);
-  transport.launch.mockResolvedValue(page.browser);
+  const employer = controlledBrowser(fixture.job.applyUrl);
+  transport.launch.mockResolvedValue(employer.browser);
 
   await prepareBrowser(app, fixture.job, fixture.profile);
 
   expect(app.packet?.resumeArtifact).toMatchObject({ format: "pdf", representationVersion: 1, layoutPolicy: "pdf-single-column-one-page-v1",
     layoutValidation: { visualMaskPaddingPt: 1.5 } });
   expect(expected.bytes).toEqual(fixture.originalBytes);
-  expect(transport.uploaded).toHaveLength(1);
-  expect(transport.uploaded[0].buffer).toEqual(expected.bytes);
-  expect(uploadedField.fileHashes).toEqual([`${expected.filename}:${expected.bytes.length}:${bytesHash(expected.bytes)}`]);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: expected.filename, mimeType: expected.mimeType, sha256: bytesHash(expected.bytes) });
+  expect(attached[0].bytes).toEqual(expected.bytes);
+  expect(employer.observations().submitClicks).toBe(0);
 }, 180_000);
 
 it("keeps a legacy one-page DOCX artifact readable and attaches its exact saved bytes without new page-map metadata", async () => {
-  transport.uploaded = [];
   const fixture = await legacyDocxV1Packet();
   const app = selectApplication(fixture.state, fixture.job.id, fixture.profile.id);
+  activeApplications.push(app);
   cleanupPaths.push(`.data/screenshots/${app.id}.png`);
   setPacket(fixture.state, app, fixture.packet);
   approveFill(app, fixture.profile.id, app.packetHash!, fixture.job.applyUrl);
   validatePacket(fixture.profile, app.packet!);
   const expected = await reviewedPacketFile(fixture.profile, app.packet!, "resume");
-  const page = fakePage(app);
-  transport.launch.mockResolvedValue(page.browser);
+  const employer = controlledBrowser(fixture.job.applyUrl);
+  transport.launch.mockResolvedValue(employer.browser);
 
   await prepareBrowser(app, fixture.job, fixture.profile);
 
@@ -326,7 +284,9 @@ it("keeps a legacy one-page DOCX artifact readable and attaches its exact saved 
   expect(app.packet?.resumeSourcePlan?.sourceLayout).toBeUndefined();
   expect(app.packet?.resumeSourcePlan?.layoutHash).toBeUndefined();
   expect(expected.bytes).toEqual(fixture.baselinePdf);
-  expect(transport.uploaded).toHaveLength(1);
-  expect(transport.uploaded[0].buffer).toEqual(expected.bytes);
-  expect(uploadedField.fileHashes).toEqual([`${expected.filename}:${expected.bytes.length}:${bytesHash(expected.bytes)}`]);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: expected.filename, mimeType: expected.mimeType, sha256: bytesHash(expected.bytes) });
+  expect(attached[0].bytes).toEqual(expected.bytes);
+  expect(employer.observations().submitClicks).toBe(0);
 }, 180_000);

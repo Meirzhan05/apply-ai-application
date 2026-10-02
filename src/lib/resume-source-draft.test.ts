@@ -7,6 +7,7 @@ import { parsePdfSource } from "@/lib/pdf-source";
 import { draftResumeSourcePlan } from "@/lib/resume-source-draft";
 import { pdfSourceLayout } from "@/lib/resume-source-layout";
 import { renderPdfSourceBytes } from "@/lib/pdf-renderer";
+import { PdfRendererDiagnosticError } from "@/lib/pdf-renderer-diagnostics";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
@@ -106,18 +107,26 @@ it("does not start writer or checker calls after the shared deadline expires", a
   expect(mocks.parse).not.toHaveBeenCalled();
 });
 
-it("preserves the PDF worker's actionable embedded-font failure without exposing arbitrary renderer errors", async () => {
+it("does not trust renderer prose without a typed safe diagnostic", async () => {
   const { profile, job, source } = await pdfFixture();
   mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
   const actionable = "The source font for an edited résumé bullet is not embedded as a supported outline font. Embed that font or upload an editable DOCX; no substitute font will be used.";
 
   await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error(actionable); }))
-    .rejects.toMatchObject({ message: actionable, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+    .rejects.toMatchObject({ message: "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.", diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
 
   mocks.parse.mockReset();
   mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
   await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error("font failure with private runtime path /tmp/private-key"); }))
     .rejects.toMatchObject({ message: "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.", diagnostics: { technicalFailure: "renderer" } });
+});
+
+it("forwards a recognized typed PDF renderer diagnostic", async () => {
+  const { profile, job, source } = await pdfFixture();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+  const actionable = new PdfRendererDiagnosticError("unembedded_font");
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw actionable; }))
+    .rejects.toMatchObject({ message: actionable.message, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
 });
 
 it("shows an actionable font diagnostic for a real PDFBox missing-glyph failure", async () => {
@@ -152,7 +161,7 @@ it("shows the source font limitation for a real PDFBox unembedded-font rejection
     return undefined;
   }).catch((error: unknown) => error);
 
-  expect(rendererFailure).toMatchObject({ name: "PdfWorkerDiagnosticError", diagnosticCode: "unembedded_font" });
+  expect(rendererFailure).toMatchObject({ name: "PdfRendererDiagnosticError", diagnosticCode: "unembedded_font" });
   expect(failure).toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
   expect((failure as Error).message).toMatch(/source font .* not embedded/i);
   expect((failure as Error).message).not.toMatch(/Command failed:|PdfSourceRewrite|\/tmp\//);
