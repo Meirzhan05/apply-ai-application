@@ -16,6 +16,7 @@ vi.mock("@/lib/packet-files", () => ({ reviewedResumeComparisonFiles: mocks.comp
 vi.mock("@/lib/original-resume", () => ({ originalResumeManifest: mocks.original, readOriginalResume: mocks.readOriginal }));
 
 import { initialDemoState } from "@/lib/demo-data";
+import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { sourceJobHash } from "@/lib/resume-source-draft";
 import { selectApplication } from "@/lib/workflow";
 import { GET } from "@/app/api/applications/[id]/files/[kind]/route";
@@ -56,6 +57,26 @@ async function get(applicationId: string, kind: string, query = "") {
   return GET(new Request(`https://apply.example/api/applications/${applicationId}/files/${kind}${query}`), { params: Promise.resolve({ id: applicationId, kind }) });
 }
 
+function unverifiedImportedFixture() {
+  const fixture = setup(false);
+  const job = fixture.state.jobs.find((item) => item.id === fixture.application.jobId)!;
+  Object.assign(job, {
+    source: "imported" as const,
+    sourceId: "synthetic-imported-posting",
+    sourceLabel: "Private synthetic posting",
+    url: "https://example.invalid/synthetic-role",
+    applyUrl: "https://example.invalid/synthetic-role",
+    importUrl: "https://example.invalid/synthetic-role",
+    description: "Synthetic description used only before verification.",
+    requirements: ["synthetic requirement"],
+    importCheck: undefined,
+  });
+  fixture.application.jobSnapshot = structuredClone(job);
+  const draftInput = importedAutonomyJob(fixture.application, job);
+  fixture.application.packet!.resumeSourcePlan!.jobHash = sourceJobHash(draftInput);
+  return { ...fixture, job };
+}
+
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe("owner-scoped résumé comparison files", () => {
@@ -90,6 +111,42 @@ describe("owner-scoped résumé comparison files", () => {
     const stalePreview = await get(application.id, "resume-tailored-preview");
     expect(stalePreview.status).toBe(409);
     expect(await stalePreview.text()).toContain("Rebuild the résumé");
+  });
+
+  it("keeps fresh source comparisons available for an unchanged unverified imported job", async () => {
+    const { application } = unverifiedImportedFixture();
+
+    const status = await get(application.id, "resume-comparison-status");
+    const preview = await get(application.id, "resume-tailored-preview");
+
+    expect(await status.json()).toMatchObject({ stale: false });
+    expect(preview.status).toBe(200);
+    expect(Buffer.from(await preview.arrayBuffer())).toEqual(tailoredBytes);
+  });
+
+  it("stales comparisons when normalized imported-job title or trust inputs change", async () => {
+    const titleFixture = unverifiedImportedFixture();
+    const originalPacket = structuredClone(titleFixture.application.packet);
+    titleFixture.job.title = "Changed synthetic role title";
+
+    const titleStatus = await get(titleFixture.application.id, "resume-comparison-status");
+    const titlePreview = await get(titleFixture.application.id, "resume-tailored-preview");
+
+    expect(await titleStatus.json()).toMatchObject({ stale: true });
+    expect(titlePreview.status).toBe(409);
+    expect(titleFixture.application.packet).toEqual(originalPacket);
+
+    const trustFixture = unverifiedImportedFixture();
+    trustFixture.job.url = "https://boards.greenhouse.io/synthetic/jobs/123";
+    trustFixture.job.applyUrl = trustFixture.job.url;
+    trustFixture.job.importUrl = trustFixture.job.url;
+    trustFixture.job.importCheck = { status: "verified", checkedAt: "2026-10-01T00:00:00.000Z" };
+
+    const trustStatus = await get(trustFixture.application.id, "resume-comparison-status");
+    const trustPreview = await get(trustFixture.application.id, "resume-tailored-preview");
+
+    expect(await trustStatus.json()).toMatchObject({ stale: true });
+    expect(trustPreview.status).toBe(409);
   });
 
   it("downloads the exact original upload when it still matches the saved source", async () => {

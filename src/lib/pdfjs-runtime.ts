@@ -7,7 +7,11 @@ const resolveModule = createRequire(import.meta.url);
 
 function workerPath() {
   const configuredPath = process.env.PDFJS_WORKER_PATH;
-  if (configuredPath) return isAbsolute(configuredPath) ? configuredPath : resolve(process.cwd(), configuredPath);
+  if (configuredPath) {
+    if (isAbsolute(configuredPath)) return configuredPath;
+    // Keep relative runtime overrides without making Turbopack trace the entire project.
+    return resolve(/*turbopackIgnore: true*/ process.cwd(), configuredPath);
+  }
   try { return resolveModule.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"); }
   catch { return resolve(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"); }
 }

@@ -1,5 +1,6 @@
 import { currentUserId, loadState } from "@/lib/repository";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
+import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { validatePacket } from "@/lib/drafting";
 import { historicalPacketFile, reviewedPacketFile, reviewedResumeComparisonFiles, reviewedResumeSource } from "@/lib/packet-files";
 import { sourceJobHash } from "@/lib/resume-source-draft";
@@ -44,8 +45,9 @@ export async function GET(
     if (comparisonKinds.has(kind)) {
       if (!app.packet) return new Response("Not found", { status: 404 });
       const comparison = await reviewedResumeComparisonFiles(state.profile, app.packet);
-      const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
-      const jobIsStale = !job || app.packet.resumeSourcePlan?.jobHash !== sourceJobHash(job);
+      const currentJob = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
+      const normalizedJob = currentJob ? importedAutonomyJob(app, currentJob) : undefined;
+      const jobIsStale = !normalizedJob || app.packet.resumeSourcePlan?.jobHash !== sourceJobHash(normalizedJob);
       const staleReasons = [...new Set([...(comparison.staleReasons ?? []), ...(jobIsStale ? ["job"] : [])])];
       const stale = comparison.stale || jobIsStale;
       if (kind === "resume-comparison-status") {
