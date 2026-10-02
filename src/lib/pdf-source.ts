@@ -11,6 +11,7 @@ const MAX_SUPPORTED_PAGES = 8;
 const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|languages|certifications|awards|leadership|volunteering|summary|profile)$/i;
 const claimStart = /^(?:built|created|developed|designed|analyzed|managed|led|implemented|conducted|researched|improved|worked|used|organized|launched|integrated|shipped|collaborated|architected|published|authored|supported|automated|reduced|increased|delivered|maintained|deployed|contributed)\b/i;
 const bulletText = /^[•●▪◦‣*\-–]\s*/;
+const standaloneBulletMarker = (text: string) => /^[•●▪◦‣]$/.test(clean(text));
 const imageOperations = new Set<number>([
   OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject,
   OPS.paintImageMaskXObjectGroup, OPS.paintSolidColorImageMask, OPS.paintImageXObjectRepeat,
@@ -31,6 +32,7 @@ type ParsedPage = { pageNumber: number; width: number; height: number; rotation:
 function repeatFurniture(pages: ParsedPage[]) {
   const candidates = new Map<string, Array<{ page: ParsedPage; item: LocatedItem; role: "header" | "footer" }>>();
   for (const page of pages) for (const item of page.items) {
+    if (standaloneBulletMarker(item.rawSourceText)) continue;
     const role = item.top <= 54 ? "header" : item.bottom >= page.height - 54 ? "footer" : undefined;
     if (!role) continue;
     const text = clean(item.rawSourceText).toLocaleLowerCase();
@@ -184,6 +186,30 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
       }, [] as number[]));
     }
 
+    const separateBulletBySpanId = new Map<string, string>();
+    const separateBulletMarkerSpans = new Set<string>();
+    const mappedBulletBodySpans = new Set<string>();
+    for (const page of parsedPages) for (const marker of page.items.filter((item) => standaloneBulletMarker(item.rawSourceText))) {
+      const markerSpanId = `${page.pageNumber}:${marker.index}`;
+      const markerRegionId = regionBySpanId.get(markerSpanId);
+      const candidates = markerRegionId ? page.items.flatMap((item) => {
+        const spanId = `${page.pageNumber}:${item.index}`;
+        const gap = item.left - marker.right;
+        if (spanId === markerSpanId || standaloneBulletMarker(item.rawSourceText) || repeated.has(spanId) || mappedBulletBodySpans.has(spanId) ||
+          regionBySpanId.get(spanId) !== markerRegionId || gap < 0 || gap > 36 || Math.abs(item.baseline - marker.baseline) > 1.5) return [];
+        return [{ item, spanId, gap }];
+      }).sort((left, right) => left.gap - right.gap) : [];
+      const first = candidates[0];
+      const second = candidates[1];
+      if (!first || (second && second.gap - first.gap < 2) || first.item.rawSourceText.match(bulletText)) {
+        reason = appendReason(reason, "A visible list marker could not be mapped unambiguously to text in the same page and column. Reformat that list or upload an editable DOCX.");
+        continue;
+      }
+      separateBulletBySpanId.set(first.spanId, marker.rawSourceText);
+      separateBulletMarkerSpans.add(markerSpanId);
+      mappedBulletBodySpans.add(first.spanId);
+    }
+
     let activeSection = { id: `pdf-section-${hashJson([sourceHash, "default"]).slice(0, 12)}`, heading: "Résumé", anchorIds: [] as string[] };
     sections.push(activeSection);
     let currentEntryId = `pdf-entry-${hashJson([sourceHash, "preamble"]).slice(0, 12)}`;
@@ -196,6 +222,8 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
       let seenBodyItem = false;
       const ordered = page.orderedItems ?? page.items;
       for (const item of ordered) {
+        const spanId = `${page.pageNumber}:${item.index}`;
+        if (separateBulletMarkerSpans.has(spanId)) continue;
         const rawText = item.rawSourceText;
         const text = clean(rawText);
         if (!text) { pageItems.push(rawText); continue; }
@@ -203,7 +231,8 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
         const regionId = regionBySpanId.get(`${page.pageNumber}:${item.index}`);
         const columnId = pageLayouts[page.pageNumber - 1]?.regions.find((region) => region.id === regionId)?.columnId;
         const prefix = rawText.match(bulletText)?.[0] ?? "";
-        const isBullet = Boolean(prefix);
+        const separateBulletMarker = separateBulletBySpanId.get(spanId);
+        const isBullet = Boolean(prefix) || separateBulletMarker !== undefined;
         const continuedEntryAtPageStart = page.pageNumber > 1 && !seenBodyItem && isBullet && entryHasBullet;
         if (!repeatedRole && columnId && currentColumnId && columnId !== currentColumnId && !continuedEntryAtPageStart) {
           currentEntryId = `pdf-entry-${hashJson([sourceHash, page.pageNumber, regionId, "region-preamble"]).slice(0, 12)}`;
@@ -241,7 +270,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
           operatorFingerprint, fontResourceName: item.item.fontName, styleHash: hashJson(styleFingerprint), font: { family: item.fontFamily || "unknown", sizePt: fontSize, bold: item.bold, italic: item.italic } };
         anchors.push(anchor);
         activeSection.anchorIds.push(id);
-        pageItems.push(rawText);
+        pageItems.push(`${separateBulletMarker ?? ""}${separateBulletMarker ? " " : ""}${rawText}`);
         if (!repeatedRole && isBullet) entryHasBullet = true;
         if (candidateClaim && isBullet && !editable) reason = appendReason(reason, `The résumé bullet “${claimText.slice(0, 80)}” is too long or its source font/layout cannot be mapped safely. Upload an editable DOCX.`);
         readingOrder++;
