@@ -27,8 +27,9 @@ const pdfText = {
   ] as const,
   pageTwoLeft: [
     ["• Improved keyboard navigation coverage to 96%.", 9, false, 730],
-    ["Aster Systems — Software Intern, 2021–2022", 10, true, 692],
-    ["• Automated 18 release checks.", 9, false, 674],
+    ["Work Experience", 12, true, 704],
+    ["Aster Systems — Software Intern, 2021–2022", 10, true, 680],
+    ["• Automated 18 release checks.", 9, false, 662],
   ] as const,
   pageTwoRight: [
     ["Languages", 12, true, 730],
@@ -103,6 +104,7 @@ function docxBody(pages: 1 | 2) {
     body.push(breakParagraph("page"));
     body.push(
       paragraph("Improved keyboard navigation coverage to 96%.", { bullet: true }),
+      paragraph("Work Experience", { heading: true }),
       paragraph("Aster Systems — Software Intern, 2021–2022"),
       paragraph("Automated 18 release checks.", { bullet: true }),
       breakParagraph("column"),

@@ -105,6 +105,18 @@ it("blocks an anchor whose position is equally compatible with either column", (
   expect(result).toMatchObject({ status: "blocked", reason: expect.stringMatching(/between the detected columns/i), regions: [], assignments: [] });
 });
 
+it("blocks an anchor tied between columns even when both distances are within tolerance", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "left-one", pageIndex: 0, bounds: { left: 50, top: 40, right: 105, bottom: 54 } },
+    { id: "left-two", pageIndex: 0, bounds: { left: 50, top: 62, right: 105, bottom: 76 } },
+    { id: "right-one", pageIndex: 0, bounds: { left: 170, top: 40, right: 225, bottom: 54 } },
+    { id: "right-two", pageIndex: 0, bounds: { left: 170, top: 62, right: 225, bottom: 76 } },
+    { id: "ambiguous", pageIndex: 0, bounds: { left: 110, top: 84, right: 160, bottom: 98 } },
+  ]);
+
+  expect(result).toMatchObject({ status: "blocked", reason: expect.stringMatching(/between the detected columns/i), regions: [], assignments: [] });
+});
+
 it("blocks three substantial text columns instead of flattening them into one", () => {
   const result = groupPositionedSpansIntoRegions([
     { id: "left-one", pageIndex: 0, bounds: { left: 50, top: 40, right: 175, bottom: 54 } },
