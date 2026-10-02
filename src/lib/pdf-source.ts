@@ -1,4 +1,4 @@
-import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument, OPS } from "@/lib/pdfjs-runtime";
 import { bytesHash } from "@/lib/resume-artifacts";
 import { hashJson } from "@/lib/crypto";
 import type { PdfSourceAnchor, PdfSourceRepresentation } from "@/lib/types";
