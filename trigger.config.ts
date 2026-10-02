@@ -13,6 +13,9 @@ const docxEnv = {
   DOCX_RENDERER_VERSION: docxRuntimeLock.libreOfficeVersion,
   FONTCONFIG_FILE: `${docxRoot}/${docxRuntimeLock.fontconfigRelativePath}`,
 };
+const cachedDocxRuntimeArchivePath = ".data/docx-runtime-cache/LibreOffice_26.8.0_Linux_x86-64_deb.tar.gz";
+const useCachedDocxRuntimeArchive = process.env.TRIGGER_DOCX_RUNTIME_USE_CACHED_ARCHIVE === "1";
+const docxRuntimeInstallCommand = `${useCachedDocxRuntimeArchive ? `DOCX_RUNTIME_ARCHIVE_PATH=${cachedDocxRuntimeArchivePath} ` : ""}node ./scripts/setup-docx-runtime.mjs ${docxRoot}`;
 const pdfRoot = "/app/pdf-runtime";
 const pdfEnv = { PDFBOX_RUNTIME_ROOT: pdfRoot, PDFBOX_JAVA_BIN: `${pdfRoot}/jre/bin/java` };
 const pdfjsWorkerPath = "/app/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs";
@@ -54,6 +57,7 @@ export default defineConfig({
     external: ["playwright-core", "@napi-rs/canvas"],
     extensions: [
       additionalFiles({ files: ["./src/assets/fonts/*", "./scripts/setup-latex.mjs", "./scripts/setup-docx-runtime.mjs", "./runtime/docx-runtime.lock.json",
+        ...(useCachedDocxRuntimeArchive ? [cachedDocxRuntimeArchivePath] : []),
         "./scripts/setup-pdf-runtime.mjs", "./runtime/pdf/PdfSourceRewrite.java", "./runtime/pdf/pdf-runtime.lock.json",
         "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"] }),
       aptGet({ packages: docxRuntimeLock.systemPackages }),
@@ -72,7 +76,7 @@ export default defineConfig({
           context.addLayer({
             id: "docx-runtime",
             image: { pkgs: docxRuntimeLock.systemPackages },
-            commands: [`node ./scripts/setup-docx-runtime.mjs ${docxRoot}`],
+            commands: [docxRuntimeInstallCommand],
             deploy: { env: docxEnv },
           });
         },
