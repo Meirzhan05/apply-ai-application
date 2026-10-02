@@ -123,13 +123,16 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-it("uploads, confirms, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
-  const sourceBytes = await createPdfSourceFixture();
+it("uploads, confirms unbulleted qualifications, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
+  const sourceBytes = await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL" });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
   expect(upload.status, await upload.clone().text()).toBe(200);
   expect(fixture.state!.profile.resumeSourceDocument?.text).toContain("Built a search index for 1,200 users.");
+  const skillsAnchor = fixture.state!.profile.resumeSourceDocument!.anchors.find((anchor) => anchor.text === "Python, scikit-learn, and PostgreSQL")!;
+  expect(skillsAnchor.candidateClaim).toBe(true);
+  expect(fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === skillsAnchor.id)).toMatchObject({ verified: false, source: "resume" });
 
   const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });

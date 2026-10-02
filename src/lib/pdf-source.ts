@@ -3,13 +3,12 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { hashJson } from "@/lib/crypto";
 import { groupPositionedSpansIntoRegions } from "@/lib/source-regions";
 import { readablePdfFontFamily } from "@/lib/pdf-fonts";
+import { isResumeSectionHeading, isSubstantiveSourceText } from "@/lib/resume-source-semantics";
 import type { PdfSourceAnchor, PdfSourceRepresentation, ResumeSourcePageLayout } from "@/lib/types";
 
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_TEXT = 20_000;
 const MAX_SUPPORTED_PAGES = 8;
-const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|languages|certifications|awards|leadership|volunteering|summary|profile)$/i;
-const claimStart = /^(?:built|created|developed|designed|analyzed|managed|led|implemented|conducted|researched|improved|worked|used|organized|launched|integrated|shipped|collaborated|architected|published|authored|supported|automated|reduced|increased|delivered|maintained|deployed|contributed)\b/i;
 const bulletText = /^[•●▪◦‣*\-–]\s*/;
 const standaloneBulletMarker = (text: string) => /^[•●▪◦‣]$/.test(clean(text));
 const imageOperations = new Set<number>([
@@ -242,7 +241,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
         if (!repeatedRole && columnId) currentColumnId = columnId;
         if (!repeatedRole) seenBodyItem = true;
         const claimText = clean(rawText.slice(prefix.length));
-        const isHeading = sectionNames.test(claimText.replace(/:$/, ""));
+        const isHeading = isResumeSectionHeading(claimText);
         if (!repeatedRole && isHeading) {
           activeSection = { id: `pdf-section-${hashJson([sourceHash, page.pageNumber, item.index, claimText]).slice(0, 12)}`, heading: claimText.replace(/:$/, ""), anchorIds: [] };
           sections.push(activeSection);
@@ -257,7 +256,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
           currentEntryHeading = `${currentEntryHeading} · ${claimText}`;
         }
         const kind: PdfSourceAnchor["kind"] = repeatedRole ? "paragraph" : isHeading ? "section" : isBullet ? "bullet" : "entry";
-        const candidateClaim = !repeatedRole && (isBullet || claimStart.test(claimText) || /\b(?:19|20)\d{2}\b|\b(?:expected|in preparation|submitted|prototype|coursework)\b/i.test(claimText));
+        const candidateClaim = isSubstantiveSourceText(claimText, { isSection: isHeading, firstBodyParagraph: Boolean(repeatedRole) || (page.pageNumber === 1 && readingOrder === 0) });
         const editable = !repeatedRole && isBullet && !item.style.vertical && item.item.str.length <= 500 && Boolean(item.fontFamily) && item.item.height > 0 && item.item.width > 0 && item.left >= -0.5 && item.top >= -0.5 && item.right <= page.width + 0.5 && item.bottom <= page.height + 0.5;
         const styleFingerprint = { fontName: item.resolvedFontName, fontFamily: item.fontFamily, size: round(Math.hypot(item.item.transform[0], item.item.transform[1])), bounds: [round(item.left), round(item.top), round(item.right), round(item.bottom)] };
         const operatorFingerprint = hashJson({ sourceHash, pageNumber: page.pageNumber, index: item.index, text: rawText, styleFingerprint });

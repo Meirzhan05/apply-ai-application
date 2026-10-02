@@ -317,6 +317,8 @@ export interface ResumeSourceClaim {
 }
 export interface ResumeSourcePlan {
   version: 1;
+  /** New plans re-evaluate substantive source content instead of trusting older parser flags. */
+  evidencePolicyVersion?: 2;
   format: "docx" | "pdf";
   sourceHash: string;
   representationVersion: 1 | 2;

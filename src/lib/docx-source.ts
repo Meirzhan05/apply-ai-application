@@ -3,14 +3,13 @@ import JSZip from "jszip";
 import { DOMParser, XMLSerializer, type Node as XmlDomNode, type Element as XmlDomElement, type Document as XmlDomDocument } from "@xmldom/xmldom";
 import type { DocxSourceAnchor, DocxSourceRepresentation, ResumeSourceEdit, VerifiedFact } from "@/lib/types";
 import { bytesHash } from "@/lib/resume-artifacts";
+import { isResumeSectionHeading, isSubstantiveSourceText } from "@/lib/resume-source-semantics";
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const MAX_SOURCE_TEXT = 20_000;
 const MAX_PACKAGE_BYTES = 24 * 1024 * 1024;
 const MAX_PARTS = 300;
 const FONT_ALLOWLIST = new Set(["noto sans"]);
-const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|certifications|awards|leadership|volunteering|summary|profile)$/i;
-const claimStart = /^(?:built|created|developed|designed|analyzed|managed|led|implemented|conducted|researched|improved|worked|used|organized|launched|integrated|shipped|collaborated|architected|published|authored|supported|automated|reduced|increased|delivered|maintained|deployed|contributed)\b/i;
 const bulletText = /^[•●▪◦‣*\-–]\s*/;
 
 type XmlNode = XmlDomNode & { localName?: string; namespaceURI?: string; textContent: string };
@@ -85,12 +84,12 @@ async function partXml(zip: JSZip, part: string): Promise<XmlDomDocument> {
   return parseXml(await file.async("string"), part);
 }
 
-async function supplementaryTextParts(zip: JSZip): Promise<Array<{ partName: string; paragraphs: string[] }>> {
+async function supplementaryTextParts(zip: JSZip, styles: ReturnType<typeof styleCatalog>): Promise<Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties }> }>> {
   const parts = Object.values(zip.files).filter((file) => !file.dir && /^word\/(?:header|footer|footnotes|endnotes|comments)[^/]*\.xml$/i.test(file.name));
-  const result: Array<{ partName: string; paragraphs: string[] }> = [];
+  const result: Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties }> }> = [];
   for (const part of parts) {
     const document = parseXml(await part.async("string"), part.name);
-    const paragraphs = descendants(document, "p").map(paragraphText).filter((text) => text.trim());
+    const paragraphs = descendants(document, "p").map((paragraph) => ({ text: paragraphText(paragraph), font: inheritedFontProperties(paragraph, styles) })).filter(({ text }) => text.trim());
     if (paragraphs.length) result.push({ partName: part.name, paragraphs });
   }
   return result;
@@ -232,7 +231,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
   const styles = styleCatalog(await partXml(zip, "word/styles.xml"));
   const body = descendants(document, "body")[0];
   if (!body) throw new Error("This DOCX has no document body. Save it again as a standard .docx file.");
-  const supplementary = await supplementaryTextParts(zip);
+  const supplementary = await supplementaryTextParts(zip, styles);
   let reason = await unsafePackageReason(zip) ?? hasUnsupportedStructure(document);
   const sectionProperties = descendants(document, "sectPr")[0];
   const pageSize = first(sectionProperties!, "pgSz");
@@ -262,6 +261,12 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
     if (!font.fontSizePt) reason ??= `Paragraph “${text.slice(0, 80)}” has no explicit font size that can be checked.`;
     if (font.italic) reason ??= `Paragraph “${text.slice(0, 80)}” uses an italic font face that is not included in the pinned source font set.`;
   }
+  for (const part of supplementary) for (const { font } of part.paragraphs) {
+    if (font.fontFamily) fontFamilies.add(font.fontFamily);
+    else reason ??= `Repeated ${/\/header/i.test(part.partName) ? "header" : "footer"} text has no explicit font declaration; upload a DOCX with declared source fonts.`;
+    if (!font.fontSizePt) reason ??= `Repeated ${/\/header/i.test(part.partName) ? "header" : "footer"} text has no explicit font size that can be checked.`;
+    if (font.italic) reason ??= `Repeated ${/\/header/i.test(part.partName) ? "header" : "footer"} text uses an italic font face that is not included in the pinned source font set.`;
+  }
   const unsupportedFonts = [...fontFamilies].filter((family) => !FONT_ALLOWLIST.has(family.toLowerCase()));
   if (unsupportedFonts.length) reason ??= `This DOCX uses ${unsupportedFonts.join(", ")}, which is not in the pinned supported font set (Noto Sans). Choose an available source font or upload another DOCX; the source font will not be substituted.`;
   const sections: DocxSourceRepresentation["sections"] = [];
@@ -272,7 +277,8 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
   let entryHasBullet = false;
   for (let paragraphIndex = 0; paragraphIndex < records.length; paragraphIndex++) {
     const record = records[paragraphIndex];
-    const isHeading = sectionNames.test(record.text.replace(/:$/, "")) || /^heading\s*\d/i.test(record.pStyle ?? "");
+    const semanticHeading = isResumeSectionHeading(record.text);
+    const isHeading = semanticHeading || /^heading\s*\d/i.test(record.pStyle ?? "");
     const isBullet = record.bullet;
     if (isHeading) {
       activeSection = { id: `section-${hash(`${sourceHash}:${paragraphIndex}:${record.text}`).slice(0, 12)}`, heading: record.text.replace(/:$/, ""), anchorIds: [] };
@@ -288,7 +294,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
       currentEntryHeading = `${currentEntryHeading} · ${record.text}`;
     }
     const kind: DocxSourceAnchor["kind"] = isHeading ? "section" : isBullet ? "bullet" : "entry";
-    const candidateClaim = isBullet || claimStart.test(record.text) || /\b(?:19|20)\d{2}\b|\b(?:expected|in preparation|submitted|prototype|coursework)\b/i.test(record.text);
+    const candidateClaim = isSubstantiveSourceText(record.text, { isSection: semanticHeading, firstBodyParagraph: paragraphIndex === 0 });
     const editable = kind === "bullet" && safeTextNodeShape(record.paragraph) && record.font.fontFamily !== undefined && record.font.fontSizePt !== undefined;
     if (candidateClaim && kind === "bullet" && !editable) reason ??= `Claim paragraph “${record.text.slice(0, 80)}” uses mixed or complex inline formatting. Use one uniform text style per bullet or upload another DOCX.`;
     const paragraphFingerprint = styleHash(record.paragraph);
@@ -308,12 +314,13 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
     const section = { id: sectionId, heading: part.partName, anchorIds: [] as string[] };
     sections.push(section);
     for (let paragraphIndex = 0; paragraphIndex < part.paragraphs.length; paragraphIndex++) {
-      const text = part.paragraphs[paragraphIndex];
+      const { text, font } = part.paragraphs[paragraphIndex];
       const entryId = `entry-${hash(`${sectionId}:${paragraphIndex}`).slice(0, 12)}`;
       const id = `docx:${sourceHash.slice(0, 12)}:${hash(`${part.partName}:${paragraphIndex}:${text}`).slice(0, 24)}`;
       const repeatedRole = /\/header[^/]*\.xml$/i.test(part.partName) ? "header" as const : /\/footer[^/]*\.xml$/i.test(part.partName) ? "footer" as const : undefined;
       anchors.push({ id, partName: part.partName, paragraphIndex, text, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
-        kind: "paragraph", candidateClaim: false, editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false } });
+        kind: "paragraph", candidateClaim: isSubstantiveSourceText(text, { firstBodyParagraph: paragraphIndex === 0 }), editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false },
+        ...(font.fontFamily && font.fontSizePt ? { font: { family: font.fontFamily, sizePt: font.fontSizePt, bold: font.bold, italic: font.italic, ...(font.color ? { color: font.color } : {}) } } : {}) });
       section.anchorIds.push(id);
       textLines.push(text);
     }

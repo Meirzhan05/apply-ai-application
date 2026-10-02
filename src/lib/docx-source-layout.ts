@@ -188,7 +188,7 @@ export function mapDocxSourceToPdfLayout(source: DocxSourceRepresentation, basel
     const expected = roleOf(anchor) ? positioned.pages.length : 1;
     return mappedIds.has(anchor.id) && anchorsPerId.get(anchor.id) === expected;
   });
-  if (!complete || mappedIds.size !== source.anchors.length || source.anchors.filter((anchor) => anchor.candidateClaim).some((anchor) => anchorsPerId.get(anchor.id) !== 1))
+  if (!complete || mappedIds.size !== source.anchors.length || source.anchors.filter((anchor) => anchor.candidateClaim && !roleOf(anchor)).some((anchor) => anchorsPerId.get(anchor.id) !== 1))
     return blocked("The DOCX baseline did not produce one unique page and region for every source anchor. Upload a simpler source document.");
   return { status: "supported", layout: { version: 1, pages: positioned.pages.map(copyPage).sort((left, right) => left.pageNumber - right.pageNumber), anchors } };
 }

@@ -134,9 +134,9 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-async function exerciseDocxFlow(multiPage: boolean) {
+async function exerciseDocxFlow(multiPage: boolean, headerText?: string) {
   vi.stubEnv("SOFFICE_BIN", runtime!.binary); vi.stubEnv("DOCX_RENDERER_VERSION", runtime!.version);
-  const sourceBytes = await createDocxSourceFixture({ multiPage });
+  const sourceBytes = await createDocxSourceFixture({ multiPage, ...(headerText ? { headerText } : {}) });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
@@ -149,6 +149,8 @@ async function exerciseDocxFlow(multiPage: boolean) {
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  const storedDegree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
+  storedDegree.candidateClaim = false;
 
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
@@ -159,6 +161,9 @@ async function exerciseDocxFlow(multiPage: boolean) {
   const draftHandoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
   expect(draftHandoff.payload.applicationId).toBe(application.id);
   await runDraft(draftHandoff.payload);
+  const writerRequest = fixture.parse.mock.calls.map((call) => call[0]).find((request) => request.text?.format?.name === "anchored_resume_edit_plan");
+  const writerSource = JSON.parse(writerRequest!.input[1].content).sourceDocument.anchors as Array<{ id: string; candidateClaim: boolean }>;
+  expect(writerSource.find((anchor) => anchor.id === storedDegree.id)?.candidateClaim).toBe(true);
   expect(application.status).toBe("draft_review");
   expect(application.packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "docx", pageCount: multiPage ? 2 : 1, layoutValidation: { outcome: "passed" } } });
   expect(application.packet?.resumeSourcePlan?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
@@ -215,6 +220,43 @@ it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and
 it.skipIf(!runtime)("preserves a single-column DOCX entry continuation across a rendered page break", async () => {
   await exerciseDocxFlow(true);
 }, 300_000);
+
+it.skipIf(!runtime)("preserves a linked repeating DOCX header with its declared Noto Sans font", async () => {
+  await exerciseDocxFlow(false, "Confidential candidate record");
+}, 300_000);
+
+it("blocks a new draft when an older stored source flag hides an unconfirmed unbulleted degree", async () => {
+  const sourceBytes = await createDocxSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(200);
+  const source = fixture.state!.profile.resumeSourceDocument!;
+  const degree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
+  const degreeFact = fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === degree.id)!;
+  expect(degreeFact).toMatchObject({ verified: false, source: "resume" });
+
+  const otherConfirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id).map((fact) => ({ ...fact, verified: true }));
+  const confirmed = await publicAction("onboarding", { facts: otherConfirmedFacts });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  fixture.state!.profile.facts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id);
+  degree.candidateClaim = false;
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const requested = await publicAction("draft", { applicationId: application.id });
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
+
+  await expect(runDraft(handoff.payload)).rejects.toMatchObject({ diagnostics: {
+    outcome: "needs_information",
+    requiredInformation: expect.arrayContaining([expect.stringContaining("State University — B.S. Computer Science")]),
+  } });
+  expect(fixture.parse).not.toHaveBeenCalled();
+  expect(application.packet).toBeUndefined();
+});
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
   vi.stubEnv("DEMO_MODE", "true");

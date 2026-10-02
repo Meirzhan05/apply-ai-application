@@ -52,6 +52,18 @@ it("keeps complete long source text but blocks bullets too long to safely edit",
   expect(source.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/extends outside|too long|source font\/layout/i) });
 });
 
+it("suggests confirmation for unbulleted skills and recognizes shared Languages section semantics", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL", languages: true }));
+  const skills = source.anchors.find((anchor) => anchor.text === "Python, scikit-learn, and PostgreSQL");
+  const heading = source.anchors.find((anchor) => anchor.text === "Languages");
+  const proficiency = source.anchors.find((anchor) => anchor.text === "English and Spanish");
+
+  expect(skills?.candidateClaim).toBe(true);
+  expect(heading).toMatchObject({ kind: "section", candidateClaim: false });
+  expect(proficiency?.candidateClaim).toBe(true);
+  expect(suggestPdfFacts(source).map((suggestion) => suggestion.sourceAnchorId)).toEqual(expect.arrayContaining([skills!.id, proficiency!.id]));
+});
+
 it("pairs a separate typographic bullet marker with the nearest same-line text in its original column", async () => {
   const source = await parsePdfSource(await createPdfSourceFixture({ separateBulletMarker: "same-column" }));
   const bullet = source.anchors.find((anchor) => anchor.text === "Built a search index for 1,200 users.");

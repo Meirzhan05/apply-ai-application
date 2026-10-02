@@ -7,6 +7,7 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { readOriginalResume } from "@/lib/original-resume";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
 import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
+import { planEvidencePolicy, sourceEvidenceAnchors, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { PdfSourceAnchor, PdfSourceRepresentation, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
 const execute = promisify(execFileCallback);
@@ -128,7 +129,7 @@ function sourcePages(source: PdfSourceRepresentation, metrics: ReturnType<typeof
 function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
   if (source.format !== "pdf" || source.support.status !== "candidate" || source.sourceHash !== bytesHash(sourceBytes) || plan.format !== "pdf" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version)
     throw new Error(source.support.reason ?? "The inspected PDF source is missing, stale, or unsupported. Upload and inspect the original again.");
-  const expectedClaims = new Set(source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => anchor.id));
+  const expectedClaims = new Set(sourceEvidenceAnchors(source, planEvidencePolicy(plan)).map((anchor) => anchor.id));
   const actualClaims = new Set(plan.claims.map((claim) => claim.anchorId));
   if (expectedClaims.size !== actualClaims.size || [...expectedClaims].some((id) => !actualClaims.has(id))) throw new Error("The PDF plan does not preserve every original résumé claim.");
   const claimById = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
@@ -140,7 +141,8 @@ function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan
   })) throw new Error("The PDF edit plan contains a duplicate, unsupported, or ungrounded source operation.");
 }
 
-export async function renderPdfSourceBytes(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>): Promise<RenderedPdfResume> {
+export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>): Promise<RenderedPdfResume> {
+  const source = planEvidencePolicy(plan) === 2 ? sourceWithCurrentEvidenceClaims(sourceInput) : sourceInput;
   validatePlan(sourceBytes, source, plan);
   if (sourceBytes.length < 1 || sourceBytes.length > MAX_PDF_BYTES) throw new Error("The source PDF exceeds the 5 MB worker limit.");
   const directory = await mkdtemp(path.join(os.tmpdir(), "resume-pdf-")).catch(() => { throw new Error("The PDF worker could not create an isolated temporary directory."); });

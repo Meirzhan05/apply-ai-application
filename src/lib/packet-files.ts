@@ -9,6 +9,7 @@ import { renderDocxResume, type RenderedDocxResume } from "@/lib/docx-renderer";
 import { renderPdfResume, type RenderedPdfResume } from "@/lib/pdf-renderer";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
 import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
+import { planEvidencePolicy, validateSourcePlanEvidence } from "@/lib/source-plan-evidence";
 import type { ApplicationPacket, PacketFile, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
 export type PacketFileKind = PacketFile["kind"];
@@ -29,12 +30,12 @@ function docxPolicyFor(plan: ResumeSourcePlan): typeof docxLayoutPolicy | typeof
 function docxInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-docx", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion === 2 ? { evidencePolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function pdfInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-pdf", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion === 2 ? { evidencePolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function sourceInputHash(plan: ResumeSourcePlan) { return plan.format === "pdf" ? pdfInputHash(plan) : docxInputHash(plan); }
 const filename = (kind: PacketFileKind) => kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
@@ -67,7 +68,7 @@ function sourceLayoutMatchesPlan(plan: ResumeSourcePlan, source: NonNullable<Pro
     // header/footer occurrence. DOCX keeps one OOXML anchor and maps it once
     // per rendered page, so only the DOCX adapter expects repeated mappings.
     const repeated = source.format === "docx" && "repeatedRole" in anchor && (anchor.repeatedRole === "header" || anchor.repeatedRole === "footer");
-    return anchor.candidateClaim ? mapped.length !== 1 : repeated ? mapped.length !== pages.length : mapped.length !== 1;
+    return repeated ? mapped.length !== pages.length : mapped.length !== 1;
   })) return false;
   if (new Set(anchors.map((anchor) => `${anchor.anchorId}:${anchor.pageNumber}`)).size !== anchors.length) return false;
   if (source.format === "pdf") {
@@ -92,27 +93,13 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
       !profile.resumeSource || profile.resumeSource.mimeType !== "application/pdf" || profile.resumeSource.sha256 !== source.sourceHash)
       throw new Error("The inspected PDF source is no longer available. Rebuild the packet from the confirmed original PDF.");
     const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
-    const candidateAnchors = source.anchors.filter((anchor) => anchor.candidateClaim);
-    const claimIds = new Set(plan.claims.map((claim) => claim.anchorId));
-    const editMap = new Map(plan.edits.map((edit) => [edit.anchorId, edit]));
-    const verified = new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+    const evidenceValid = validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) });
     const expectedPageCount = plan.sourceLayout?.pages.length ?? 1;
     const expectedLayoutPolicy = policyFor(plan);
     if (plan.version !== 1 || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       !sourceLayoutMatchesPlan(plan, source) ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
-      !/^[a-f0-9]{64}$/.test(plan.jobHash) || candidateAnchors.length !== plan.claims.length || candidateAnchors.some((anchor) => !claimIds.has(anchor.id)) ||
-      plan.claims.some((claim) => {
-        const anchor = source.anchors.find((item) => item.id === claim.anchorId);
-        const edit = editMap.get(claim.anchorId);
-        return !anchor || !claim.factIds.length || claim.factIds.some((id) => !verified.has(id)) ||
-          claim.factIds.some((id) => { const fact = verified.get(id)!; return Boolean(fact.sourceAnchorId && source.anchors.find((item) => item.id === fact.sourceAnchorId)?.entryId !== anchor.entryId); }) ||
-          (anchor.kind !== "bullet" && claim.text !== anchor.text) ||
-          (claim.text !== anchor.text && (!anchor.editable || !edit || edit.text !== claim.text || hashJson(edit.factIds) !== hashJson(claim.factIds))) ||
-          (claim.text === anchor.text && edit !== undefined);
-      }) || plan.edits.length !== [...editMap.keys()].length || plan.edits.some((edit) => !claimIds.has(edit.anchorId)) ||
-      plan.grounding.findings.length !== plan.claims.length || plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||
-      plan.grounding.writerAttempts < 1 || plan.grounding.writerAttempts > 3 || plan.grounding.checkerAttempts < 1 || plan.grounding.checkerAttempts > 3 || plan.grounding.repairAttempts > 2)
+      !/^[a-f0-9]{64}$/.test(plan.jobHash) || !evidenceValid)
       throw new Error("The PDF source plan is stale or does not preserve the complete reviewed source.");
     const inputHash = pdfInputHash(plan);
     const valid = (key: string | undefined, hash: string, size: number) => /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 && key === `${profile.id}/${inputHash}/${hash}.pdf`;
@@ -140,23 +127,10 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
     const plan = packet.resumeSourcePlan;
     if (packet.schemaVersion !== 3 || !source || source.support.status !== "candidate" || !plan || !profile.resumeSource) throw new Error("The inspected DOCX source is no longer available. Rebuild the packet.");
     const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
-    const candidateAnchors = source.anchors.filter((anchor) => anchor.candidateClaim);
-    const claimIds = new Set(plan.claims.map((claim) => claim.anchorId));
-    const editMap = new Map(plan.edits.map((edit) => [edit.anchorId, edit]));
-    const verified = new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+    const evidenceValid = validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) });
     if (plan.version !== 1 || plan.format !== "docx" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
-      !/^[a-f0-9]{64}$/.test(plan.jobHash) || candidateAnchors.length !== plan.claims.length || candidateAnchors.some((anchor) => !claimIds.has(anchor.id)) ||
-      plan.claims.some((claim) => {
-        const anchor = source.anchors.find((item) => item.id === claim.anchorId);
-        const edit = editMap.get(claim.anchorId);
-        return !anchor || !claim.factIds.length || claim.factIds.some((id) => !verified.has(id)) ||
-          (anchor.kind !== "bullet" && claim.text !== anchor.text) ||
-          (claim.text !== anchor.text && (!anchor.editable || !edit || edit.text !== claim.text || hashJson(edit.factIds) !== hashJson(claim.factIds))) ||
-          (claim.text === anchor.text && edit !== undefined);
-      }) || plan.edits.length !== [...editMap.keys()].length || plan.edits.some((edit) => !claimIds.has(edit.anchorId)) ||
-      plan.grounding.findings.length !== plan.claims.length || plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||
-      plan.grounding.writerAttempts < 1 || plan.grounding.writerAttempts > 3 || plan.grounding.checkerAttempts < 1 || plan.grounding.checkerAttempts > 3 || plan.grounding.repairAttempts > 2) throw new Error("The DOCX source plan is stale or does not preserve the complete reviewed source.");
+      !/^[a-f0-9]{64}$/.test(plan.jobHash) || !evidenceValid) throw new Error("The DOCX source plan is stale or does not preserve the complete reviewed source.");
     const inputHash = docxInputHash(plan);
     const valid = (key: string | undefined, hash: string, size: number, extension: string) =>
       /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 && key === `${profile.id}/${inputHash}/${hash}.${extension}`;
@@ -438,10 +412,8 @@ function validateResumeArtifactInputs(profile: Profile, packet: ApplicationPacke
     plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) ||
     plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error(`The inspected ${formatLabel} source is unavailable or stale. Re-upload and confirm it before tailoring.`);
   if (!sourceLayoutMatchesPlan(plan, source)) throw new Error(`The inspected ${formatLabel} page/region map is missing, stale, or invalid. Re-upload and confirm it before tailoring.`);
-  const claims = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
-  const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
-  if (claims.size !== anchors.length || anchors.some((anchor) => !claims.has(anchor.id)) ||
-    hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error(`The ${formatLabel} source plan does not cover the complete reviewed résumé.`);
+  if (!validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) }) ||
+      hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error(`The ${formatLabel} source plan does not cover the complete reviewed résumé.`);
 }
 
 // Historical inspection verifies the bytes recorded at the durable claim. It
