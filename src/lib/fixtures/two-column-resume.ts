@@ -17,24 +17,22 @@ const pdfText = {
     ["• Evaluated 4 retrieval models at 91% recall.", 9, false, 580],
   ] as const,
   pageOneRight: [
-    ["Projects", 12, true, 690],
-    ["Campus Access Checker", 10, true, 666],
-    ["• Created accessibility scanner for 40 students.", 9, false, 648],
-    ["• Documented 18 keyboard-only issues.", 9, false, 632],
-    ["Technical Skills", 12, true, 590],
-    ["• Python, Java, TypeScript.", 9, false, 570],
-    ["• Accessibility testing.", 9, false, 554],
+    ["Technical Skills", 12, true, 690],
+    ["• Python, Java, TypeScript.", 9, false, 670],
+    ["• Accessibility testing.", 9, false, 654],
+    ["Projects", 12, true, 614],
+    ["Campus Access Checker", 10, true, 590],
+    ["• Created accessibility scanner for 40 students.", 9, false, 572],
+    ["• Documented 18 keyboard-only issues.", 9, false, 556],
   ] as const,
   pageTwoLeft: [
-    ["• Maintained the ranking service through peak traffic.", 9, false, 730],
+    ["• Improved keyboard navigation coverage to 96%.", 9, false, 730],
     ["Aster Systems — Software Intern, 2021–2022", 10, true, 692],
     ["• Automated 18 release checks.", 9, false, 674],
   ] as const,
   pageTwoRight: [
-    ["Campus Access Checker — continued", 10, true, 730],
-    ["• Improved keyboard navigation coverage to 96%.", 9, false, 712],
-    ["Languages", 12, true, 674],
-    ["• English and Spanish.", 9, false, 654],
+    ["Languages", 12, true, 730],
+    ["• English and Spanish.", 9, false, 710],
   ] as const,
 };
 
@@ -92,24 +90,22 @@ function docxBody(pages: 1 | 2) {
   ];
   const right = [
     paragraph("casey@example.com · linkedin.com/in/caseyrivera"),
+    paragraph("Technical Skills", { heading: true }),
+    paragraph("Python, Java, TypeScript.", { bullet: true }),
+    paragraph("Accessibility testing.", { bullet: true }),
     paragraph("Projects", { heading: true }),
     paragraph("Campus Access Checker"),
     paragraph("Created accessibility scanner for 40 students.", { bullet: true }),
     paragraph("Documented 18 keyboard-only issues.", { bullet: true }),
-    paragraph("Technical Skills", { heading: true }),
-    paragraph("Python, Java, TypeScript.", { bullet: true }),
-    paragraph("Accessibility testing.", { bullet: true }),
   ];
   const body = [...left, breakParagraph("column"), ...right];
   if (pages === 2) {
     body.push(breakParagraph("page"));
     body.push(
-      paragraph("Maintained the ranking service through peak traffic.", { bullet: true }),
+      paragraph("Improved keyboard navigation coverage to 96%.", { bullet: true }),
       paragraph("Aster Systems — Software Intern, 2021–2022"),
       paragraph("Automated 18 release checks.", { bullet: true }),
       breakParagraph("column"),
-      paragraph("Campus Access Checker — continued"),
-      paragraph("Improved keyboard navigation coverage to 96%.", { bullet: true }),
       paragraph("Languages", { heading: true }),
       paragraph("English and Spanish.", { bullet: true }),
     );
