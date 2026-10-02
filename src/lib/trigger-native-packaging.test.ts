@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,21 @@ import { describe, expect, it, vi } from "vitest";
 import type { BuildContext, BuildExtension } from "@trigger.dev/core/v3/build";
 import config from "../../trigger.config";
 import docxRuntimeLock from "../../runtime/docx-runtime.lock.json";
+import pdfRuntimeLock from "../../runtime/pdf/pdf-runtime.lock.json";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+
+function commandExists(command: string) {
+  if (command.includes(path.sep)) return existsSync(command);
+  return (process.env.PATH ?? "").split(path.delimiter).some((directory) => existsSync(path.join(directory, command)));
+}
+
+const pdfRuntimeRoot = process.env.PDFBOX_TEST_RUNTIME_ROOT ?? process.env.PDFBOX_RUNTIME_ROOT;
+const installerJarPath = process.env.PDFBOX_JAR_PATH ?? (pdfRuntimeRoot ? path.join(pdfRuntimeRoot, pdfRuntimeLock.pdfbox.file) : undefined);
+const installerJava = process.env.PDFBOX_JAVA_BIN ?? (pdfRuntimeRoot ? path.join(pdfRuntimeRoot, "jre", "bin", "java") : "java");
+const installerJavac = process.env.PDFBOX_JAVAC_BIN ?? "javac";
+const installerJarTool = process.env.PDFBOX_JAR_TOOL ?? "jar";
+const installerToolsAvailable = Boolean(installerJarPath && existsSync(installerJarPath) && commandExists(installerJava)
+  && commandExists(installerJavac) && commandExists(installerJarTool));
 
 describe("Trigger native package deployment", () => {
   it("parses a PDF from the task bundle with the worker copied into the build directory", async () => {
@@ -125,9 +140,54 @@ describe("Trigger native package deployment", () => {
     expect(lock).toMatchObject({ java: { version: "21.0.12.1+1", jre: { sha256: "2413149700df0f7d440500a84a8f764c535f21e5a5e87d38328b64eec2c5b500" },
       jdk: { sha256: "ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94" } },
       pdfbox: { version: "3.0.8", sha512: "768847238f683568507bf73570a2b6fedcbe58b25c7b4f97fba536ba110b290fe96ba065aed58629d41fb94857d76bc1978c2f31d294b553c69f287f71ee9600" } });
-    const setup = await readFile("scripts/setup-pdf-runtime.mjs", "utf8");
-    expect(setup).toContain('execFile(javacBin, ["--release", "21"');
-    expect(setup).toContain('hash(jarBytes, "sha512") !== lock.pdfbox.sha512');
     expect(config.build!.external).toContain("@napi-rs/canvas");
   });
+
+  it.skipIf(!installerToolsAvailable)("rejects a corrupted PDFBox jar before creating installer output", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "apply-pdf-installer-checksum-"));
+    const corruptedJar = path.join(directory, "corrupted.jar");
+    const target = path.join(directory, "runtime");
+    try {
+      const bytes = await readFile(installerJarPath!);
+      bytes[bytes.length - 1] ^= 1;
+      await writeFile(corruptedJar, bytes);
+
+      let failure: unknown;
+      try {
+        execFileSync(process.execPath, ["scripts/setup-pdf-runtime.mjs", target, "--local"], {
+          cwd: process.cwd(), encoding: "utf8", timeout: 120_000,
+          env: { ...process.env, PDFBOX_JAR_PATH: corruptedJar, PDFBOX_JAVA_BIN: installerJava, PDFBOX_JAVAC_BIN: installerJavac, PDFBOX_JAR_TOOL: installerJarTool },
+        });
+      } catch (error) { failure = error; }
+
+      expect(failure).toMatchObject({ status: 1, stderr: expect.stringMatching(/pinned PDFBox jar checksum mismatch/i) });
+      expect(await readdir(target)).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it.skipIf(!installerToolsAvailable)("compiles the pinned helper and runs it with the supplied Java runtime", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "apply-pdf-installer-output-"));
+    const target = path.join(directory, "runtime");
+    try {
+      const stdout = execFileSync(process.execPath, ["scripts/setup-pdf-runtime.mjs", target, "--local"], {
+        cwd: process.cwd(), encoding: "utf8", timeout: 120_000,
+        env: { ...process.env, PDFBOX_JAR_PATH: installerJarPath!, PDFBOX_JAVA_BIN: installerJava, PDFBOX_JAVAC_BIN: installerJavac, PDFBOX_JAR_TOOL: installerJarTool },
+      });
+      const install = JSON.parse(stdout) as { java: string; jarSha512: string; local: boolean };
+      const manifest = JSON.parse(await readFile(path.join(target, "runtime-manifest.json"), "utf8")) as { version: number; java: string; pdfbox: string; architecture: string };
+      const classPath = path.join(target, "classes", "PdfSourceRewrite.class");
+      const jarPath = path.join(target, pdfRuntimeLock.pdfbox.file);
+      const classPathArg = path.join(target, "classes") + path.delimiter + jarPath;
+      const version = execFileSync(installerJava, ["-cp", classPathArg, "PdfSourceRewrite", "--version"], { encoding: "utf8", timeout: 30_000 });
+
+      expect(install).toMatchObject({ java: expect.stringContaining("pdfbox=" + pdfRuntimeLock.pdfbox.version), jarSha512: pdfRuntimeLock.pdfbox.sha512, local: true });
+      expect(manifest).toMatchObject({ version: 1, java: pdfRuntimeLock.java.version, pdfbox: pdfRuntimeLock.pdfbox.version, architecture: process.platform + "-" + process.arch });
+      expect((await readFile(classPath)).byteLength).toBeGreaterThan(0);
+      expect(version).toContain("pdfbox=" + pdfRuntimeLock.pdfbox.version + "\tjava=" + pdfRuntimeLock.java.version);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

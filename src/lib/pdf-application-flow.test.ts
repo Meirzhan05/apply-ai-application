@@ -1,14 +1,13 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { rm } from "node:fs/promises";
-import type { AppState, Application, Profile } from "@/lib/types";
+import type { AppState } from "@/lib/types";
 
 const fixture = vi.hoisted(() => ({
   state: null as AppState | null,
   demo: true,
   tasks: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>,
   parse: vi.fn(),
-  prepare: vi.fn(),
-  attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>,
+  browser: null as unknown,
 }));
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
@@ -32,11 +31,7 @@ vi.mock("@/lib/budget", () => ({
   markQueuedBudgetTerminal: async () => true,
 }));
 vi.mock("openai", () => ({ default: class { responses = { parse: fixture.parse }; } }));
-vi.mock("@/lib/browser-runner", () => ({
-  prepareBrowser: fixture.prepare,
-  preflightBrowser: vi.fn(), submitBrowser: vi.fn(), cancelBrowser: vi.fn().mockResolvedValue(undefined),
-  refreshBrowserSnapshot: vi.fn(), repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn(),
-}));
+vi.mock("playwright-core", () => ({ chromium: { launch: async () => fixture.browser, connectOverCDP: vi.fn() } }));
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn().mockResolvedValue(undefined) }));
 
 import { initialDemoState } from "@/lib/demo-data";
@@ -46,9 +41,12 @@ import { POST as uploadResume } from "@/app/api/resume/route";
 import { POST as actionRoute } from "@/app/api/actions/route";
 import { GET as applicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
 import { runDraft, runFill } from "@/lib/application-runs";
-import { reviewedPacketFile } from "@/lib/packet-files";
 import { bytesHash } from "@/lib/resume-artifacts";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
+import { cancelBrowser } from "@/lib/browser-runner";
+import { createControlledEmployerBrowser } from "@/lib/test-support/controlled-employer-browser";
+
+let employer: ReturnType<typeof createControlledEmployerBrowser>;
 
 beforeAll(async () => {
   await ensurePdfTestRuntime();
@@ -88,31 +86,26 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   vi.stubEnv("MODEL_USAGE_TEST_DIR", `/tmp/pdf-flow-usage-${process.pid}`);
-  fixture.demo = true; fixture.tasks = []; fixture.attached = [];
+  fixture.demo = true; fixture.tasks = [];
   fixture.state = initialDemoState();
   fixture.state.profile.id = "pdf-flow-owner";
   fixture.state.applications = [];
+  fixture.state.jobs[0].url = "https://jobs.example/apply";
+  fixture.state.jobs[0].applyUrl = "https://jobs.example/apply";
+  employer = createControlledEmployerBrowser({ targetUrl: fixture.state.jobs[0].applyUrl, html: "<title>Application</title><h1>Application</h1><form action=\"https://jobs.example/apply\" method=\"post\" enctype=\"multipart/form-data\"><label for=\"resume\">Resume</label><input id=\"resume\" name=\"resume\" type=\"file\" accept=\".pdf,application/pdf\" required><button type=\"submit\">Submit application</button></form>" });
+  fixture.browser = employer.browser;
   fixture.parse.mockImplementation(async (request: Parameters<typeof responseFor>[0]) => ({
     id: `fixture-${fixture.parse.mock.calls.length}`, model: request.model, service_tier: "default", output_parsed: responseFor(request),
     usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } },
   }));
-  fixture.prepare.mockImplementation(async (application: Application, job: AppState["jobs"][number], profile: Profile, onSession: (session: { sessionId: string; provider: "browser-use" }) => Promise<boolean>, onAction: (label: string) => Promise<boolean>) => {
-    await onSession({ sessionId: "pdf-flow-browser", provider: "browser-use" });
-    await onAction("Checking permission: Resume");
-    const attachment = await reviewedPacketFile(profile, application.packet!, "resume");
-    fixture.attached.push(attachment);
-    return { sessionId: "pdf-flow-browser", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: {
-      version: 1, url: job.applyUrl, capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], attachments: [attachment.filename],
-      fields: [{ label: "Resume", identifier: "resume", kind: "file", required: true, valid: true, value: attachment.filename,
-        fileHashes: [`${attachment.filename}:${attachment.bytes.length}:${bytesHash(attachment.bytes)}`] }],
-    } };
-  });
 });
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  for (const app of fixture.state?.applications ?? []) await cancelBrowser(app).catch(() => undefined);
   await rm(`/tmp/pdf-flow-usage-${process.pid}`, { recursive: true, force: true });
   for (const app of fixture.state?.applications ?? []) {
+    await rm(`.data/screenshots/${app.id}.png`, { force: true });
     for (const file of app.packet?.files ?? []) if (file.storageKey) await rm(`.data/application-files/${file.storageKey}`, { force: true });
     if (app.packet?.resumeArtifact?.format === "pdf") {
       await rm(`.data/application-files/${app.packet.resumeArtifact.baseline.storageKey}`, { force: true });
@@ -123,13 +116,16 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-it("uploads, confirms, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
-  const sourceBytes = await createPdfSourceFixture();
+it("uploads, confirms unbulleted qualifications, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
+  const sourceBytes = await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL" });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
   expect(upload.status, await upload.clone().text()).toBe(200);
   expect(fixture.state!.profile.resumeSourceDocument?.text).toContain("Built a search index for 1,200 users.");
+  const skillsAnchor = fixture.state!.profile.resumeSourceDocument!.anchors.find((anchor) => anchor.text === "Python, scikit-learn, and PostgreSQL")!;
+  expect(skillsAnchor.candidateClaim).toBe(true);
+  expect(fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === skillsAnchor.id)).toMatchObject({ verified: false, source: "resume" });
 
   const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
@@ -176,10 +172,13 @@ it("uploads, confirms, drafts, renders, previews, downloads, and attaches the ex
   expect(started.status, await started.clone().text()).toBe(200);
   const fillHandoff = fixture.tasks.find((item) => item.task === "fill-application-form")!;
   await runFill(fillHandoff.payload);
-  expect(fixture.attached).toHaveLength(1);
-  expect(fixture.attached[0]).toMatchObject({ filename: "tailored-resume.pdf", mimeType: "application/pdf" });
-  expect(fixture.attached[0].bytes).toEqual(previewBytes);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: "tailored-resume.pdf", mimeType: "application/pdf", sha256: bytesHash(previewBytes) });
+  expect(attached[0].bytes).toEqual(previewBytes);
+  expect(employer.observations().submitClicks).toBe(0);
   expect(application.form?.fields[0].fileHashes).toEqual([`tailored-resume.pdf:${previewBytes.length}:${bytesHash(previewBytes)}`]);
+  expect({ status: application.status, readyToSubmit: application.form?.readyToSubmit, blockers: application.form?.blockers }).toMatchObject({ status: "final_review", readyToSubmit: true, blockers: [] });
 
   const submissionApproved = await publicAction("approveSubmit", { applicationId: application.id, formHash: application.form!.hash });
   expect(submissionApproved.status, await submissionApproved.clone().text()).toBe(200);
@@ -220,3 +219,38 @@ it("blocks a new enabled worker draft without an owner-checked original before m
   expect(application.packet).toBeUndefined();
   expect(fixture.parse).not.toHaveBeenCalled();
 });
+
+it.each([undefined, "resume"] as const)("prepares exact original bytes after tailoring is disabled even when the prior source plan is stale (%s draft)", async (draftMode) => {
+  const sourceBytes = await createPdfSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(200);
+  const confirmed = await publicAction("onboarding", { facts: fixture.state!.profile.facts.map((fact) => ({ ...fact, verified: true })) });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const firstDraft = await publicAction("draft", { applicationId: application.id });
+  expect(firstDraft.status, await firstDraft.clone().text()).toBe(200);
+  await runDraft(fixture.tasks.find((item) => item.task === "draft-application-packet")!.payload);
+  expect(application.packet?.resumeSourcePlan).toBeDefined();
+
+  const settings = await publicAction("automationSettings", { settings: { resumeTailoring: false } });
+  expect(settings.status, await settings.clone().text()).toBe(200);
+  fixture.state!.jobs[0].description = "Updated synthetic posting with changed duties.";
+  const originalDraft = await publicAction("draft", { applicationId: application.id, ...(draftMode ? { draftMode } : {}) });
+  expect(originalDraft.status, await originalDraft.clone().text()).toBe(200);
+
+  await runDraft(fixture.tasks.filter((item) => item.task === "draft-application-packet")[1].payload);
+
+  expect(application.status).toBe("draft_review");
+  expect(application.packet).toMatchObject({ resumeMode: "original", originalResume: { sha256: fixture.state!.profile.resumeSource!.sha256 } });
+  expect(application.packet?.resumeSourcePlan).toBeUndefined();
+  expect(application.packet?.resumeArtifact).toBeUndefined();
+  const preview = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
+  expect(preview.status).toBe(200);
+  expect(Buffer.from(await preview.arrayBuffer())).toEqual(sourceBytes);
+}, 120_000);

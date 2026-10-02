@@ -9,7 +9,7 @@ import { validateResumeArtifact, withPacketFiles } from "@/lib/packet-files";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
 import { validateAiEssay } from "@/lib/answer-policy";
 import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
-import { draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
+import { assertSourceInformationComplete, draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
 import { prepareDocxResumeBaseline, renderDocxResume, type PreparedDocxResumeBaseline } from "@/lib/docx-renderer";
 import { renderPdfResume } from "@/lib/pdf-renderer";
 import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
@@ -65,6 +65,8 @@ export async function draftPacket(
     const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
     throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
   }
+  if (!originalResumeOnly && options && profile.resumeSourceDocument && !(options.preserveResume && previous?.resumeArtifact))
+    assertSourceInformationComplete(profile.resumeSourceDocument, profile);
   if (!originalResumeOnly && profile.resumeSourceDocument && !options) throw new Error("A source-preserving résumé draft needs the authorized application worker. Start a new draft from the public application action.");
   if (options?.knownAnswersOnly && originalResumeOnly) {
     const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResume!, version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline, options.beforeModelCall);
@@ -84,7 +86,7 @@ export async function draftPacket(
         const source = profile.resumeSourceDocument!;
         if (source.format === "docx") {
           const originalBytes = await readOriginalResume(profile.id, originalResumeManifest(profile));
-          preparedDocxBaseline = await prepareDocxResumeBaseline(originalBytes, source, options.deadline, options.beforeModelCall);
+          preparedDocxBaseline = await prepareDocxResumeBaseline(originalBytes, source, options.deadline, options.beforeModelCall, profile.name);
         }
         const baselineLayout = preparedDocxBaseline?.sourceLayout;
         return draftResumeSourcePlan(profile, job, source, options.deadline, options.beforeModelCall, baselineLayout, async (plan) => {

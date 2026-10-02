@@ -27,6 +27,7 @@ import {
   validatePacket,
   packetProfileHash,
 } from "@/lib/drafting";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import {
   currentUserId,
   isDemo,
@@ -88,6 +89,7 @@ const findJob = (state: AppState, app: Application): Job => {
   if (!job) throw new Error("Job not found.");
   return job;
 };
+const assertSourcePlanJobCurrent = (state: AppState, app: Application) => assertSourceJobCurrent(app, findJob(state, app));
 
 // Storage/rendering happens before CAS; only the unchanged review can publish it.
 const materialReviewHash = (state: AppState, app: Application) => hashJson({
@@ -341,6 +343,7 @@ async function perform(
   if (action === "editPacket") {
     const state = await loadState(userId);
     const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
     if (app.status !== "draft_review" || app.queuedRun || !app.packet)
       throw new Error("Open the current packet review after drafting finishes.");
     const answers = z.array(z.object({
@@ -365,6 +368,7 @@ async function perform(
   if (action === "confirmEssay") {
     const state = await loadState(userId);
     const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
     if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
       throw new Error("The packet changed. Review it again before confirming this essay.");
     const index = z.number().int().min(0).parse(payload.answerIndex);
@@ -386,6 +390,7 @@ async function perform(
   if (action === "addCoverLetter") {
     const state = await loadState(userId);
     const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
     if (app.status !== "needs_user_action" || app.queuedRun || !app.needsCoverLetter || !app.packet)
       throw new Error("No required cover letter is awaiting review.");
     const expected = materialReviewHash(state, app);
@@ -413,6 +418,7 @@ async function perform(
   if (action === "approveFill")
     return mutateState(userId, (state) => {
       const app = findApp(state, text(payload.applicationId, 100), userId);
+      assertSourcePlanJobCurrent(state, app);
       if (app.packet) validatePacket(state.profile, app.packet);
       approveFill(
         app,

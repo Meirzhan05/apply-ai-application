@@ -1,9 +1,8 @@
 import { currentUserId, loadState } from "@/lib/repository";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
-import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { validatePacket } from "@/lib/drafting";
 import { historicalPacketFile, reviewedPacketFile, reviewedResumeComparisonFiles, reviewedResumeSource } from "@/lib/packet-files";
-import { sourceJobHash } from "@/lib/resume-source-draft";
+import { sourcePlanJobIsCurrent } from "@/lib/resume-source-freshness";
 
 const comparisonKinds = new Set(["resume-original-preview", "resume-tailored-preview", "resume-comparison-status"]);
 const sourceKinds = new Set(["resume-original"]);
@@ -46,8 +45,8 @@ export async function GET(
       if (!app.packet) return new Response("Not found", { status: 404 });
       const comparison = await reviewedResumeComparisonFiles(state.profile, app.packet);
       const currentJob = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
-      const normalizedJob = currentJob ? importedAutonomyJob(app, currentJob) : undefined;
-      const jobIsStale = !normalizedJob || app.packet.resumeSourcePlan?.jobHash !== sourceJobHash(normalizedJob);
+      const plan = app.packet.resumeSourcePlan;
+      const jobIsStale = !currentJob || !plan || !sourcePlanJobIsCurrent(app, currentJob, plan.jobHash, plan.jobHashPolicyVersion ?? 1);
       const staleReasons = [...new Set([...(comparison.staleReasons ?? []), ...(jobIsStale ? ["job"] : [])])];
       const stale = comparison.stale || jobIsStale;
       if (kind === "resume-comparison-status") {
@@ -79,6 +78,14 @@ export async function GET(
 
     const historical = app.submissionAttemptedAt ? app.submissionMaterials?.files.find((file) => file.kind === kind) : undefined;
     if (!historical && !app.packet) return new Response("Not found", { status: 404 });
+    if (!historical && app.packet?.resumeSourcePlan) {
+      const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
+      const plan = app.packet.resumeSourcePlan;
+      if (!job || !sourcePlanJobIsCurrent(app, job, plan.jobHash, plan.jobHashPolicyVersion ?? 1))
+        return new Response("This saved résumé was prepared for different job details or verification. Prepare and review a new résumé before downloading or attaching it.", {
+          status: 409, headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff" },
+        });
+    }
     if (!historical) validatePacket(state.profile, app.packet!);
     if (!historical && kind === "cover-letter" && !app.packet!.coverLetter)
       return new Response("Not found", { status: 404 });

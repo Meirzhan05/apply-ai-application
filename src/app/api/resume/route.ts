@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { newId } from "@/lib/crypto";
 import { adminSupabase } from "@/lib/supabase-admin";
-import { currentUserId, isDemo, mutateState } from "@/lib/repository";
+import { currentUserId, isDemo, loadState, mutateState } from "@/lib/repository";
 import { sameOrigin } from "@/lib/request-security";
 import { parseDocxSource, suggestDocxFacts } from "@/lib/docx-source";
 import { parsePdfSource, suggestPdfFacts } from "@/lib/pdf-source";
@@ -20,6 +20,7 @@ export async function POST(request: Request) {
     );
   try {
     const userId = await currentUserId();
+    const trustedName = (await loadState(userId)).profile.name;
     const data = await request.formData();
     const file = data.get("file");
     if (!(file instanceof File) || file.size < 1 || file.size > 5 * 1024 * 1024)
@@ -37,10 +38,10 @@ export async function POST(request: Request) {
     let extracted = "";
     let sourceDocument: ResumeSourceDocument | undefined;
     if (pdf) {
-      sourceDocument = await parsePdfSource(buffer);
+      sourceDocument = await parsePdfSource(buffer, trustedName);
       extracted = sourceDocument.text;
     } else {
-      sourceDocument = await parseDocxSource(buffer);
+      sourceDocument = await parseDocxSource(buffer, trustedName);
       extracted = sourceDocument.text;
     }
     extracted = extracted.replace(/\0/g, "").trim();

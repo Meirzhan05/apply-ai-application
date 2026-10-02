@@ -10,7 +10,6 @@ const flow = vi.hoisted(() => ({
   tasks: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>,
   parse: vi.fn(),
   browser: null as unknown,
-  uploaded: [] as Array<{ name: string; mimeType: string; bytes: Buffer }>,
   editClaims: [] as Array<{ anchorId: string; text: string; factIds: string[] }>,
   layoutMode: "none" as "none" | "repair" | "exhaust",
   layoutRepairCount: 0,
@@ -47,9 +46,13 @@ import { POST as uploadResume } from "@/app/api/resume/route";
 import { POST as actionRoute } from "@/app/api/actions/route";
 import { GET as applicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
 import { runDraft, runFill } from "@/lib/application-runs";
+import { runSubmission } from "@/lib/application-submission";
 import { cancelBrowser } from "@/lib/browser-runner";
 import { bytesHash } from "@/lib/resume-artifacts";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
+import { createControlledEmployerBrowser } from "@/lib/test-support/controlled-employer-browser";
+
+let employer: ReturnType<typeof createControlledEmployerBrowser>;
 
 const sofficeRuntime = (() => {
   const candidates = [process.env.TEST_DOCX_SOFFICE_BIN, process.env.SOFFICE_BIN, "/app/docx-runtime/opt/libreoffice26.8/program/soffice", "/usr/bin/soffice", "soffice"]
@@ -118,60 +121,6 @@ function responseFor(request: ModelRequest) {
   throw new Error(`Unexpected model format: ${name}`);
 }
 
-type InputFile = { name: string; mimeType: string; buffer: Buffer };
-
-class FixturePage {
-  private targetUrl = "about:blank";
-  private attachment?: InputFile;
-
-  async goto(url: string) { this.targetUrl = url; }
-  url() { return this.targetUrl; }
-  context() { return { route: async () => undefined }; }
-  async waitForFunction() { return undefined; }
-  async waitForTimeout(duration: number) { await new Promise((resolve) => setTimeout(resolve, Math.min(duration, 100))); }
-  async screenshot() { return Buffer.from("fixture screenshot"); }
-  async title() { return "Application"; }
-  locator(selector: string) { return new FixtureLocator(this, selector); }
-  getByRole(role: string) { return new FixtureLocator(this, `role:${role}`); }
-
-  fields() {
-    const fileHashes = this.attachment ? [`${this.attachment.name}:${this.attachment.buffer.length}:${bytesHash(this.attachment.buffer)}`] : [];
-    return [{ index: 0, label: "Resume upload", optionLabel: "Resume", autocomplete: false, kind: "file", required: true, checked: false,
-      valid: Boolean(this.attachment), identifier: "resume", stableIdentifier: true, editable: true, fileHashes,
-      value: this.attachment?.name ?? "", options: [] }];
-  }
-
-  acceptFile(file: InputFile) {
-    const exact = { name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.buffer) };
-    this.attachment = exact;
-    flow.uploaded.push({ name: exact.name, mimeType: exact.mimeType, bytes: exact.buffer });
-  }
-}
-
-class FixtureLocator {
-  constructor(private readonly page: FixturePage, private readonly selector: string) {}
-  first() { return this; }
-  nth(index: number) { void index; return this; }
-  async count() { return this.selector === "role:button" ? 1 : 0; }
-  async isVisible() { return true; }
-  async isEnabled() { return true; }
-  async getAttribute(name: string) { return name === "accept" ? ".pdf,application/pdf" : null; }
-  async setInputFiles(file: InputFile) { this.page.acceptFile(file); }
-  async evaluateAll<T>(callback: (elements: unknown[]) => T) {
-    if (this.selector !== "input, textarea, select") return callback([]);
-    if (/\.join\(["']\|["']\)/.test(callback.toString())) return "INPUT:resume:resume:file" as T;
-    return this.page.fields() as T;
-  }
-  async evaluate<T>(callback: (element: unknown) => T) {
-    void callback;
-    return { label: "Apply", identifier: "apply", action: undefined, method: "POST", encoding: "multipart/form-data" } as T;
-  }
-}
-
-function fixtureBrowser(page: FixturePage) {
-  return { contexts: () => [{ pages: () => [page] }], newPage: async () => page, close: async () => undefined };
-}
-
 beforeAll(async () => {
   await ensurePdfTestRuntime();
 }, 150_000);
@@ -180,13 +129,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   vi.stubEnv("MODEL_USAGE_TEST_DIR", `/tmp/columns-flow-usage-${process.pid}`);
-  flow.demo = true; flow.tasks = []; flow.uploaded = []; flow.editClaims = [];
+  flow.demo = true; flow.tasks = []; flow.editClaims = [];
   flow.layoutMode = "none"; flow.layoutRepairCount = 0;
   flow.state = initialDemoState();
   flow.state.profile.id = "columns-flow-owner";
   flow.state.applications = [];
-  const page = new FixturePage();
-  flow.browser = fixtureBrowser(page);
+  flow.state.jobs[0].url = "https://jobs.example/apply";
+  flow.state.jobs[0].applyUrl = "https://jobs.example/apply";
+  employer = createControlledEmployerBrowser({ targetUrl: flow.state.jobs[0].applyUrl,
+    html: "<title>Application</title><h1>Application</h1><form action=\"https://jobs.example/apply\" method=\"post\" enctype=\"multipart/form-data\" novalidate><label for=\"resume\">Resume</label><input id=\"resume\" name=\"resume\" type=\"file\" accept=\".pdf,application/pdf\" required><button type=\"submit\">Submit application</button></form>",
+    onSubmit: ({ document }) => { document.body.innerHTML = "<main><h1>Thank you for applying</h1><p>Application received.</p></main>"; },
+  });
+  flow.browser = employer.browser;
   flow.parse.mockImplementation(async (request: ModelRequest) => ({
     id: `fixture-${flow.parse.mock.calls.length}`, model: request.model, service_tier: "default", output_parsed: responseFor(request),
     usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } },
@@ -199,6 +153,7 @@ afterEach(async () => {
   for (const app of flow.state?.applications ?? []) {
     await cancelBrowser(app).catch(() => undefined);
     await rm(`.data/screenshots/${app.id}.png`, { force: true });
+    await rm(`.data/screenshots/${app.id}-confirmation.png`, { force: true });
     for (const file of app.packet?.files ?? []) if (file.storageKey) await rm(`.data/application-files/${file.storageKey}`, { force: true });
     const artifact = app.packet?.resumeArtifact as { baseline?: { storageKey: string }; source?: { storageKey: string }; tailored?: { storageKey: string } } | undefined;
     for (const file of [artifact?.baseline, artifact?.source, artifact?.tailored]) if (file?.storageKey) await rm(`.data/application-files/${file.storageKey}`, { force: true });
@@ -319,9 +274,11 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   expect(started.status, await started.clone().text()).toBe(200);
   const fillTask = flow.tasks.find((item) => item.task === "fill-application-form")!;
   await runFill(fillTask.payload);
-  expect(flow.uploaded).toHaveLength(1);
-  expect(flow.uploaded[0]).toMatchObject({ name: "tailored-resume.pdf", mimeType: "application/pdf" });
-  expect(flow.uploaded[0].bytes).toEqual(previewBytes);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: "tailored-resume.pdf", mimeType: "application/pdf", sha256: bytesHash(previewBytes) });
+  expect(attached[0].bytes).toEqual(previewBytes);
+  expect(employer.observations().submitClicks).toBe(0);
   expect(application.form?.fields[0].fileHashes).toEqual([`tailored-resume.pdf:${previewBytes.length}:${bytesHash(previewBytes)}`]);
   if (options.layoutRepair) return;
 
@@ -330,6 +287,14 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   const submit = await publicAction("submit", { applicationId: application.id });
   expect(submit.status, await submit.clone().text()).toBe(200);
   expect(application.status).toBe("submitting");
+  const submitTask = flow.tasks.find((item) => item.task === "submit-application-form")!;
+  await runSubmission(submitTask.payload);
+  expect(application.status, JSON.stringify({ receipt: application.submissionReceipt?.text, dom: employer.observations() })).toBe("submitted");
+  expect(application.submittedAt).toBeTruthy();
+  expect(application.submissionReceipt?.text).toContain("Application received.");
+  expect(application.submissionMaterials?.files.some((file) => file.sha256 === bytesHash(previewBytes))).toBe(true);
+  expect(employer.observations().submitClicks).toBe(1);
+  expect(employer.observations().formSubmissions).toBe(1);
 }
 
 it("preserves employers, projects, columns and continuation through PDF upload, tailoring and exact attachment", async () => {

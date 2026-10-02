@@ -3,13 +3,13 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { hashJson } from "@/lib/crypto";
 import { groupPositionedSpansIntoRegions } from "@/lib/source-regions";
 import { readablePdfFontFamily } from "@/lib/pdf-fonts";
+import { rendererDiagnosticMessage, type RendererDiagnosticPayload } from "@/lib/resume-renderer-diagnostics";
+import { isResumeSectionHeading, isSubstantiveSourceText } from "@/lib/resume-source-semantics";
 import type { PdfSourceAnchor, PdfSourceRepresentation, ResumeSourcePageLayout } from "@/lib/types";
 
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_TEXT = 20_000;
 const MAX_SUPPORTED_PAGES = 8;
-const sectionNames = /^(?:education|academic background|publications|research|work experience|professional experience|experience|internship experience|open source experience|projects|personal projects|technical skills|skills|languages|certifications|awards|leadership|volunteering|summary|profile)$/i;
-const claimStart = /^(?:built|created|developed|designed|analyzed|managed|led|implemented|conducted|researched|improved|worked|used|organized|launched|integrated|shipped|collaborated|architected|published|authored|supported|automated|reduced|increased|delivered|maintained|deployed|contributed)\b/i;
 const bulletText = /^[•●▪◦‣*\-–]\s*/;
 const standaloneBulletMarker = (text: string) => /^[•●▪◦‣]$/.test(clean(text));
 const imageOperations = new Set<number>([
@@ -59,7 +59,7 @@ function reasonFromError(error: unknown): string {
 
 function appendReason(current: string | undefined, next: string) { return current ?? next; }
 
-export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresentation> {
+export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promise<PdfSourceRepresentation> {
   if (bytes.length < 1 || bytes.length > MAX_SOURCE_BYTES) throw new Error("Choose a PDF résumé up to 5 MB.");
   const sourceHash = bytesHash(bytes);
   const loadingTask = getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, stopAtErrors: true, maxImageSize: 30_000_000 });
@@ -68,6 +68,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
     pdf = await loadingTask.promise;
     if (pdf.numPages < 1 || pdf.numPages > 50) throw new Error("This PDF has an unsupported page count.");
     let reason: string | undefined;
+    let supportDiagnostic: Extract<RendererDiagnosticPayload, { code: "pdf_source_font_unidentified" }> | undefined;
     if (pdf.isPureXfa) reason = "This PDF is an XFA form rather than a plain résumé. Save it as a text-based PDF or upload an editable DOCX.";
     if (pdf.numPages > MAX_SUPPORTED_PAGES) reason = appendReason(reason, `This PDF has ${pdf.numPages} pages. The source-preserving worker supports up to ${MAX_SUPPORTED_PAGES} pages; no content was dropped.`);
     const fontFamilies = new Set<string>();
@@ -128,7 +129,11 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
         located.push({ item: { ...item, str: text }, rawSourceText, style, resolvedFontName, fontFamily, bold, italic, index, pageNumber, left, top, right, bottom, baseline: y });
         if (left < -0.5 || top < -0.5 || right > viewport.width + 0.5 || bottom > viewport.height + 0.5) reason = appendReason(reason, `The source text “${text.slice(0, 60)}” extends outside the visible page, so the full source cannot be safely edited. Shorten or reposition it in the original PDF, or upload an editable DOCX.`);
         if (fontFamily) fontFamilies.add(fontFamily);
-        else reason = appendReason(reason, `The source font for “${text.slice(0, 60)}” cannot be identified. Upload an editable DOCX rather than substituting a font.`);
+        else {
+          const diagnostic = { code: "pdf_source_font_unidentified", text } as const;
+          if (!reason) supportDiagnostic = diagnostic;
+          reason = appendReason(reason, rendererDiagnosticMessage(diagnostic));
+        }
       }
       located.sort((left, right) => left.top - right.top || left.left - right.left || left.index - right.index);
       if (!located.length) reason = appendReason(reason, "This PDF has no extractable text and appears scanned or image-only. Upload an editable DOCX; OCR and image reconstruction are not supported.");
@@ -242,7 +247,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
         if (!repeatedRole && columnId) currentColumnId = columnId;
         if (!repeatedRole) seenBodyItem = true;
         const claimText = clean(rawText.slice(prefix.length));
-        const isHeading = sectionNames.test(claimText.replace(/:$/, ""));
+        const isHeading = isResumeSectionHeading(claimText);
         if (!repeatedRole && isHeading) {
           activeSection = { id: `pdf-section-${hashJson([sourceHash, page.pageNumber, item.index, claimText]).slice(0, 12)}`, heading: claimText.replace(/:$/, ""), anchorIds: [] };
           sections.push(activeSection);
@@ -257,7 +262,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
           currentEntryHeading = `${currentEntryHeading} · ${claimText}`;
         }
         const kind: PdfSourceAnchor["kind"] = repeatedRole ? "paragraph" : isHeading ? "section" : isBullet ? "bullet" : "entry";
-        const candidateClaim = !repeatedRole && (isBullet || claimStart.test(claimText) || /\b(?:19|20)\d{2}\b|\b(?:expected|in preparation|submitted|prototype|coursework)\b/i.test(claimText));
+        const candidateClaim = isSubstantiveSourceText(claimText, { isSection: isHeading, firstBodyParagraph: Boolean(repeatedRole) || (page.pageNumber === 1 && readingOrder === 0), trustedName });
         const editable = !repeatedRole && isBullet && !item.style.vertical && item.item.str.length <= 500 && Boolean(item.fontFamily) && item.item.height > 0 && item.item.width > 0 && item.left >= -0.5 && item.top >= -0.5 && item.right <= page.width + 0.5 && item.bottom <= page.height + 0.5;
         const styleFingerprint = { fontName: item.resolvedFontName, fontFamily: item.fontFamily, size: round(Math.hypot(item.item.transform[0], item.item.transform[1])), bounds: [round(item.left), round(item.top), round(item.right), round(item.bottom)] };
         const operatorFingerprint = hashJson({ sourceHash, pageNumber: page.pageNumber, index: item.index, text: rawText, styleFingerprint });
@@ -302,7 +307,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
     if (grouping.status === "blocked") reason = appendReason(reason, grouping.reason);
     if (!sections.length) sections.push({ id: `pdf-section-${hashJson([sourceHash, "default"]).slice(0, 12)}`, heading: "Résumé", anchorIds: anchors.map((anchor) => anchor.id) });
     if (anchors.some((anchor) => anchor.candidateClaim && !anchor.font.family)) reason = appendReason(reason, "A required source font could not be identified. Upload an editable DOCX rather than substituting a font.");
-    return { version: 2, parser: "pdfjs-text-2", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason } : { status: "candidate" },
+    return { version: 2, parser: "pdfjs-text-2", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason, ...(supportDiagnostic ? { diagnostic: supportDiagnostic } : {}) } : { status: "candidate" },
       layout: { columns: detectedColumns, pageCount: pdf.numPages, pageSizePt: firstPageSize, marginsPt: margins, fontFamilies: [...fontFamilies].sort(), pages: pageLayouts }, sections, anchors };
   } catch (error) {
     if (error instanceof Error && /above the|Choose a PDF/.test(error.message)) throw error;

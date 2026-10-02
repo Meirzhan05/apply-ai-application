@@ -7,6 +7,8 @@ import { ResumeDraftError } from "@/lib/resume-document";
 import type { ResumeLayoutFeedback } from "@/lib/resume-layout-feedback";
 import type { Job, Profile, ResumeDraftAttempts, ResumeGroundingFinding, ResumeSourceAnchor, ResumeSourceClaim, ResumeSourceDocument, ResumeSourceEdit, ResumeSourceLayoutMap, ResumeSourcePlan } from "@/lib/types";
 import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
+import { confirmedFactIdsForAnchor, sourceWithCurrentEvidenceClaims, validateSourcePlanEvidence } from "@/lib/source-plan-evidence";
+import { isResumeRendererDiagnostic } from "@/lib/resume-renderer-diagnostics";
 
 const PlanSchema = z.object({
   claims: z.array(z.object({ anchorId: z.string().min(1).max(200), text: z.string().trim().min(1).max(500), factIds: z.array(z.string().min(1).max(160)).min(1).max(80) }).strict()).max(80),
@@ -32,7 +34,12 @@ const normalize = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/
 function verifiedFacts(profile: Profile) { return profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })); }
 function factHash(profile: Profile) { return hashJson(verifiedFacts(profile)); }
 function settingsHash(profile: Profile) { return hashJson(profile.automationSettings ?? null); }
-export function sourceJobHash(job: Job) { return hashJson({ id: job.id, title: job.title, company: job.company, description: job.description, requirements: job.requirements }); }
+export function sourceJobHash(job: Job, policyVersion: 1 | 2 = 1) {
+  const inputs = { id: job.id, title: job.title, company: job.company, description: job.description, requirements: job.requirements };
+  return hashJson(policyVersion === 2 && (job.source === "imported" || job.importUrl)
+    ? { ...inputs, importTrust: job.importCheck?.status === "verified" ? "verified" : "unverified" }
+    : inputs);
+}
 export function sourceProfileHash(profile: Profile) {
   return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear,
     skills: profile.skills, facts: verifiedFacts(profile), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion,
@@ -40,20 +47,13 @@ export function sourceProfileHash(profile: Profile) {
     resumeFileName: profile.resumeFileName });
 }
 
-function candidateFactIds(profile: Profile, anchor: ResumeSourceAnchor): string[] {
-  const sourceText = normalize(anchor.text);
-  return profile.facts.filter((fact) => fact.verified && (
-    fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalize(fact.text).includes(sourceText))
-  )).map((fact) => fact.id);
-}
-
-function missingSourceInformation(source: ResumeSourceDocument, profile: Profile): ResumeDraftError | undefined {
-  const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && candidateFactIds(profile, anchor).length === 0).map((anchor) => ({
+export function assertSourceInformationComplete(source: ResumeSourceDocument, profile: Profile): void {
+  source = sourceWithCurrentEvidenceClaims(source, profile.name);
+  const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && confirmedFactIdsForAnchor(profile, anchor).length === 0).map((anchor) => ({
     claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [],
     requiredInformation: `Confirm this source claim in your profile facts: “${anchor.text}”`,
   }));
-  if (!findings.length) return undefined;
-  return new ResumeDraftError({ version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0, findings,
+  if (findings.length) throw new ResumeDraftError({ version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0, findings,
     requiredInformation: [...new Set(findings.map((finding) => finding.requiredInformation!))] });
 }
 
@@ -62,6 +62,9 @@ function malformed(counts: Counts, message?: string) {
 }
 function providerFailure(counts: Counts, deadline: number) {
   return new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: Date.now() >= deadline ? "deadline" : "provider" });
+}
+function actionableRendererMessage(error: unknown): string | undefined {
+  return isResumeRendererDiagnostic(error) ? error.message : undefined;
 }
 function auditFindings(parsed: unknown, claims: DraftClaim[], byId: Map<string, Profile["facts"][number]>, preservationChecks: SourceActivityCheck[]): ValidatedAudit | undefined {
   const result = AuditSchema.safeParse(parsed);
@@ -102,28 +105,11 @@ function validatePlan(parsed: unknown, source: ResumeSourceDocument, profile: Pr
   const result = PlanSchema.safeParse(parsed);
   if (!result.success) return undefined;
   const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
-  if (result.data.claims.length !== anchors.length) return undefined;
   const byAnchor = new Map(anchors.map((anchor) => [anchor.id, anchor]));
-  const verified = new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
-  const seen = new Set<string>();
-  const claims: DraftClaim[] = [];
-  for (const item of result.data.claims) {
-    const anchor = byAnchor.get(item.anchorId);
-    if (!anchor || seen.has(anchor.id) || new Set(item.factIds).size !== item.factIds.length || item.factIds.some((id) => !verified.has(id))) return undefined;
-    if (anchor.kind !== "bullet" && item.text !== anchor.text) return undefined;
-    const eligibleFacts = candidateFactIds(profile, anchor);
-    if (!eligibleFacts.length || !item.factIds.some((id) => eligibleFacts.includes(id))) return undefined;
-    for (const id of item.factIds) {
-      const fact = verified.get(id)!;
-      if (fact.sourceAnchorId) {
-        const evidenceAnchor = source.anchors.find((candidate) => candidate.id === fact.sourceAnchorId);
-        if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId) return undefined;
-      }
-    }
-    seen.add(anchor.id);
-    claims.push({ anchor, text: item.text, factIds: item.factIds });
-  }
-  return seen.size === byAnchor.size ? claims : undefined;
+  const edits = result.data.claims.filter((claim) => claim.text !== byAnchor.get(claim.anchorId)?.text)
+    .map(({ anchorId, text, factIds }) => ({ anchorId, text, factIds }));
+  if (!validateSourcePlanEvidence({ source, profile, claims: result.data.claims, edits, evidencePolicyVersion: 2 })) return undefined;
+  return result.data.claims.map((item) => ({ anchor: byAnchor.get(item.anchorId)!, text: item.text, factIds: item.factIds }));
 }
 
 function planEdits(claims: DraftClaim[]): ResumeSourceEdit[] {
@@ -137,13 +123,13 @@ function resumeGroundingFindings(findings: ResumeGroundingFinding[], counts: Cou
 }
 
 export async function draftResumeSourcePlan(profile: Profile, job: Job, source: ResumeSourceDocument, deadline: number, beforeModelCall?: () => Promise<void>, baselineLayout?: ResumeSourceLayoutMap, validateLayout?: LayoutValidator): Promise<ResumeSourcePlan> {
+  source = sourceWithCurrentEvidenceClaims(source, profile.name);
   const counts: Counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
   if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This source résumé layout is unsupported.");
   if ((source.format === "docx" && source.version !== 1) || (source.format === "pdf" && source.version !== 1 && source.version !== 2) ||
     source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 80)
     throw new Error("The inspected source résumé is missing, stale, or outside the supported context limit.");
-  const missing = missingSourceInformation(source, profile);
-  if (missing) throw missing;
+  assertSourceInformationComplete(source, profile);
   const sourceLayout = baselineLayout ?? (source.format === "pdf" ? pdfSourceLayout(source) : undefined);
   const layoutHash = sourceLayout ? sourceLayoutHash(sourceLayout) : undefined;
   const facts = verifiedFacts(profile);
@@ -254,8 +240,8 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       continue;
     }
     const plan: ResumeSourcePlan = {
-      version: 1, format: source.format, sourceHash: source.sourceHash, representationVersion: source.version,
-      profileHash: sourceProfileHash(profile), factsHash: factHash(profile), settingsHash: settingsHash(profile), jobHash: sourceJobHash(job),
+      version: 1, evidencePolicyVersion: 2, jobHashPolicyVersion: 2, format: source.format, sourceHash: source.sourceHash, representationVersion: source.version,
+      profileHash: sourceProfileHash(profile), factsHash: factHash(profile), settingsHash: settingsHash(profile), jobHash: sourceJobHash(job, 2),
       ...(sourceLayout && layoutHash ? { sourceLayout, layoutHash } : {}),
       claims: claims.map(({ anchor, text, factIds }) => ({ anchorId: anchor.id, text, factIds })),
       edits: planEdits(claims),
@@ -268,7 +254,8 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
         feedback = await validateLayout(plan);
       } catch (error) {
         if (error instanceof ResumeDraftError) throw new ResumeDraftError({ ...error.diagnostics, ...counts, findings: [], requiredInformation: [] }, error.message);
-        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.");
+        const detail = actionableRendererMessage(error);
+        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, detail ?? "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.");
       }
       if (feedback) {
         const target = source.anchors.find((anchor) => anchor.id === feedback!.anchorId);

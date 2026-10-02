@@ -2,15 +2,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { rm } from "node:fs/promises";
-import type { AppState, Application, Profile } from "@/lib/types";
+import type { AppState } from "@/lib/types";
 
 const fixture = vi.hoisted(() => ({
   state: null as AppState | null,
   demo: true,
   tasks: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>,
   parse: vi.fn(),
-  prepare: vi.fn(),
-  attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>,
+  browser: null as unknown,
 }));
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
@@ -34,11 +33,7 @@ vi.mock("@/lib/budget", () => ({
   markQueuedBudgetTerminal: async () => true,
 }));
 vi.mock("openai", () => ({ default: class { responses = { parse: fixture.parse }; } }));
-vi.mock("@/lib/browser-runner", () => ({
-  prepareBrowser: fixture.prepare,
-  preflightBrowser: vi.fn(), submitBrowser: vi.fn(), cancelBrowser: vi.fn().mockResolvedValue(undefined),
-  refreshBrowserSnapshot: vi.fn(), repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn(),
-}));
+vi.mock("playwright-core", () => ({ chromium: { launch: async () => fixture.browser, connectOverCDP: vi.fn() } }));
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn().mockResolvedValue(undefined) }));
 
 import { initialDemoState } from "@/lib/demo-data";
@@ -49,8 +44,11 @@ import { POST as uploadResume } from "@/app/api/resume/route";
 import { POST as actionRoute } from "@/app/api/actions/route";
 import { GET as applicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
 import { runDraft, runFill } from "@/lib/application-runs";
-import { reviewedPacketFile } from "@/lib/packet-files";
 import { bytesHash } from "@/lib/resume-artifacts";
+import { cancelBrowser } from "@/lib/browser-runner";
+import { createControlledEmployerBrowser } from "@/lib/test-support/controlled-employer-browser";
+
+let employer: ReturnType<typeof createControlledEmployerBrowser>;
 
 const runtime = (() => {
   const candidates = [process.env.TEST_DOCX_SOFFICE_BIN, process.env.SOFFICE_BIN, process.platform === "linux" ? "/usr/bin/soffice" : undefined]
@@ -101,29 +99,25 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   vi.stubEnv("MODEL_USAGE_TEST_DIR", `/tmp/docx-flow-usage-${process.pid}`);
-  fixture.demo = true; fixture.tasks = []; fixture.attached = [];
+  fixture.demo = true; fixture.tasks = [];
   fixture.state = initialDemoState();
   fixture.state.profile.id = "docx-flow-owner";
   fixture.state.applications = [];
+  fixture.state.jobs[0].url = "https://jobs.example/apply";
+  fixture.state.jobs[0].applyUrl = "https://jobs.example/apply";
+  employer = createControlledEmployerBrowser({ targetUrl: fixture.state.jobs[0].applyUrl, html: "<title>Application</title><h1>Application</h1><form action=\"https://jobs.example/apply\" method=\"post\" enctype=\"multipart/form-data\"><label for=\"resume\">Resume</label><input id=\"resume\" name=\"resume\" type=\"file\" accept=\".pdf,application/pdf\" required><button type=\"submit\">Submit application</button></form>" });
+  fixture.browser = employer.browser;
   fixture.parse.mockImplementation(async (request: Parameters<typeof responseFor>[0]) => ({
     id: `fixture-${fixture.parse.mock.calls.length}`, model: request.model, service_tier: "default", output_parsed: responseFor(request),
     usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } },
   }));
-  fixture.prepare.mockImplementation(async (application: Application, job: AppState["jobs"][number], profile: Profile, onSession: (session: { sessionId: string; provider: "browser-use" }) => Promise<boolean>, onAction: (label: string) => Promise<boolean>) => {
-    await onSession({ sessionId: "docx-flow-browser", provider: "browser-use" });
-    await onAction("Checking permission: Resume");
-    const attachment = await reviewedPacketFile(profile, application.packet!, "resume");
-    fixture.attached.push(attachment);
-    return { sessionId: "docx-flow-browser", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: {
-      version: 1, url: job.applyUrl, capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], attachments: [attachment.filename],
-      fields: [{ label: "Resume", identifier: "resume", kind: "file", required: true, valid: true, value: attachment.filename, fileHashes: [`${attachment.filename}:${attachment.bytes.length}:${bytesHash(attachment.bytes)}`] }],
-    } };
-  });
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
+  for (const app of fixture.state?.applications ?? []) await cancelBrowser(app).catch(() => undefined);
   await rm(`/tmp/docx-flow-usage-${process.pid}`, { recursive: true, force: true });
   for (const app of fixture.state?.applications ?? []) {
+    await rm(`.data/screenshots/${app.id}.png`, { force: true });
     for (const file of app.packet?.files ?? []) if (file.storageKey) await rm(`.data/application-files/${file.storageKey}`, { force: true });
     if (app.packet?.resumeArtifact?.format === "docx") {
       await rm(`.data/application-files/${app.packet.resumeArtifact.baseline.storageKey}`, { force: true });
@@ -134,9 +128,9 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-async function exerciseDocxFlow(multiPage: boolean) {
+async function exerciseDocxFlow(multiPage: boolean, headerText?: string) {
   vi.stubEnv("SOFFICE_BIN", runtime!.binary); vi.stubEnv("DOCX_RENDERER_VERSION", runtime!.version);
-  const sourceBytes = await createDocxSourceFixture({ multiPage });
+  const sourceBytes = await createDocxSourceFixture({ multiPage, ...(headerText ? { headerText } : {}) });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
@@ -149,6 +143,8 @@ async function exerciseDocxFlow(multiPage: boolean) {
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  const storedDegree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
+  storedDegree.candidateClaim = false;
 
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
@@ -159,6 +155,9 @@ async function exerciseDocxFlow(multiPage: boolean) {
   const draftHandoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
   expect(draftHandoff.payload.applicationId).toBe(application.id);
   await runDraft(draftHandoff.payload);
+  const writerRequest = fixture.parse.mock.calls.map((call) => call[0]).find((request) => request.text?.format?.name === "anchored_resume_edit_plan");
+  const writerSource = JSON.parse(writerRequest!.input[1].content).sourceDocument.anchors as Array<{ id: string; candidateClaim: boolean }>;
+  expect(writerSource.find((anchor) => anchor.id === storedDegree.id)?.candidateClaim).toBe(true);
   expect(application.status).toBe("draft_review");
   expect(application.packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "docx", pageCount: multiPage ? 2 : 1, layoutValidation: { outcome: "passed" } } });
   expect(application.packet?.resumeSourcePlan?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
@@ -192,11 +191,12 @@ async function exerciseDocxFlow(multiPage: boolean) {
   expect(started.status, await started.clone().text()).toBe(200);
   const fillHandoff = fixture.tasks.find((item) => item.task === "fill-application-form")!;
   await runFill(fillHandoff.payload);
-  expect(fixture.attached).toHaveLength(1);
-  expect(fixture.attached[0]).toMatchObject({ filename: "tailored-resume.pdf", mimeType: "application/pdf" });
-  expect(fixture.attached[0].bytes).toEqual(previewBytes);
+  const attached = await employer.attachedFiles();
+  expect(attached).toHaveLength(1);
+  expect(attached[0]).toMatchObject({ name: "tailored-resume.pdf", mimeType: "application/pdf", sha256: bytesHash(previewBytes) });
+  expect(attached[0].bytes).toEqual(previewBytes);
+  expect(employer.observations().submitClicks).toBe(0);
   expect(application.form?.fields[0].fileHashes).toEqual([`tailored-resume.pdf:${previewBytes.length}:${bytesHash(previewBytes)}`]);
-  expect(fixture.attached[0].bytes).toEqual(previewBytes);
   expect(application.form?.attachments).toEqual(["tailored-resume.pdf"]);
 
   const submissionApproved = await publicAction("approveSubmit", { applicationId: application.id, formHash: application.form!.hash });
@@ -215,6 +215,43 @@ it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and
 it.skipIf(!runtime)("preserves a single-column DOCX entry continuation across a rendered page break", async () => {
   await exerciseDocxFlow(true);
 }, 300_000);
+
+it.skipIf(!runtime)("preserves a linked repeating DOCX header with its declared Noto Sans font", async () => {
+  await exerciseDocxFlow(false, "Confidential candidate record");
+}, 300_000);
+
+it("blocks a new draft when an older stored source flag hides an unconfirmed unbulleted degree", async () => {
+  const sourceBytes = await createDocxSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(200);
+  const source = fixture.state!.profile.resumeSourceDocument!;
+  const degree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
+  const degreeFact = fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === degree.id)!;
+  expect(degreeFact).toMatchObject({ verified: false, source: "resume" });
+
+  const otherConfirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id).map((fact) => ({ ...fact, verified: true }));
+  const confirmed = await publicAction("onboarding", { facts: otherConfirmedFacts });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  fixture.state!.profile.facts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id);
+  degree.candidateClaim = false;
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const requested = await publicAction("draft", { applicationId: application.id });
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
+
+  await expect(runDraft(handoff.payload)).rejects.toMatchObject({ diagnostics: {
+    outcome: "needs_information",
+    requiredInformation: expect.arrayContaining([expect.stringContaining("State University — B.S. Computer Science")]),
+  } });
+  expect(fixture.parse).not.toHaveBeenCalled();
+  expect(application.packet).toBeUndefined();
+});
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
   vi.stubEnv("DEMO_MODE", "true");

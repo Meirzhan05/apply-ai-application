@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import JSZip from "jszip";
 import { applyDocxEdits, parseDocxSource, suggestDocxFacts } from "@/lib/docx-source";
 import { createDocxSourceFixture as fixture } from "@/lib/fixtures/docx-source";
+import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 it("captures full DOCX text, stable anchored structure, and paragraph styling without truncation", async () => {
   const bytes = await fixture();
@@ -17,13 +18,46 @@ it("captures full DOCX text, stable anchored structure, and paragraph styling wi
   expect(suggestDocxFacts(source)).toContainEqual(expect.objectContaining({ text: expect.stringContaining("Built a recommender with 92% precision."), sourceAnchorId: bullet!.id }));
 });
 
+it("treats unbulleted qualifications and language proficiency as source claims, while sharing section semantics with PDFs", async () => {
+  const source = await parseDocxSource(await fixture({ languages: true, skillsText: "Python, scikit-learn, and PostgreSQL" }));
+  const degree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science");
+  const skills = source.anchors.find((anchor) => anchor.text === "Python, scikit-learn, and PostgreSQL");
+  const languageHeading = source.anchors.find((anchor) => anchor.text === "Languages");
+  const languages = source.anchors.find((anchor) => anchor.text === "English and Spanish");
+
+  expect(degree?.candidateClaim).toBe(true);
+  expect(skills?.candidateClaim).toBe(true);
+  expect(languageHeading).toMatchObject({ kind: "section", candidateClaim: false });
+  expect(languages?.candidateClaim).toBe(true);
+  expect(suggestDocxFacts(source).map((suggestion) => suggestion.sourceAnchorId)).toEqual(expect.arrayContaining([degree!.id, skills!.id, languages!.id]));
+
+  const styledCredentialSource = await parseDocxSource(await fixture({ skillsText: "AWS Certified Cloud Practitioner", skillsAsHeading: true }));
+  expect(styledCredentialSource.anchors.find((anchor) => anchor.text === "AWS Certified Cloud Practitioner")).toMatchObject({ kind: "section", candidateClaim: true });
+});
+
 it("includes visible header source text as repeated, stable, non-editable furniture", async () => {
   const source = await parseDocxSource(await fixture({ headerText: "Confidential candidate record" }));
   const header = source.anchors.find((anchor) => anchor.partName === "word/header1.xml");
 
   expect(source.text).toContain("Confidential candidate record");
   expect(source.support).toMatchObject({ status: "candidate" });
-  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false, repeatedRole: "header" });
+  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false, repeatedRole: "header", font: { family: "Noto Sans", sizePt: 10 } });
+  expect(suggestDocxFacts(source)).not.toContainEqual(expect.objectContaining({ sourceAnchorId: header?.id }));
+  const credentialHeader = await parseDocxSource(await fixture({ headerText: "AWS Certified Cloud Practitioner" }));
+  expect(credentialHeader.anchors.find((anchor) => anchor.partName === "word/header1.xml")?.candidateClaim).toBe(true);
+});
+
+it("uses the profile identity for contact handling and still surfaces qualifications on the first visible row", async () => {
+  const blankFirstParagraph = await parseDocxSource(await fixture({ emptyFirstParagraph: true }), "Riley Example");
+  const identity = blankFirstParagraph.anchors.find((anchor) => anchor.text.startsWith("Riley Example"))!;
+  const mixedContact = await parseDocxSource(await fixture({ identityText: "Riley Example | Certified Kubernetes Administrator | riley@example.com" }), "Riley Example");
+  const credentialRow = mixedContact.anchors.find((anchor) => anchor.text.includes("Certified Kubernetes Administrator"))!;
+
+  expect(identity.paragraphIndex).toBeGreaterThan(0);
+  expect(evidenceRequiredAnchorIds(blankFirstParagraph, "Riley Example").has(identity.id)).toBe(false);
+  expect(credentialRow.candidateClaim).toBe(true);
+  expect(evidenceRequiredAnchorIds(mixedContact, "Riley Example").has(credentialRow.id)).toBe(true);
+  expect(suggestDocxFacts(mixedContact)).toContainEqual(expect.objectContaining({ sourceAnchorId: credentialRow.id }));
 });
 
 it("keeps a page-break continuation in its original entry for rendered page mapping", async () => {

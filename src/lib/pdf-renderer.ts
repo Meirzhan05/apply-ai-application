@@ -7,12 +7,32 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { readOriginalResume } from "@/lib/original-resume";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
 import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
+import { ResumeRendererDiagnosticError } from "@/lib/resume-renderer-diagnostics";
+import { planEvidencePolicy, sourceEvidenceAnchors, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { PdfSourceAnchor, PdfSourceRepresentation, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
 const execute = promisify(execFileCallback);
 const MAX_PDF_BYTES = 5 * 1024 * 1024;
 const EXPECTED_PDFBOX_VERSION = "3.0.8";
 const EXPECTED_JAVA_MAJOR = 21;
+function safePdfWorkerError(error: unknown): Error | undefined {
+  if (!error || typeof error !== "object" || !("stderr" in error) || typeof error.stderr !== "string") return undefined;
+  const stderr = error.stderr;
+  if (/No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(stderr))
+    return new ResumeRendererDiagnosticError({ code: "unsupported_glyph" });
+  if (/The source font for an edited résumé bullet is not embedded as a supported outline font\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "unembedded_font" });
+  if (/The PDF source font changed after inspection\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "changed_source_font" });
+  if (stderr.includes("The PDF renderer changed page dimensions after editing."))
+    return new ResumeRendererDiagnosticError({ code: "page_dimensions" });
+  if (stderr.includes("The PDF rewrite changed the original page count; no content may be added or removed."))
+    return new ResumeRendererDiagnosticError({ code: "page_count" });
+
+  const pageDimensions = stderr.match(/The PDF rewrite changed page (\d{1,2}) dimensions beyond 0\.5 pt\./);
+  if (pageDimensions) return new ResumeRendererDiagnosticError({ code: "page_dimensions", page: Number(pageDimensions[1]) });
+  const outsidePixels = stderr.match(/The PDF render changed page (\d{1,2}) pixels outside edited text boxes \(144 dpi: ([\d.]+), 300 dpi: ([\d.]+)\)\. No font substitution or overlay will be used\./);
+  if (outsidePixels) return new ResumeRendererDiagnosticError({ code: "outside_edit_pixels", page: Number(outsidePixels[1]), at144Dpi: outsidePixels[2], at300Dpi: outsidePixels[3] });
+  return undefined;
+}
 
 export interface RenderedPdfResume {
   pdf: Buffer;
@@ -125,10 +145,10 @@ function sourcePages(source: PdfSourceRepresentation, metrics: ReturnType<typeof
   });
 }
 
-function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
+function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan, trustedName?: string) {
   if (source.format !== "pdf" || source.support.status !== "candidate" || source.sourceHash !== bytesHash(sourceBytes) || plan.format !== "pdf" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version)
     throw new Error(source.support.reason ?? "The inspected PDF source is missing, stale, or unsupported. Upload and inspect the original again.");
-  const expectedClaims = new Set(source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => anchor.id));
+  const expectedClaims = new Set(sourceEvidenceAnchors(source, planEvidencePolicy(plan), trustedName).map((anchor) => anchor.id));
   const actualClaims = new Set(plan.claims.map((claim) => claim.anchorId));
   if (expectedClaims.size !== actualClaims.size || [...expectedClaims].some((id) => !actualClaims.has(id))) throw new Error("The PDF plan does not preserve every original résumé claim.");
   const claimById = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
@@ -140,8 +160,9 @@ function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan
   })) throw new Error("The PDF edit plan contains a duplicate, unsupported, or ungrounded source operation.");
 }
 
-export async function renderPdfSourceBytes(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>): Promise<RenderedPdfResume> {
-  validatePlan(sourceBytes, source, plan);
+export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>, trustedName?: string): Promise<RenderedPdfResume> {
+  const source = planEvidencePolicy(plan) === 2 ? sourceWithCurrentEvidenceClaims(sourceInput, trustedName) : sourceInput;
+  validatePlan(sourceBytes, source, plan, trustedName);
   if (sourceBytes.length < 1 || sourceBytes.length > MAX_PDF_BYTES) throw new Error("The source PDF exceeds the 5 MB worker limit.");
   const directory = await mkdtemp(path.join(os.tmpdir(), "resume-pdf-")).catch(() => { throw new Error("The PDF worker could not create an isolated temporary directory."); });
   try {
@@ -160,6 +181,8 @@ export async function renderPdfSourceBytes(sourceBytes: Buffer, source: PdfSourc
       });
       stdout = result.stdout;
     } catch (error) {
+      const safeWorkerError = safePdfWorkerError(error);
+      if (safeWorkerError) throw safeWorkerError;
       const fit = error instanceof Error ? error.message.match(/LAYOUT_FIT anchorId=([^\s]+) page=(\d+) reason=width/) : null;
       if (fit) {
         const anchor = source.anchors.find((candidate) => candidate.id === fit[1]);
@@ -190,5 +213,5 @@ export async function renderPdfResume(profile: Profile, plan: ResumeSourcePlan, 
     throw new Error("The inspected PDF source is no longer available or has changed. Upload and inspect the original again.");
   if (plan.profileHash !== sourceProfileHash(profile)) throw new Error("The PDF edit plan is stale. Prepare a new draft after reviewing your source and facts.");
   const sourceBytes = await readOriginalResume(profile.id, { ...profile.resumeSource, filename: profile.resumeFileName ?? "source.pdf" });
-  return renderPdfSourceBytes(sourceBytes, source, plan, deadline, beforeProcess);
+  return renderPdfSourceBytes(sourceBytes, source, plan, deadline, beforeProcess, profile.name);
 }
