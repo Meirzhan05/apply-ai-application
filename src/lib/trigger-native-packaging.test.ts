@@ -97,6 +97,79 @@ describe("Trigger native package deployment", () => {
     expect(docxRuntimeLock.libreOfficePackageNames).toContain(`libobasis${series}-en-us`);
   });
 
+  it("copies the explicit cached DOCX archive into the task build and passes it to the runtime installer", async () => {
+    const archivePath = "./.data/docx-runtime-cache/LibreOffice_26.8.0_Linux_x86-64_deb.tar.gz";
+    expect(path.basename(archivePath)).toBe(path.basename(new URL(docxRuntimeLock.archiveUrl).pathname));
+    const archiveBytes = Buffer.from("synthetic cached runtime archive");
+    const directory = await mkdtemp(path.join(os.tmpdir(), "apply-trigger-docx-cache-"));
+    const sourceRoot = path.join(directory, "source");
+    const outputPath = path.join(directory, "build");
+    const sourceArchive = path.join(sourceRoot, archivePath);
+    await mkdir(path.dirname(sourceArchive), { recursive: true });
+    await writeFile(path.join(sourceRoot, ".gitignore"), ".data/\n");
+    await writeFile(sourceArchive, archiveBytes);
+
+    try {
+      vi.stubEnv("TRIGGER_DOCX_RUNTIME_USE_CACHED_ARCHIVE", "1");
+      vi.resetModules();
+      const cachedConfig = (await import("../../trigger.config")).default;
+      const extensions = cachedConfig.build!.extensions!;
+      const additionalFiles = extensions.find((item) => item.name === "additionalFiles") as BuildExtension;
+      const docxRuntime = extensions.find((item) => item.name === "pinned-docx-runtime") as BuildExtension;
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const copyContext = { target: "deploy", config: cachedConfig, workingDir: sourceRoot, logger } as unknown as BuildContext;
+      const manifest = { outputPath, target: "deploy" } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
+
+      await additionalFiles.onBuildComplete!(copyContext, manifest);
+
+      expect(await readFile(path.join(outputPath, archivePath))).toEqual(archiveBytes);
+      expect(await readdir(path.join(outputPath, ".data", "docx-runtime-cache"))).toEqual([path.basename(archivePath)]);
+
+      const addLayer = vi.fn();
+      const layerContext = { target: "deploy", config: cachedConfig, addLayer } as unknown as BuildContext;
+      await docxRuntime.onBuildComplete!(layerContext, { environment: "staging" } as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1]);
+      expect(addLayer).toHaveBeenCalledWith(expect.objectContaining({
+        id: "docx-runtime",
+        commands: [`DOCX_RUNTIME_ARCHIVE_PATH=${archivePath.slice(2)} node ./scripts/setup-docx-runtime.mjs /app/docx-runtime`],
+      }));
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the normal DOCX runtime install on its online archive path by default", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "apply-trigger-docx-online-"));
+    const outputPath = path.join(directory, "build");
+
+    try {
+      vi.stubEnv("TRIGGER_DOCX_RUNTIME_USE_CACHED_ARCHIVE", "0");
+      vi.resetModules();
+      const defaultConfig = (await import("../../trigger.config")).default;
+      const extensions = defaultConfig.build!.extensions!;
+      const additionalFiles = extensions.find((item) => item.name === "additionalFiles") as BuildExtension;
+      const docxRuntime = extensions.find((item) => item.name === "pinned-docx-runtime") as BuildExtension;
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const copyContext = { target: "deploy", config: defaultConfig, workingDir: directory, logger } as unknown as BuildContext;
+      const manifest = { outputPath, target: "deploy" } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
+      await additionalFiles.onBuildComplete!(copyContext, manifest);
+      await expect(readdir(path.join(outputPath, ".data"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      const addLayer = vi.fn();
+      const layerContext = { target: "deploy", config: defaultConfig, addLayer } as unknown as BuildContext;
+      await docxRuntime.onBuildComplete!(layerContext, { environment: "staging" } as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1]);
+      expect(addLayer).toHaveBeenCalledWith(expect.objectContaining({
+        id: "docx-runtime",
+        commands: ["node ./scripts/setup-docx-runtime.mjs /app/docx-runtime"],
+      }));
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Canvas external so the Linux image can select its matching optional binary", async () => {
     const result = await build({
       stdin: {
