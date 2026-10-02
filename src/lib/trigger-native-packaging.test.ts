@@ -1,11 +1,82 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import { build } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import type { BuildContext, BuildExtension } from "@trigger.dev/core/v3/build";
 import config from "../../trigger.config";
 import docxRuntimeLock from "../../runtime/docx-runtime.lock.json";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 
 describe("Trigger native package deployment", () => {
+  it("parses a PDF from the task bundle with the worker copied into the build directory", async () => {
+    const outputPath = await mkdtemp(path.join(os.tmpdir(), "apply-pdfjs-build-"));
+    const inputPath = path.join(outputPath, "resume.pdf");
+    const bundlePath = path.join(outputPath, "pdf-source.bundle.mjs");
+    try {
+      const additionalFiles = config.build!.extensions!.find((item) => item.name === "additionalFiles") as BuildExtension;
+      const context = {
+        target: "deploy",
+        config,
+        workingDir: process.cwd(),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+      } as unknown as BuildContext;
+      const manifest = { outputPath, target: "deploy" } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
+      await additionalFiles.onBuildComplete!(context, manifest);
+
+      await build({
+        entryPoints: ["src/lib/pdf-source.ts"],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        target: "node24",
+        alias: { "@": path.resolve("src") },
+        external: config.build!.external,
+        outfile: bundlePath,
+      });
+      await mkdir(path.join(outputPath, "node_modules", "@napi-rs"), { recursive: true });
+      await symlink(path.resolve("node_modules/@napi-rs/canvas"), path.join(outputPath, "node_modules/@napi-rs/canvas"));
+      await writeFile(inputPath, await createPdfSourceFixture());
+      const script = `
+        import { readFile } from "node:fs/promises";
+        const { parsePdfSource } = await import(${JSON.stringify(bundlePath)});
+        const result = await parsePdfSource(await readFile(${JSON.stringify(inputPath)}));
+        console.log(JSON.stringify({ status: result.support.status, pages: result.layout.pageCount, text: result.text }));
+      `;
+      const run = (workerPath: string) => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+        encoding: "utf8",
+        cwd: outputPath,
+        env: { ...process.env, PDFJS_WORKER_PATH: workerPath },
+      }));
+      const bundledWorker = path.join(outputPath, "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs");
+      const triggerRuntime = run(bundledWorker);
+      const webRuntime = run("");
+      const expected = { status: "candidate", pages: 1, text: expect.stringContaining("Built a search index for 1,200 users.") };
+      expect(triggerRuntime).toMatchObject(expected);
+      expect(webRuntime).toMatchObject(expected);
+    } finally {
+      await rm(outputPath, { recursive: true, force: true });
+    }
+  });
+
+  it("sets the task worker path to the file preserved by additionalFiles", async () => {
+    const syncEnvironment = config.build!.extensions!.find((item) => item.name === "SyncEnvVarsExtension") as BuildExtension;
+    const addLayer = vi.fn();
+    const context = {
+      target: "deploy",
+      config,
+      workingDir: process.cwd(),
+      logger: { debug: vi.fn(), warn: vi.fn(), spinner: () => ({ stop: vi.fn(), message: vi.fn() }) },
+      addLayer,
+    } as unknown as BuildContext;
+    const manifest = { environment: "staging", deploy: { env: {} } } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
+    await syncEnvironment.onBuildComplete!(context, manifest);
+    expect(addLayer).toHaveBeenCalledWith(expect.objectContaining({
+      deploy: expect.objectContaining({ env: expect.objectContaining({ PDFJS_WORKER_PATH: "/app/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs" }) }),
+    }));
+  });
+
   it("pins LibreOffice's English UI resources for headless conversion", () => {
     const series = docxRuntimeLock.libreOfficeVersion.split(".").slice(0, 2).join(".");
     expect(docxRuntimeLock.libreOfficePackageNames).toContain(`libobasis${series}-en-us`);
