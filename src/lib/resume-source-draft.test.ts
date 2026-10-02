@@ -74,6 +74,24 @@ it("asks for confirmation of source claims before writing and never treats sourc
   expect(mocks.parse).not.toHaveBeenCalled();
 });
 
+it("checks run authorization before the first writer call", async () => {
+  const { profile, job, source } = await fixture();
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, async () => {
+    throw new Error("The application run is no longer authorized.");
+  })).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "other", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 } });
+  expect(mocks.parse).not.toHaveBeenCalled();
+});
+
+it("does not start writer or checker calls after the shared deadline expires", async () => {
+  const { profile, job, source } = await fixture();
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() - 1)).rejects.toMatchObject({
+    diagnostics: { outcome: "technical_failure", technicalFailure: "deadline", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 },
+  });
+  expect(mocks.parse).not.toHaveBeenCalled();
+});
+
 it("repairs a flagged bullet once, rechecks the complete anchored claim set, and keeps all original anchors", async () => {
   const { profile, job, source } = await fixture();
   mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never, "Led a team of 20 to build an explainable recommender."))

@@ -44,6 +44,7 @@ vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn().mockResolvedValue(unde
 import { initialDemoState } from "@/lib/demo-data";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { parseDocxSource } from "@/lib/docx-source";
+import { parsePdfSource } from "@/lib/pdf-source";
 import { POST as uploadResume } from "@/app/api/resume/route";
 import { POST as actionRoute } from "@/app/api/actions/route";
 import { GET as applicationFile } from "@/app/api/applications/[id]/files/[kind]/route";
@@ -75,7 +76,7 @@ function responseFor(request: { input: Array<{ content: string }>; text: { forma
     const body = JSON.parse(request.input[1].content) as { sourceDocument: { anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean }> }; confirmedFacts: Array<{ id: string; sourceAnchorId?: string }> };
     return { claims: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({
       anchorId: anchor.id,
-      text: anchor.kind === "bullet" ? "Built an explainable recommender with 92% precision." : anchor.text,
+      text: anchor.text === "Built a recommender with 92% precision." ? "Built an explainable recommender with 92% precision." : anchor.text,
       factIds: [body.confirmedFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id],
     })) };
   }
@@ -132,9 +133,9 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and attaches the exact saved DOCX-based PDF", async () => {
+async function exerciseDocxFlow(multiPage: boolean) {
   vi.stubEnv("SOFFICE_BIN", runtime!.binary); vi.stubEnv("DOCX_RENDERER_VERSION", runtime!.version);
-  const sourceBytes = await createDocxSourceFixture();
+  const sourceBytes = await createDocxSourceFixture({ multiPage });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
@@ -158,7 +159,7 @@ it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and
   expect(draftHandoff.payload.applicationId).toBe(application.id);
   await runDraft(draftHandoff.payload);
   expect(application.status).toBe("draft_review");
-  expect(application.packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "docx", pageCount: 1, layoutValidation: { outcome: "passed" } } });
+  expect(application.packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "docx", pageCount: multiPage ? 2 : 1, layoutValidation: { outcome: "passed" } } });
 
   const preview = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
   const download = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume?download=1`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
@@ -167,6 +168,8 @@ it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and
   const previewBytes = Buffer.from(await preview.arrayBuffer());
   expect(previewBytes).toEqual(Buffer.from(await download.arrayBuffer()));
   expect(previewBytes.subarray(0, 5).toString()).toBe("%PDF-");
+  const finalText = await parsePdfSource(previewBytes);
+  if (multiPage) expect(finalText.text).toContain("Improved model recall to 94%.");
   expect(preview.headers.get("content-disposition")).toContain("inline");
   expect(download.headers.get("content-disposition")).toContain("attachment");
   expect(sourceDownload.status).toBe(200);
@@ -201,6 +204,14 @@ it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and
   expect(application.status).toBe("submitting");
   expect(application.submissionStartedAt).toBeTruthy();
   expect(fixture.tasks.some((item) => item.task === "submit-application-form")).toBe(true);
+}
+
+it.skipIf(!runtime)("uploads, confirms, drafts, renders, reviews, downloads, and attaches the exact saved one-page DOCX-based PDF", async () => {
+  await exerciseDocxFlow(false);
+});
+
+it.skipIf(!runtime)("preserves a single-column DOCX entry continuation across a rendered page break", async () => {
+  await exerciseDocxFlow(true);
 });
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
