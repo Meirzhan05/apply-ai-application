@@ -4,6 +4,7 @@ import config from "../../trigger.config";
 
 const syncExtension = config.build!.extensions!.find((extension) => extension.name === "SyncEnvVarsExtension")!;
 const originGuardExtension = config.build!.extensions!.find((extension) => extension.name === "production-origin-guard")!;
+const aptGetExtension = config.build!.extensions!.find((extension) => extension.name === "aptGet")!;
 
 async function invokeExtension(extension: BuildExtension, environment: string, target: "deploy" | "dev" = "deploy") {
   const addLayer = vi.fn();
@@ -15,6 +16,7 @@ async function invokeExtension(extension: BuildExtension, environment: string, t
     logger: {
       spinner: () => ({ stop: vi.fn() }),
       warn: (...args: unknown[]) => warnings.push(args),
+      debug: vi.fn(),
     },
   } as unknown as BuildContext;
   const manifest = { environment, deploy: { env: {} } } as unknown as Parameters<NonNullable<BuildExtension["onBuildComplete"]>>[1];
@@ -51,7 +53,7 @@ describe("production environment sync guard", () => {
     vi.stubEnv("BROWSER_PROVIDER", "browser-use");
     const production = await invokeSync("production");
     const productionLayer = production.addLayer.mock.calls.find(([layer]) => layer.id === "sync-env-vars")![0];
-    expect(productionLayer.deploy.env).toMatchObject({ APP_ORIGIN: "https://apply-ai-chi.vercel.app", NEXT_PUBLIC_APP_URL: "https://apply-ai-chi.vercel.app/", BROWSER_PROVIDER: "browser-use", DEMO_MODE: "false" });
+    expect(productionLayer.deploy.env).toMatchObject({ APP_ORIGIN: "https://apply-ai-chi.vercel.app", NEXT_PUBLIC_APP_URL: "https://apply-ai-chi.vercel.app/", BROWSER_PROVIDER: "browser-use", DEMO_MODE: "false", SOFFICE_BIN: "/opt/libreoffice26.8/program/soffice" });
     expect(productionLayer.deploy.override).toBe(true);
     expect(production.warnings).toHaveLength(0);
 
@@ -60,6 +62,25 @@ describe("production environment sync guard", () => {
     const development = await invokeSync("development");
     expect(development.addLayer.mock.calls.some(([layer]) => layer.id === "sync-env-vars")).toBe(true);
     expect(development.warnings).toHaveLength(0);
+  });
+
+  it("installs LibreOffice's runtime libraries into the deployed image layer", async () => {
+    const production = await invokeExtension(aptGetExtension, "production");
+    const aptLayer = production.addLayer.mock.calls.find(([layer]) => layer.id === "apt-get")![0];
+    expect(aptLayer.image.pkgs).toEqual(expect.arrayContaining([
+      "fontconfig",
+      "libxinerama1",
+      "libx11-6",
+      "libssl3",
+      "libnss3",
+      "libdbus-1-3",
+      "libcairo2",
+      "libglib2.0-0",
+      "libxext6",
+      "libcups2",
+      "libgssapi-krb5-2",
+      "libx11-xcb1",
+    ]));
   });
 
   it.each([

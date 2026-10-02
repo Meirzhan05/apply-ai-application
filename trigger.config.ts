@@ -1,12 +1,18 @@
 import { defineConfig } from "@trigger.dev/sdk";
 import { additionalFiles, aptGet, syncEnvVars } from "@trigger.dev/build/extensions/core";
+import { readFileSync } from "node:fs";
+
+const docxRuntimeLock = JSON.parse(readFileSync(new URL("./runtime/docx-runtime.lock.json", import.meta.url), "utf8")) as {
+  sofficeBinaryPath: string;
+  systemPackages: string[];
+};
 
 // Keep image installation and persisted worker settings together. Existing
 // project env vars otherwise override the paths declared by the image layer.
 const latexRoot = "/app/latex-runtime";
 const latexEnv = { TECTONIC_BIN: `${latexRoot}/tectonic`, TECTONIC_CACHE_DIR: `${latexRoot}/cache` };
 const docxRoot = "/app/docx-runtime";
-const docxEnv = { SOFFICE_BIN: "/usr/bin/soffice", DOCX_RUNTIME_ROOT: docxRoot, DOCX_RENDERER_VERSION: "26.8.0.3" };
+const docxEnv = { SOFFICE_BIN: docxRuntimeLock.sofficeBinaryPath, DOCX_RUNTIME_ROOT: docxRoot, DOCX_RENDERER_VERSION: "26.8.0.3" };
 const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];
 const productionOriginError = "Refusing production environment sync: set APP_ORIGIN and NEXT_PUBLIC_APP_URL to matching HTTPS production origins.";
 
@@ -44,7 +50,7 @@ export default defineConfig({
     external: ["playwright-core", "@napi-rs/canvas"],
     extensions: [
       additionalFiles({ files: ["./src/assets/fonts/*", "./scripts/setup-latex.mjs", "./scripts/setup-docx-runtime.mjs", "./runtime/docx-runtime.lock.json"] }),
-      aptGet({ packages: ["fontconfig"] }),
+      aptGet({ packages: docxRuntimeLock.systemPackages }),
       {
         name: "pinned-latex-runtime",
         onBuildComplete(context) {

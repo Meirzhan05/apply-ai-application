@@ -15,9 +15,15 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const version = (binary) => execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 10_000 }).trim().split("\n")[0];
 
 try {
-  const response = await fetch(lock.archiveUrl, { signal: AbortSignal.timeout(180_000), redirect: "follow" });
-  if (!response.ok) throw new Error(`The pinned LibreOffice archive returned HTTP ${response.status}.`);
-  const archive = Buffer.from(await response.arrayBuffer());
+  const archiveOverride = process.env.DOCX_RUNTIME_ARCHIVE_PATH?.trim();
+  let archive;
+  if (archiveOverride) {
+    archive = await readFile(path.resolve(archiveOverride));
+  } else {
+    const response = await fetch(lock.archiveUrl, { signal: AbortSignal.timeout(180_000), redirect: "follow" });
+    if (!response.ok) throw new Error(`The pinned LibreOffice archive returned HTTP ${response.status}.`);
+    archive = Buffer.from(await response.arrayBuffer());
+  }
   if (sha256(archive) !== lock.archiveSha256) throw new Error("The pinned LibreOffice archive checksum does not match.");
   const archivePath = path.join(temporary, "libreoffice.tar.gz");
   await writeFile(archivePath, archive, { mode: 0o600 });
@@ -31,17 +37,15 @@ try {
     }
   };
   await visit(temporary);
-  const installPackages = new Set(["libreoffice-core", "libreoffice-common", "libreoffice-writer", "libreoffice-style-colibre", "libreoffice-base-core", "libreoffice-ure", "ure", "uno-libs-private"]);
-  const selected = [];
+  const installPackages = new Set(lock.libreOfficePackageNames);
+  const selected = new Map();
   for (const deb of debs) {
     const name = execFileSync("dpkg-deb", ["--field", deb, "Package"], { encoding: "utf8", timeout: 10_000 }).trim();
-    if (installPackages.has(name)) selected.push(deb);
+    if (installPackages.has(name)) selected.set(name, deb);
   }
-  for (const required of ["libreoffice-core", "libreoffice-common", "libreoffice-writer"]) {
-    if (!selected.some((deb) => execFileSync("dpkg-deb", ["--field", deb, "Package"], { encoding: "utf8" }).trim() === required)) throw new Error(`The pinned LibreOffice archive does not include ${required}.`);
-  }
-  if (!selected.length) throw new Error("The pinned LibreOffice Writer packages were not found.");
-  execFileSync("apt-get", ["install", "-y", "--no-install-recommends", ...selected], { timeout: 240_000, stdio: "inherit" });
+  const missing = lock.libreOfficePackageNames.filter((name) => !selected.has(name));
+  if (missing.length) throw new Error(`The pinned LibreOffice archive does not include expected packages: ${missing.join(", ")}.`);
+  execFileSync("apt-get", ["install", "-y", "--no-install-recommends", ...lock.libreOfficePackageNames.map((name) => selected.get(name))], { timeout: 240_000, stdio: "inherit" });
 
   await mkdir(path.join(root, "fonts"), { recursive: true });
   for (const [file, expectedHash] of Object.entries(lock.fonts)) {
@@ -54,7 +58,7 @@ try {
   await mkdir("/usr/local/share/fonts/apply-resume", { recursive: true });
   for (const file of Object.keys(lock.fonts)) await copyFile(path.join(root, "fonts", file), path.join("/usr/local/share/fonts/apply-resume", file));
   execFileSync("fc-cache", ["-f", "/usr/local/share/fonts/apply-resume"], { timeout: 30_000, stdio: "inherit" });
-  const installed = version("/usr/bin/soffice");
+  const installed = version(lock.sofficeBinaryPath);
   if (!installed.startsWith(`LibreOffice ${lock.libreOfficeVersion} `) && installed !== `LibreOffice ${lock.libreOfficeVersion}`) throw new Error(`Installed LibreOffice version mismatch: ${installed}`);
   const font = execFileSync("fc-match", ["--format", "%{family}\n", "Noto Sans"], { encoding: "utf8", timeout: 10_000 }).trim();
   if (!font.toLowerCase().split(",").map((family) => family.trim()).includes("noto sans")) throw new Error(`Noto Sans did not resolve to its pinned font family: ${font}`);
