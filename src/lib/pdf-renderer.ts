@@ -6,7 +6,8 @@ import path from "node:path";
 import { bytesHash } from "@/lib/resume-artifacts";
 import { readOriginalResume } from "@/lib/original-resume";
 import { sourceProfileHash } from "@/lib/resume-source-draft";
-import type { PdfSourceAnchor, PdfSourceRepresentation, Profile, ResumeSourcePlan } from "@/lib/types";
+import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
+import type { PdfSourceAnchor, PdfSourceRepresentation, Profile, ResumePageValidation, ResumeSourcePlan } from "@/lib/types";
 
 const execute = promisify(execFileCallback);
 const MAX_PDF_BYTES = 5 * 1024 * 1024;
@@ -22,6 +23,7 @@ export interface RenderedPdfResume {
   javaVersion: string;
   runtimeArchitecture: string;
   baselinePdfHash: string;
+  pages: ResumePageValidation[];
   pageWidthPt: number;
   pageHeightPt: number;
   visualOutsideEditDifferenceAt144Dpi: number;
@@ -65,23 +67,31 @@ function editManifest(source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
   return plan.edits.map((edit) => {
     const anchor = anchorForEdit(source, edit);
     const replacement = `${anchor.bulletPrefix}${edit.text}`;
-    const fields = [encode(anchor.id), encode(anchor.sourceText), encode(replacement), encode(anchor.font.family),
+    const fields = [encode(anchor.id), String(anchor.pageNumber), encode(anchor.sourceText), encode(replacement), encode(anchor.font.family),
       String(anchor.boundsPt.left), String(anchor.boundsPt.top), String(anchor.boundsPt.right), String(anchor.boundsPt.bottom)];
     return fields.join("\t");
   }).join("\n") + (plan.edits.length ? "\n" : "");
 }
 
 function parseMetrics(output: string) {
-  const fields = Object.fromEntries(output.trim().split("\t").map((field) => field.split("=", 2)));
+  const fieldsFor = (line: string) => Object.fromEntries(line.trim().split("\t").map((field) => field.split("=", 2)));
+  const lines = output.trim().split(/\r?\n/);
+  const fields = fieldsFor(lines[0] ?? "");
+  const pageCount = Number(fields.pages);
+  const pdfbox = fields.pdfbox;
+  const pageMetrics = lines.slice(1).map(fieldsFor).map((page) => ({
+    pageNumber: Number(page.page), widthPt: Number(page.pageWidthPt), heightPt: Number(page.pageHeightPt),
+    visualOutsideEditDifferenceAt144Dpi: Number(page.outsideDifferenceAt144Dpi), visualOutsideEditDifferenceAt300Dpi: Number(page.outsideDifferenceAt300Dpi),
+  }));
   const pageWidthPt = Number(fields.pageWidthPt);
   const pageHeightPt = Number(fields.pageHeightPt);
-  const pages = Number(fields.pages);
-  const pdfbox = fields.pdfbox;
   const visualOutsideEditDifferenceAt144Dpi = Number(fields.outsideDifferenceAt144Dpi);
   const visualOutsideEditDifferenceAt300Dpi = Number(fields.outsideDifferenceAt300Dpi);
-  if (pages !== 1 || pdfbox !== EXPECTED_PDFBOX_VERSION || !(pageWidthPt > 0) || !(pageHeightPt > 0) || visualOutsideEditDifferenceAt144Dpi !== 0 || visualOutsideEditDifferenceAt300Dpi !== 0)
+  if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 8 || pageMetrics.length !== pageCount || pageMetrics.some((page, index) =>
+    page.pageNumber !== index + 1 || !(page.widthPt > 0) || !(page.heightPt > 0) || page.visualOutsideEditDifferenceAt144Dpi !== 0 || page.visualOutsideEditDifferenceAt300Dpi !== 0) ||
+    pdfbox !== EXPECTED_PDFBOX_VERSION || !(pageWidthPt > 0) || !(pageHeightPt > 0) || visualOutsideEditDifferenceAt144Dpi !== 0 || visualOutsideEditDifferenceAt300Dpi !== 0)
     throw new Error("The PDFBox worker returned incomplete page or fidelity validation results.");
-  return { pageWidthPt, pageHeightPt, visualOutsideEditDifferenceAt144Dpi, visualOutsideEditDifferenceAt300Dpi };
+  return { pageCount, pageMetrics, pageWidthPt, pageHeightPt, visualOutsideEditDifferenceAt144Dpi, visualOutsideEditDifferenceAt300Dpi };
 }
 
 async function assertRuntime(directory: string, deadline: number) {
@@ -100,6 +110,19 @@ async function assertRuntime(directory: string, deadline: number) {
     if (error instanceof Error && /pinned Apache|requires Java/.test(error.message)) throw error;
     throw new Error("The pinned PDFBox worker runtime is unavailable. Retry after the native runtime is repaired.");
   }
+}
+
+function sourcePages(source: PdfSourceRepresentation, metrics: ReturnType<typeof parseMetrics>): ResumePageValidation[] {
+  if (metrics.pageCount !== source.layout.pageCount) throw new Error("The PDF rewrite changed the original page count; no content may be added or removed.");
+  const sourcePages = source.layout.pages;
+  if (!sourcePages || sourcePages.length !== metrics.pageCount) throw new Error("The inspected PDF is missing a complete source page/region map; re-upload the source PDF before tailoring.");
+  return sourcePages.map((page, index) => {
+    const result = metrics.pageMetrics[index];
+    if (page.pageNumber !== index + 1 || Math.abs(page.widthPt - result.widthPt) > 0.5 || Math.abs(page.heightPt - result.heightPt) > 0.5)
+      throw new Error(`The PDF rewrite changed source page ${index + 1} dimensions or mapping beyond 0.5 pt.`);
+    return { ...page, visualOutsideEditDifferenceAt144Dpi: result.visualOutsideEditDifferenceAt144Dpi,
+      visualOutsideEditDifferenceAt300Dpi: result.visualOutsideEditDifferenceAt300Dpi };
+  });
 }
 
 function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
@@ -137,6 +160,14 @@ export async function renderPdfSourceBytes(sourceBytes: Buffer, source: PdfSourc
       });
       stdout = result.stdout;
     } catch (error) {
+      const fit = error instanceof Error ? error.message.match(/LAYOUT_FIT anchorId=([^\s]+) page=(\d+) reason=width/) : null;
+      if (fit) {
+        const anchor = source.anchors.find((candidate) => candidate.id === fit[1]);
+        const pageNumber = Number(fit[2]);
+        const mapping = plan.sourceLayout?.anchors.find((candidate) => candidate.anchorId === fit[1] && candidate.pageNumber === pageNumber);
+        if (anchor?.candidateClaim && anchor.kind === "bullet" && anchor.editable && mapping)
+          throw new ResumeLayoutFeedbackError({ anchorId: anchor.id, pageNumber, regionId: mapping.regionId, reason: "The rewritten wording is wider than its original embedded-font text line." });
+      }
       if (error instanceof Error && /one unique PDF text operator|split across PDF|source font|glyph|needs more width|page dimensions|pixels outside|multiple pages|digital signature|encrypted|Form XObject|interactive form|clipping|marked-content/i.test(error.message)) throw error;
       throw new Error("The PDF could not be safely rewritten by the pinned PDFBox worker. The last valid packet is preserved; use an editable DOCX or retry after reviewing the source PDF.");
     }
@@ -144,7 +175,8 @@ export async function renderPdfSourceBytes(sourceBytes: Buffer, source: PdfSourc
     if (pdf.length < 1 || pdf.length > MAX_PDF_BYTES || !pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("The tailored PDF is invalid or exceeds the 5 MB artifact limit.");
     if (plan.edits.length && bytesHash(pdf) === bytesHash(sourceBytes)) throw new Error("The PDF worker returned the unchanged source instead of applying the approved edit.");
     const metrics = parseMetrics(stdout);
-    return { pdf, baselinePdf: sourceBytes, sourcePdf: sourceBytes, renderer: "apache-pdfbox", rendererVersion: version, javaVersion,
+    const pages = sourcePages(source, metrics);
+    return { pdf, baselinePdf: sourceBytes, sourcePdf: sourceBytes, renderer: "apache-pdfbox", rendererVersion: version, javaVersion, pages,
       runtimeArchitecture: `${process.platform}-${process.arch}`,
       baselinePdfHash: bytesHash(sourceBytes), ...metrics };
   } finally {

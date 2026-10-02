@@ -26,9 +26,9 @@ export async function createPdfSourceFixture(options: { pages?: number; pageSize
   page.drawText("B.S. Computer Science, expected 2026", { x: 72, y: 556, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   if (options.duplicateBullet) page.drawText("• Built a search index for 1,200 users.", { x: 320, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   if (options.columns) {
-    page.drawText("Technical Skills", { x: 320, y: 668, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
-    page.drawText("Created scalable services", { x: 320, y: 646, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
-    page.drawText("Implemented API tests", { x: 320, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("Technical Skills", { x: 400, y: 668, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
+    page.drawText("Created scalable services", { x: 400, y: 646, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("Implemented API tests", { x: 400, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   }
   for (let index = 1; index < (options.pages ?? 1); index++) {
     const extra = pdf.addPage(options.pageSize ?? [612, 792]);

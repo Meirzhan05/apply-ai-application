@@ -71,6 +71,48 @@ export interface ResumeSourceAnchorBase {
   kind: "section" | "entry" | "bullet" | "paragraph";
   candidateClaim: boolean;
   editable: boolean;
+  /** Physical position is known at PDF upload or after native DOCX worker preflight. */
+  pageNumber?: number;
+  regionId?: string;
+  readingOrder?: number;
+  repeatedRole?: "header" | "footer";
+}
+
+export interface ResumeSourceRegion {
+  id: string;
+  pageIndex: number;
+  columnId: string;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  readingOrder: number;
+}
+
+export interface ResumeSourcePageLayout {
+  pageNumber: number;
+  widthPt: number;
+  heightPt: number;
+  rotation: number;
+  marginsPt?: { top: number; right: number; bottom: number; left: number };
+  regions: ResumeSourceRegion[];
+}
+
+export interface ResumeSourceAnchorLayout {
+  anchorId: string;
+  pageNumber: number;
+  regionId: string;
+  readingOrder: number;
+  boundsPt: { left: number; top: number; right: number; bottom: number };
+}
+
+export interface ResumeSourceLayoutMap {
+  version: 1;
+  pages: ResumeSourcePageLayout[];
+  anchors: ResumeSourceAnchorLayout[];
+}
+
+export interface ResumePageValidation extends ResumeSourcePageLayout {
+  visualOutsideEditDifference?: number;
+  visualOutsideEditDifferenceAt144Dpi?: number;
+  visualOutsideEditDifferenceAt300Dpi?: number;
 }
 
 export interface DocxSourceAnchor extends ResumeSourceAnchorBase {
@@ -112,8 +154,8 @@ export interface PdfSourceAnchor extends ResumeSourceAnchorBase {
 }
 
 export interface PdfSourceRepresentation {
-  version: 1;
-  parser: "pdfjs-text-1";
+  version: 1 | 2;
+  parser: "pdfjs-text-1" | "pdfjs-text-2";
   format: "pdf";
   sourceHash: string;
   text: string;
@@ -124,6 +166,7 @@ export interface PdfSourceRepresentation {
     pageSizePt: { width: number; height: number };
     marginsPt: { top: number; right: number; bottom: number; left: number };
     fontFamilies: string[];
+    pages?: ResumeSourcePageLayout[];
   };
   sections: Array<{ id: string; heading: string; anchorIds: string[] }>;
   anchors: PdfSourceAnchor[];
@@ -276,11 +319,14 @@ export interface ResumeSourcePlan {
   version: 1;
   format: "docx" | "pdf";
   sourceHash: string;
-  representationVersion: 1;
+  representationVersion: 1 | 2;
   profileHash: string;
   factsHash: string;
   settingsHash: string;
   jobHash: string;
+  /** Bound to the untouched baseline's actual page/region map for representation v2. */
+  layoutHash?: string;
+  sourceLayout?: ResumeSourceLayoutMap;
   claims: ResumeSourceClaim[];
   edits: ResumeSourceEdit[];
   grounding: ResumeGroundingSnapshot;
@@ -296,42 +342,44 @@ export interface LatexResumeArtifact {
 export interface DocxResumeArtifact {
   format: "docx";
   inputHash: string;
-  pageCount: 1;
+  pageCount: number;
   renderer: string;
   rendererVersion: string;
   sourceHash: string;
-  representationVersion: 1;
+  representationVersion: 1 | 2;
   profileHash: string;
   factsHash: string;
   settingsHash: string;
   jobHash: string;
-  layoutPolicy: "docx-single-column-one-page-v1";
-  layoutValidation: { outcome: "passed"; pageWidthPt: number; pageHeightPt: number; unchangedAnchorTolerancePt: 1; pageSizeTolerancePt: 0.5; visualOutsideEditTolerance: 0.001; visualOutsideEditDifference: number; baselinePdfHash: string };
+  layoutPolicy: "docx-single-column-one-page-v1" | "docx-page-regions-v2";
+  layoutValidation: { outcome: "passed"; pageWidthPt: number; pageHeightPt: number; pages?: ResumePageValidation[]; layoutHash?: string; unchangedAnchorTolerancePt: 1; pageSizeTolerancePt: 0.5; visualOutsideEditTolerance: 0.001; visualOutsideEditDifference: number; baselinePdfHash: string };
   baseline: { storageKey: string; sha256: string; size: number; mimeType: "application/pdf" };
   source: { storageKey: string; sha256: string; size: number; mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
 }
 export interface PdfResumeArtifact {
   format: "pdf";
   inputHash: string;
-  pageCount: 1;
+  pageCount: number;
   renderer: "apache-pdfbox";
   rendererVersion: string;
   javaVersion: string;
   runtimeArchitecture: string;
   sourceHash: string;
-  representationVersion: 1;
+  representationVersion: 1 | 2;
   profileHash: string;
   factsHash: string;
   settingsHash: string;
   jobHash: string;
-  layoutPolicy: "pdf-single-column-one-page-v1";
+  layoutPolicy: "pdf-single-column-one-page-v1" | "pdf-page-regions-v2";
   layoutValidation: {
     outcome: "passed";
     pageWidthPt: number;
     pageHeightPt: number;
+    pages?: ResumePageValidation[];
+    layoutHash?: string;
     unchangedAnchorTolerancePt: 0.5;
     pageSizeTolerancePt: 0.5;
-    visualMaskPaddingPt: 1.5;
+    visualMaskPaddingPt: 2.5;
     visualOutsideEditTolerance: 0;
     visualOutsideEditDifferenceAt144Dpi: 0;
     visualOutsideEditDifferenceAt300Dpi: 0;
