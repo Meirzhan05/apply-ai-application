@@ -63,7 +63,10 @@ function sourceLayoutMatchesPlan(plan: ResumeSourcePlan, source: NonNullable<Pro
     anchor.boundsPt.right <= anchor.boundsPt.left || anchor.boundsPt.bottom <= anchor.boundsPt.top)) return false;
   if (source.anchors.some((anchor) => {
     const mapped = anchors.filter((layout) => layout.anchorId === anchor.id);
-    const repeated = "repeatedRole" in anchor && (anchor.repeatedRole === "header" || anchor.repeatedRole === "footer");
+    // PDF parsing already creates a distinct source anchor for each repeated
+    // header/footer occurrence. DOCX keeps one OOXML anchor and maps it once
+    // per rendered page, so only the DOCX adapter expects repeated mappings.
+    const repeated = source.format === "docx" && "repeatedRole" in anchor && (anchor.repeatedRole === "header" || anchor.repeatedRole === "footer");
     return anchor.candidateClaim ? mapped.length !== 1 : repeated ? mapped.length !== pages.length : mapped.length !== 1;
   })) return false;
   if (new Set(anchors.map((anchor) => `${anchor.anchorId}:${anchor.pageNumber}`)).size !== anchors.length) return false;

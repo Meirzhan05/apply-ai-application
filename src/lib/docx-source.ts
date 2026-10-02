@@ -73,7 +73,8 @@ async function unsafePackageReason(zip: JSZip): Promise<string | undefined> {
     const xml = await file.async("string");
     if (/<!DOCTYPE|<!ENTITY/i.test(xml)) return "This DOCX contains XML declarations outside the supported package profile.";
     const supplemental = parseXml(xml, file.name);
-    if (descendants(supplemental, "p").some((paragraph) => paragraphText(paragraph).trim())) return "This DOCX has visible header, footer, note, or comment text outside its inspectable document body. Move the text into ordinary body paragraphs.";
+    if (/^word\/(?:footnotes|endnotes|comments)[^/]*\.xml$/i.test(file.name) && descendants(supplemental, "p").some((paragraph) => paragraphText(paragraph).trim()))
+      return "This DOCX has visible notes or comments outside its inspectable document body. Move that content into ordinary body paragraphs.";
   }
   return undefined;
 }
@@ -209,8 +210,8 @@ function hasUnsupportedStructure(document: XmlDomDocument): string | undefined {
   const sectionProperties = descendants(document, "sectPr");
   if (sectionProperties.length !== 1) return "This DOCX has multiple sections. The current source editor supports one section only.";
   const columns = first(sectionProperties[0], "cols");
-  if (Number(attr(columns, "num") ?? "1") !== 1 || descendants(sectionProperties[0], "col").length > 1) return "This DOCX uses multiple columns. The current source editor supports a single-column page only.";
-  if (descendants(document, "br").some((item) => attr(item, "type") === "page") || descendants(document, "pageBreakBefore").length) return "This DOCX contains an explicit page break. The current source editor supports one naturally flowing page only.";
+  if (Number(attr(columns, "num") ?? "1") > 2 || descendants(sectionProperties[0], "col").length > 2)
+    return "This DOCX uses more than two columns. The source editor supports up to two text columns per page.";
   return undefined;
 }
 
@@ -310,8 +311,9 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
       const text = part.paragraphs[paragraphIndex];
       const entryId = `entry-${hash(`${sectionId}:${paragraphIndex}`).slice(0, 12)}`;
       const id = `docx:${sourceHash.slice(0, 12)}:${hash(`${part.partName}:${paragraphIndex}:${text}`).slice(0, 24)}`;
+      const repeatedRole = /\/header[^/]*\.xml$/i.test(part.partName) ? "header" as const : /\/footer[^/]*\.xml$/i.test(part.partName) ? "footer" as const : undefined;
       anchors.push({ id, partName: part.partName, paragraphIndex, text, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
-        kind: "paragraph", candidateClaim: false, editable: false, styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false } });
+        kind: "paragraph", candidateClaim: false, editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false } });
       section.anchorIds.push(id);
       textLines.push(text);
     }

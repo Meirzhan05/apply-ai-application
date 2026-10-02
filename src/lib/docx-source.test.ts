@@ -17,13 +17,13 @@ it("captures full DOCX text, stable anchored structure, and paragraph styling wi
   expect(suggestDocxFacts(source)).toContainEqual(expect.objectContaining({ text: expect.stringContaining("Built a recommender with 92% precision."), sourceAnchorId: bullet!.id }));
 });
 
-it("includes visible supplementary source text with a stable, non-editable part anchor", async () => {
+it("includes visible header source text as repeated, stable, non-editable furniture", async () => {
   const source = await parseDocxSource(await fixture({ headerText: "Confidential candidate record" }));
   const header = source.anchors.find((anchor) => anchor.partName === "word/header1.xml");
 
   expect(source.text).toContain("Confidential candidate record");
-  expect(source.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/header.*footer.*note/i) });
-  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false });
+  expect(source.support).toMatchObject({ status: "candidate" });
+  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false, repeatedRole: "header" });
 });
 
 it("updates only an authorized source text node and retains untouched package content and paragraph styles", async () => {
@@ -44,7 +44,7 @@ it("updates only an authorized source text node and retains untouched package co
 
 it("reports structurally unsupported DOCX layouts and rejects cross-entry or unconfirmed edits", async () => {
   const tableSource = await parseDocxSource(await fixture({ table: true }));
-  const columnSource = await parseDocxSource(await fixture({ columns: 2 }));
+  const columnSource = await parseDocxSource(await fixture({ columns: 3 }));
   const fontSource = await parseDocxSource(await fixture({ font: "Aptos" }));
   const externalSource = await parseDocxSource(await fixture({ externalResource: true }));
   const bytes = await fixture();
@@ -52,7 +52,7 @@ it("reports structurally unsupported DOCX layouts and rejects cross-entry or unc
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
 
   expect(tableSource.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/table/i) });
-  expect(columnSource.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/column/i) });
+  expect(columnSource.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/more than two columns/i) });
   expect(fontSource.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/Aptos.*not in the pinned supported font set/i) });
   expect(externalSource.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/external package resource/i) });
   await expect(applyDocxEdits(bytes, source, [{ anchorId: bullet.id, text: "Changed wording.", factIds: ["other-entry-fact"] }], [{ id: "other-entry-fact", text: "Managed the entire department.", verified: true, source: "resume", sourceAnchorId: source.anchors.find((anchor) => anchor.kind === "entry")!.id }])).rejects.toThrow(/different source entry/i);
