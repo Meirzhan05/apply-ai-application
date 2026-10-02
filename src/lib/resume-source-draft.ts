@@ -33,7 +33,12 @@ const normalize = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/
 function verifiedFacts(profile: Profile) { return profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })); }
 function factHash(profile: Profile) { return hashJson(verifiedFacts(profile)); }
 function settingsHash(profile: Profile) { return hashJson(profile.automationSettings ?? null); }
-export function sourceJobHash(job: Job) { return hashJson({ id: job.id, title: job.title, company: job.company, description: job.description, requirements: job.requirements }); }
+export function sourceJobHash(job: Job, policyVersion: 1 | 2 = 1) {
+  const inputs = { id: job.id, title: job.title, company: job.company, description: job.description, requirements: job.requirements };
+  return hashJson(policyVersion === 2 && (job.source === "imported" || job.importUrl)
+    ? { ...inputs, importTrust: job.importCheck?.status === "verified" ? "verified" : "unverified" }
+    : inputs);
+}
 export function sourceProfileHash(profile: Profile) {
   return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear,
     skills: profile.skills, facts: verifiedFacts(profile), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion,
@@ -56,6 +61,19 @@ function malformed(counts: Counts, message?: string) {
 }
 function providerFailure(counts: Counts, deadline: number) {
   return new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: Date.now() >= deadline ? "deadline" : "provider" });
+}
+function actionableRendererMessage(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const safeMessages = [
+    /^The source font for an edited résumé bullet is not embedded as a supported outline font\. Embed that font or upload an editable DOCX; no substitute font will be used\.$/,
+    /^The PDF source font changed after inspection\. Re-upload the original PDF and confirm its current text before drafting\.$/,
+    /^The PDF renderer changed page dimensions after editing\.$/,
+    /^The PDF rewrite changed (?:the original page count|source page \d+ dimensions or mapping beyond 0\.5 pt)\..*$/,
+    /^The PDF render changed page \d+ pixels outside edited text boxes \(144 dpi: \d+, 300 dpi: \d+\)\. No font substitution or overlay will be used\.$/,
+    /^The source font for “[^”]{1,60}” cannot be identified\. Upload an editable DOCX rather than substituting a font\.$/,
+    /^The rendered paragraph “[^”]{1,70}” uses [\p{L}\p{N} ,._-]+ instead of source font [\p{L}\p{N} ,._-]+\. Upload a DOCX using the pinned Noto Sans source font\.$/u,
+  ];
+  return safeMessages.some((pattern) => pattern.test(error.message)) ? error.message : undefined;
 }
 function auditFindings(parsed: unknown, claims: DraftClaim[], byId: Map<string, Profile["facts"][number]>, preservationChecks: SourceActivityCheck[]): ValidatedAudit | undefined {
   const result = AuditSchema.safeParse(parsed);
@@ -231,8 +249,8 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       continue;
     }
     const plan: ResumeSourcePlan = {
-      version: 1, evidencePolicyVersion: 2, format: source.format, sourceHash: source.sourceHash, representationVersion: source.version,
-      profileHash: sourceProfileHash(profile), factsHash: factHash(profile), settingsHash: settingsHash(profile), jobHash: sourceJobHash(job),
+      version: 1, evidencePolicyVersion: 2, jobHashPolicyVersion: 2, format: source.format, sourceHash: source.sourceHash, representationVersion: source.version,
+      profileHash: sourceProfileHash(profile), factsHash: factHash(profile), settingsHash: settingsHash(profile), jobHash: sourceJobHash(job, 2),
       ...(sourceLayout && layoutHash ? { sourceLayout, layoutHash } : {}),
       claims: claims.map(({ anchor, text, factIds }) => ({ anchorId: anchor.id, text, factIds })),
       edits: planEdits(claims),
@@ -245,7 +263,8 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
         feedback = await validateLayout(plan);
       } catch (error) {
         if (error instanceof ResumeDraftError) throw new ResumeDraftError({ ...error.diagnostics, ...counts, findings: [], requiredInformation: [] }, error.message);
-        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.");
+        const detail = actionableRendererMessage(error);
+        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, detail ?? "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.");
       }
       if (feedback) {
         const target = source.anchors.find((anchor) => anchor.id === feedback!.anchorId);

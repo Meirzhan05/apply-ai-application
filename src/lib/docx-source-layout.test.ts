@@ -138,6 +138,19 @@ it("maps a repeated DOCX header only when the matching PDF furniture is present 
   expect(firstPageOnly).toMatchObject({ status: "blocked", reason: expect.stringMatching(/missing or duplicated on a page/i) });
 });
 
+it("maps a one-page header without confusing its rendered heading text with the body identity row", () => {
+  const bodySeeds = [{ ...multiPageSeeds[0], text: "Riley Example | riley@example.com", kind: "entry" as const, section: "Résumé", entry: "Riley Example | riley@example.com", pageNumber: 1, regionId: "page-1-column-1", readingOrder: 1 }];
+  const source = docxSource(bodySeeds);
+  source.anchors[0].entryHeading = "Riley Example | riley@example.com";
+  const header = Object.assign(docxAnchor({ ...bodySeeds[0], text: "Confidential candidate record", kind: "paragraph", section: "word/header1.xml", entry: "word/header1.xml" }, 0, "word/header1.xml"), { repeatedRole: "header" as const });
+  source.anchors.push(header);
+  const body = pdfAnchor({ ...bodySeeds[0], entry: "Confidential candidate record · Riley Example | riley@example.com" });
+  const renderedHeader = pdfAnchor({ ...bodySeeds[0], text: "Confidential candidate record", section: "word/header1.xml", entry: "word/header1.xml", kind: "paragraph", regionId: "page-1-header", readingOrder: 0 }, "rendered-header");
+  const baseline = pdfBaseline(bodySeeds, { pageCount: 1, anchors: [renderedHeader, body] });
+
+  expect(mapDocxSourceToPdfLayout(source, baseline).status).toBe("supported");
+});
+
 it("blocks a missing or extra rendered paragraph instead of producing an incomplete anchor map", () => {
   const source = docxSource(multiPageSeeds.slice(0, 3));
   const missing = mapDocxSourceToPdfLayout(source, pdfBaseline(multiPageSeeds.slice(0, 2), { pageCount: 1 }));

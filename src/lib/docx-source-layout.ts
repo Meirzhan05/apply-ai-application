@@ -39,6 +39,13 @@ type Region = DocxBaselinePageLayout["regions"][number];
 
 function blocked(reason: string): DocxSourceLayoutResult { return { status: "blocked", reason }; }
 function normalized(text: string): string { return text.normalize("NFKC").replace(/[\u00a0\u200b\u200c\u200d]/g, " ").replace(/\s+/g, " ").trim(); }
+function normalizedEntryHeading(text: string, furniture: DocxSourceAnchor[]): string {
+  const value = normalized(text);
+  const repeatedHeader = furniture.find((anchor) => roleOf(anchor) === "header");
+  if (!repeatedHeader) return value;
+  const prefix = `${normalized(repeatedHeader.text)} · `;
+  return value.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase()) ? normalized(value.slice(prefix.length)) : value;
+}
 function finiteBounds(value: unknown): value is { left: number; top: number; right: number; bottom: number } {
   if (!value || typeof value !== "object") return false;
   const bounds = value as Record<string, unknown>;
@@ -167,7 +174,7 @@ export function mapDocxSourceToPdfLayout(source: DocxSourceRepresentation, basel
       return blocked(`The rendered baseline text at paragraph ${docxAnchor.paragraphIndex + 1} does not match the DOCX source. Check for missing, reordered, or substituted content, then upload a replacement.`);
     if (docxAnchor.kind !== pdfAnchor.kind)
       return blocked(`The rendered baseline changes the source structure near “${docxAnchor.text.slice(0, 60)}”. Upload a DOCX whose headings and entries render as ordinary text.`);
-    if (normalized(docxAnchor.sectionHeading) !== normalized(pdfAnchor.sectionHeading) || normalized(docxAnchor.entryHeading) !== normalized(pdfAnchor.entryHeading))
+    if (normalized(docxAnchor.sectionHeading) !== normalized(pdfAnchor.sectionHeading) || normalized(docxAnchor.entryHeading) !== normalizedEntryHeading(pdfAnchor.entryHeading, sourceFurniture))
       return blocked(`The rendered baseline changes the section or employer/project association for “${docxAnchor.text.slice(0, 60)}”. Review the original structure or upload a replacement DOCX.`);
     if (index > 0) {
       const sourceSectionBoundary = sectionBoundary(sourceBody[index - 1], docxAnchor);

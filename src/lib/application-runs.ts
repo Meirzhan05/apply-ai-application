@@ -15,6 +15,7 @@ import { recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBlockers } from "@/lib/application-blockers";
 import { importedAutonomyJob } from "@/lib/import-compatibility";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import type { Application, Profile } from "@/lib/types";
 
@@ -113,6 +114,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
+    if (app.packet?.resumeSourcePlan && draftMode !== "resume") assertSourceJobCurrent(app, job);
     if (state.profile.automationSettings?.resumeTailoring !== false && (!app.packet || draftMode === "resume"))
       await assertTailoringSourceReady(state.profile);
     else if (state.profile.automationSettings?.resumeTailoring === false)
@@ -134,6 +136,9 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;
+      const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
+      if (!currentJob) throw new Error("The job is closed or unavailable.");
+      assertSourceJobCurrent(target, currentJob, packet.resumeSourcePlan?.jobHash, packet.resumeSourcePlan?.jobHashPolicyVersion ?? 1);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "draft");
       validatePacket(current.profile, packet);
       setPacket(current, target, packet);
@@ -172,6 +177,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
   let session: Awaited<ReturnType<typeof prepareBrowser>> | undefined;
   try {
     if (!job?.active || !app.packet) throw new Error("The job or approved packet is unavailable.");
+    assertSourceJobCurrent(app, job);
     const eligibilityJob = importedAutonomyJob(app, job);
     assertJobEligible(state.profile, eligibilityJob);
     validatePacket(state.profile, app.packet);
@@ -180,6 +186,9 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     session = await withBrowserUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareBrowser(app, job, state.profile, async (opened) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
+      if (!currentJob) throw new Error("The job or approved packet is unavailable.");
+      assertSourceJobCurrent(target, currentJob);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       validatePacket(current.profile, target.packet!);
       app.browserSessionId = opened.sessionId;
@@ -195,6 +204,9 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     }), async (label) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
+      if (!currentJob) throw new Error("The job or approved packet is unavailable.");
+      assertSourceJobCurrent(target, currentJob);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       else validatePacket(current.profile, target.packet!);
       target.browserActions = [...(target.browserActions || []), { at: new Date().toISOString(), label }].slice(-60);

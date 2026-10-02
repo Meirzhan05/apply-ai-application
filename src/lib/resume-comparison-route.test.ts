@@ -18,6 +18,7 @@ vi.mock("@/lib/original-resume", () => ({ originalResumeManifest: mocks.original
 import { initialDemoState } from "@/lib/demo-data";
 import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { sourceJobHash } from "@/lib/resume-source-draft";
+import { sourcePlanJobIsCurrent } from "@/lib/resume-source-freshness";
 import { selectApplication } from "@/lib/workflow";
 import { GET } from "@/app/api/applications/[id]/files/[kind]/route";
 
@@ -73,7 +74,8 @@ function unverifiedImportedFixture() {
   });
   fixture.application.jobSnapshot = structuredClone(job);
   const draftInput = importedAutonomyJob(fixture.application, job);
-  fixture.application.packet!.resumeSourcePlan!.jobHash = sourceJobHash(draftInput);
+  fixture.application.packet!.resumeSourcePlan!.jobHashPolicyVersion = 2;
+  fixture.application.packet!.resumeSourcePlan!.jobHash = sourceJobHash(draftInput, 2);
   return { ...fixture, job };
 }
 
@@ -122,6 +124,30 @@ describe("owner-scoped résumé comparison files", () => {
     expect(await status.json()).toMatchObject({ stale: false });
     expect(preview.status).toBe(200);
     expect(Buffer.from(await preview.arrayBuffer())).toEqual(tailoredBytes);
+  });
+
+  it("ignores unverified imported description and URL changes but blocks stale source artifacts after verification changes", async () => {
+    const fixture = unverifiedImportedFixture();
+    const expected = fixture.application.packet!.resumeSourcePlan!.jobHash;
+    fixture.job.description = "A different unverified description";
+    fixture.job.requirements = ["A different unverified requirement"];
+    fixture.job.url = "https://example.invalid/role?target=changed";
+    fixture.job.applyUrl = fixture.job.url;
+    fixture.job.importUrl = fixture.job.url;
+
+    expect(sourcePlanJobIsCurrent(fixture.application, fixture.job, expected, 2)).toBe(true);
+    const freshStatus = await get(fixture.application.id, "resume-comparison-status");
+    expect(await freshStatus.json()).toMatchObject({ stale: false });
+    expect((await get(fixture.application.id, "resume")).status).toBe(200);
+
+    fixture.job.importCheck = { status: "verified", checkedAt: "2026-10-02T00:00:00.000Z" };
+    fixture.job.url = "https://boards.greenhouse.io/synthetic/jobs/123";
+    fixture.job.applyUrl = fixture.job.url;
+    fixture.job.importUrl = fixture.job.url;
+    expect(sourcePlanJobIsCurrent(fixture.application, fixture.job, expected, 2)).toBe(false);
+    const staleArtifact = await get(fixture.application.id, "resume");
+    expect(staleArtifact.status).toBe(409);
+    expect(await staleArtifact.text()).toContain("Prepare and review a new résumé");
   });
 
   it("stales comparisons when normalized imported-job title or trust inputs change", async () => {

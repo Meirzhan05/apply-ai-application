@@ -92,6 +92,20 @@ it("does not start writer or checker calls after the shared deadline expires", a
   expect(mocks.parse).not.toHaveBeenCalled();
 });
 
+it("preserves the PDF worker's actionable embedded-font failure without exposing arbitrary renderer errors", async () => {
+  const { profile, job, source } = await pdfFixture();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+  const actionable = "The source font for an edited résumé bullet is not embedded as a supported outline font. Embed that font or upload an editable DOCX; no substitute font will be used.";
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error(actionable); }))
+    .rejects.toMatchObject({ message: actionable, diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+
+  mocks.parse.mockReset();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never)).mockImplementationOnce(async (request) => auditResponse(request as never));
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error("font failure with private runtime path /tmp/private-key"); }))
+    .rejects.toMatchObject({ message: "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.", diagnostics: { technicalFailure: "renderer" } });
+});
+
 it("repairs a flagged bullet once, rechecks the complete anchored claim set, and keeps all original anchors", async () => {
   const { profile, job, source } = await fixture();
   mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never, "Led a team of 20 to build an explainable recommender."))

@@ -1,14 +1,16 @@
 import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim } from "@/lib/types";
-import { requiresSourceEvidence } from "@/lib/resume-source-semantics";
+import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 const normalized = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
 export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 = 1): ResumeSourceAnchor[] {
-  return source.anchors.filter((anchor) => policyVersion === 2 ? requiresSourceEvidence(anchor) : anchor.candidateClaim);
+  const required = policyVersion === 2 ? evidenceRequiredAnchorIds(source) : undefined;
+  return source.anchors.filter((anchor) => policyVersion === 2 ? required!.has(anchor.id) : anchor.candidateClaim);
 }
 
 export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(source: T): T {
-  return { ...source, anchors: source.anchors.map((anchor) => ({ ...anchor, candidateClaim: requiresSourceEvidence(anchor) })) } as T;
+  const required = evidenceRequiredAnchorIds(source);
+  return { ...source, anchors: source.anchors.map((anchor) => ({ ...anchor, candidateClaim: required.has(anchor.id) })) } as T;
 }
 
 export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSourceAnchor): string[] {
@@ -16,6 +18,36 @@ export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSource
   return profile.facts.filter((fact) => fact.verified && (
     fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText))
   )).map((fact) => fact.id);
+}
+
+function validateLegacySourcePlan(input: {
+  source: ResumeSourceDocument;
+  profile: Profile;
+  claims: ResumeSourceClaim[];
+  edits: ResumeSourceEdit[];
+  grounding?: ResumeGroundingSnapshot;
+}): boolean {
+  const anchors = sourceEvidenceAnchors(input.source, 1);
+  const anchorById = new Map(input.source.anchors.map((anchor) => [anchor.id, anchor]));
+  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const claims = new Map(input.claims.map((claim) => [claim.anchorId, claim]));
+  const edits = new Map(input.edits.map((edit) => [edit.anchorId, edit]));
+  if (claims.size !== input.claims.length || edits.size !== input.edits.length || anchors.length !== input.claims.length ||
+    anchors.some((anchor) => !claims.has(anchor.id)) || input.claims.some((claim) => {
+      const anchor = anchorById.get(claim.anchorId);
+      const edit = edits.get(claim.anchorId);
+      return !anchor || !claim.factIds.length || claim.factIds.some((id) => !verified.has(id)) ||
+        (input.source.format === "pdf" && claim.factIds.some((id) => {
+          const sourceAnchorId = verified.get(id)!.sourceAnchorId;
+          return Boolean(sourceAnchorId && anchorById.get(sourceAnchorId)?.entryId !== anchor.entryId);
+        })) ||
+        (anchor.kind !== "bullet" && claim.text !== anchor.text) ||
+        (claim.text !== anchor.text && (!anchor.editable || !edit || edit.text !== claim.text || JSON.stringify(edit.factIds) !== JSON.stringify(claim.factIds))) ||
+        (claim.text === anchor.text && edit !== undefined);
+    }) || input.edits.some((edit) => !claims.has(edit.anchorId))) return false;
+  const grounding = input.grounding;
+  return !grounding || (grounding.findings.length === input.claims.length && grounding.findings.every((finding) => finding.outcome === "supported") &&
+    grounding.writerAttempts >= 1 && grounding.writerAttempts <= 3 && grounding.checkerAttempts >= 1 && grounding.checkerAttempts <= 3 && grounding.repairAttempts <= 2);
 }
 
 export function validateSourcePlanEvidence(input: {
@@ -26,6 +58,7 @@ export function validateSourcePlanEvidence(input: {
   grounding?: ResumeGroundingSnapshot;
   evidencePolicyVersion?: 1 | 2;
 }): boolean {
+  if ((input.evidencePolicyVersion ?? 1) === 1) return validateLegacySourcePlan(input);
   const anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1);
   const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
   const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));

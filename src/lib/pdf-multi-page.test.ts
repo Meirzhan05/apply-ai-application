@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createPdfMultiPageFixture } from "@/lib/fixtures/pdf-multi-page";
 import { parsePdfSource } from "@/lib/pdf-source";
+import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 
 it("supports multi-page PDF source while keeping a continued entry and repeated page furniture together", async () => {
   const source = await parsePdfSource(await createPdfMultiPageFixture());
@@ -17,4 +18,13 @@ it("supports multi-page PDF source while keeping a continued entry and repeated 
   expect(repeatedHeader).toHaveLength(2);
   expect(repeatedFooter).toHaveLength(2);
   expect([...repeatedHeader, ...repeatedFooter].every((anchor) => !anchor.candidateClaim && !anchor.editable)).toBe(true);
+  expect(sourceWithCurrentEvidenceClaims(source).anchors.filter((anchor) => anchor.repeatedRole).every((anchor) => !anchor.candidateClaim)).toBe(true);
+});
+
+it("still requires evidence for substantive credentials repeated in a PDF header", async () => {
+  const source = await parsePdfSource(await createPdfMultiPageFixture({ headerText: "AWS Certified Cloud Practitioner" }));
+  const headers = sourceWithCurrentEvidenceClaims(source).anchors.filter((anchor) => anchor.repeatedRole === "header");
+
+  expect(headers).toHaveLength(2);
+  expect(headers.every((anchor) => anchor.candidateClaim)).toBe(true);
 });

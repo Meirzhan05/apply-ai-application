@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import JSZip from "jszip";
 import { applyDocxEdits, parseDocxSource, suggestDocxFacts } from "@/lib/docx-source";
 import { createDocxSourceFixture as fixture } from "@/lib/fixtures/docx-source";
+import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 it("captures full DOCX text, stable anchored structure, and paragraph styling without truncation", async () => {
   const bytes = await fixture();
@@ -40,8 +41,23 @@ it("includes visible header source text as repeated, stable, non-editable furnit
 
   expect(source.text).toContain("Confidential candidate record");
   expect(source.support).toMatchObject({ status: "candidate" });
-  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: true, editable: false, repeatedRole: "header", font: { family: "Noto Sans", sizePt: 10 } });
-  expect(suggestDocxFacts(source)).toContainEqual(expect.objectContaining({ sourceAnchorId: header?.id }));
+  expect(header).toMatchObject({ text: "Confidential candidate record", candidateClaim: false, editable: false, repeatedRole: "header", font: { family: "Noto Sans", sizePt: 10 } });
+  expect(suggestDocxFacts(source)).not.toContainEqual(expect.objectContaining({ sourceAnchorId: header?.id }));
+  const credentialHeader = await parseDocxSource(await fixture({ headerText: "AWS Certified Cloud Practitioner" }));
+  expect(credentialHeader.anchors.find((anchor) => anchor.partName === "word/header1.xml")?.candidateClaim).toBe(true);
+});
+
+it("uses the first visible body anchor for identity handling and still surfaces credentials on a contact row", async () => {
+  const blankFirstParagraph = await parseDocxSource(await fixture({ emptyFirstParagraph: true }));
+  const identity = blankFirstParagraph.anchors.find((anchor) => anchor.text.startsWith("Riley Example"))!;
+  const mixedContact = await parseDocxSource(await fixture({ identityText: "Riley Example | Certified Kubernetes Administrator | riley@example.com" }));
+  const credentialRow = mixedContact.anchors.find((anchor) => anchor.text.includes("Certified Kubernetes Administrator"))!;
+
+  expect(identity.paragraphIndex).toBeGreaterThan(0);
+  expect(evidenceRequiredAnchorIds(blankFirstParagraph).has(identity.id)).toBe(false);
+  expect(credentialRow.candidateClaim).toBe(true);
+  expect(evidenceRequiredAnchorIds(mixedContact).has(credentialRow.id)).toBe(true);
+  expect(suggestDocxFacts(mixedContact)).toContainEqual(expect.objectContaining({ sourceAnchorId: credentialRow.id }));
 });
 
 it("keeps a page-break continuation in its original entry for rendered page mapping", async () => {
