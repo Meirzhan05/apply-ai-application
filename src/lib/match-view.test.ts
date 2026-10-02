@@ -18,13 +18,13 @@ describe("Matches result counts", () => {
   it("excludes dismissed, closed and stale records from every count", () => {
     const view = matchView({ jobs, matches, feedback, filter: "all", search: "" });
     expect(view.availableCount).toBe(2);
-    expect(view.counts).toEqual({ all: 2, strong: 1, possible: 1, uncertain: 0, saved: 1 });
+    expect(view.counts).toEqual({ all: 2, strong: 1, possible: 1, uncertain: 0, saved: 1, dismissed: 1 });
     expect(view.jobs.map(job => job.id)).toEqual([jobs[1].id, jobs[2].id]);
   });
   it("counts the searched population and keeps every category consistent with its rows", () => {
-    for (const filter of ["all", "strong", "possible", "uncertain", "saved"] as MatchFilter[]) {
+    for (const filter of ["all", "strong", "possible", "uncertain", "saved", "dismissed"] as MatchFilter[]) {
       const view = matchView({ jobs, matches, feedback, filter, search: "  CEDAR engineering  " });
-      expect(view.counts).toEqual({ all: 1, strong: 1, possible: 0, uncertain: 0, saved: 1 });
+      expect(view.counts).toEqual({ all: 1, strong: 1, possible: 0, uncertain: 0, saved: 1, dismissed: 0 });
       expect(view.jobs).toHaveLength(view.counts[filter]);
     }
   });

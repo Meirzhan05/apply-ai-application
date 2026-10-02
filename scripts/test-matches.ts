@@ -3,12 +3,13 @@ import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { publicState } from "../src/lib/public-state";
+import { updateJobFeedback } from "../src/lib/job-feedback";
 
 async function main() {
   const origin = process.env.TEST_MATCHES_URL || "http://localhost:3008";
   const demoState = initialDemoState();
   demoState.jobs.forEach((job, index) => { job.postedAt = new Date(Date.now() - index * 86400000).toISOString(); });
-  const fixture = publicState(demoState);
+  let fixture = publicState(demoState);
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -16,9 +17,17 @@ async function main() {
     // provider calls, application approvals or submissions are involved.
     await page.route("**/api/state", route => route.fulfill({ json: fixture }));
     await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(fixture)}\n\n` }));
+    await page.route("**/api/actions", route => {
+      const body = route.request().postDataJSON();
+      assert.equal(body.action, "feedback", "Only synthetic feedback actions are allowed in this test");
+      assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
+      updateJobFeedback(fixture, body.payload);
+      return route.fulfill({ json: { ok: true } });
+    });
     await mkdir(".data", { recursive: true });
     for (const [label, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]] as const) {
       await page.setViewportSize({ width, height });
+      fixture = publicState(structuredClone(demoState));
       await page.goto(origin);
       const strongRole = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Software Engineering Intern", exact: true }) });
       await strongRole.waitFor();
@@ -40,7 +49,7 @@ async function main() {
       assert.equal(await page.getByRole("button", { name: "All matches 1", exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Possible 0", exact: true }).isVisible(), true);
-      assert.equal(await page.getByRole("status").innerText(), '1 role in this view for “cedar engineering”');
+      assert.equal(await page.locator(".result-summary").innerText(), '1 role in this view for “cedar engineering”');
       await query.fill("no-company-has-this-name");
       await page.getByRole("heading", { name: "No roles match your search", exact: true }).waitFor();
       await page.getByRole("button", { name: "Clear search", exact: true }).last().click();
@@ -76,8 +85,36 @@ async function main() {
         const box = await control.boundingBox();
         assert.ok(box && box.width >= 44 && box.height >= 44, "Job actions need at least 44px targets");
       }
+      await page.getByRole("button", { name: "Saved 0", exact: true }).click();
+      await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      await strongRole.getByRole("button", { name: "Save", exact: true }).click();
+      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Saved 1", exact: true }).click();
+      assert.equal(await page.getByRole("article").count(), 1);
+      await strongRole.getByRole("button", { name: "Unsave", exact: true }).click();
+      await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      await strongRole.getByRole("button", { name: "Save", exact: true }).click();
+      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
+      await strongRole.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
+      assert.equal(await page.getByRole("article").count(), 2);
+      await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
+      assert.equal(await page.getByRole("article").count(), 3, "Undo restores both the role and its previous saved state");
+      await strongRole.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
+      assert.equal(await page.getByRole("article").count(), 1);
+      await strongRole.getByRole("button", { name: "Restore role", exact: true }).click();
+      await page.getByRole("heading", { name: "No dismissed roles", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      assert.equal(await page.getByRole("article").count(), 3);
+      await page.getByRole("button", { name: "Close feedback message", exact: true }).click();
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
-      console.log(`PASS ${label}: fit guidance, native dialog focus/Tab/Escape/return, selection semantics and touch targets`);
+      console.log(`PASS ${label}: fit/search/counts/sort/disclosure, dialog keyboard behavior, touch targets, save/unsave, dismissal undo and restore`);
     }
   } finally { await browser.close(); }
 }

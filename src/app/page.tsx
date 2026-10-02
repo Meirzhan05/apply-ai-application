@@ -56,6 +56,7 @@ export default function Dashboard() {
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("Wrong role");
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" } } | null>(null);
   const [importFields, setImportFields] = useState({
     url: "",
     company: "",
@@ -380,9 +381,14 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+                <div className="collections" role="group" aria-label="Your job collections">
                 <button className={`collection-filter ${filter === "saved" ? "selected" : ""}`} aria-pressed={filter === "saved"} onClick={() => setFilter("saved")}>
                   <Bookmark size={16} aria-hidden="true" /> Saved <span>{view.counts.saved}</span>
                 </button>
+                <button className={`collection-filter ${filter === "dismissed" ? "selected" : ""}`} aria-pressed={filter === "dismissed"} onClick={() => setFilter("dismissed")}>
+                  Dismissed <span>{view.counts.dismissed}</span>
+                </button>
+                </div>
                 <label className="sort-control">Sort
                   <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}>
                     <option value="relevant">Most relevant</option>
@@ -391,6 +397,14 @@ export default function Dashboard() {
                 </label>
               </div>
               <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in this view{search.trim() && ` for “${search.trim()}”`}</p>
+              {feedbackNotice && <div className="feedback-notice" role="status">
+                <span>{feedbackNotice.message}</span>
+                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
+                  const next = await act("feedback", feedbackNotice.undo);
+                  if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
+                }}>Undo dismissal</button>}
+                <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
+              </div>}
               <details className="fit-guide">
                 <summary>What do the fit labels mean?</summary>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
@@ -486,14 +500,22 @@ export default function Dashboard() {
                           </details>
                         </div>
                         <div className="job-actions">
+                          {filter === "dismissed" ? <button className="outline-action" disabled={Boolean(busy)} onClick={async () => {
+                            const next = await act("feedback", { jobId: job.id, kind: "clear" });
+                            if (next) setFeedbackNotice({ message: `${job.title} restored to your matches.` });
+                          }}>Restore role</button> : <>
                           <div className="small-actions">
                             <button
-                              onClick={() =>
-                                act("feedback", {
+                              disabled={Boolean(busy)}
+                              aria-pressed={feedback.get(job.id)?.kind === "saved"}
+                              onClick={async () => {
+                                const saved = feedback.get(job.id)?.kind === "saved";
+                                const next = await act("feedback", {
                                   jobId: job.id,
-                                  kind: "saved",
-                                })
-                              }
+                                  kind: saved ? "clear" : "saved",
+                                });
+                                if (next) setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                              }}
                             >
                               <Bookmark
                                 size={17}
@@ -504,10 +526,11 @@ export default function Dashboard() {
                                 }
                               />
                               {feedback.get(job.id)?.kind === "saved"
-                                ? "Saved"
+                                ? "Unsave"
                                 : "Save"}
                             </button>
                             <button
+                              disabled={Boolean(busy)}
                               onClick={() => {
                                 setDismissJobId(job.id);
                                 setDismissReason("Wrong role");
@@ -552,6 +575,7 @@ export default function Dashboard() {
                             </button>
                           )}
                           {!application && <p className="preparation-note">Opens an application workspace. You approve materials and the filled form before submission.</p>}
+                          </>}
                           <a
                             className="job-link"
                             href={job.url}
@@ -567,9 +591,10 @@ export default function Dashboard() {
                 ) : (
                   <div className="empty">
                     <Search size={28} />
-                    <h3>{search.trim() ? "No roles match your search" : "No jobs in this view"}</h3>
-                    <p>{search.trim() ? "Try a different title or company, or clear your search." : "Try another filter or import a job link."}</p>
+                    <h3>{search.trim() ? "No roles match your search" : filter === "saved" ? "Your shortlist starts here" : filter === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter === "saved" ? "Save roles from your matches to compare them here." : filter === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
                     {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
+                    {!search.trim() && (filter === "saved" || filter === "dismissed") && <button className="outline-action" onClick={() => setFilter("all")}>Browse matches</button>}
                   </div>
                 )}
               </div>
@@ -1464,6 +1489,7 @@ export default function Dashboard() {
                   reason: dismissReason,
                 });
                 if (next) setDismissJobId(null);
+                if (next) setFeedbackNotice({ message: `${jobs.find(job => job.id === dismissJobId)?.title ?? "Role"} dismissed. Find it in Dismissed.`, undo: { jobId: dismissJobId, kind: feedback.get(dismissJobId)?.kind === "saved" ? "saved" : "clear" } });
               }}
             >
               Dismiss role
