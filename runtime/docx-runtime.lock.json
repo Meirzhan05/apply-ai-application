@@ -1,6 +1,7 @@
 {
   "libreOfficeVersion": "26.8.0.3",
-  "sofficeBinaryPath": "/opt/libreoffice26.8/program/soffice",
+  "sofficeRelativePath": "opt/libreoffice26.8/program/soffice",
+  "fontconfigRelativePath": "fonts.conf",
   "libreOfficePackageNames": [
     "libreoffice26.8-writer",
     "libreoffice26.8",

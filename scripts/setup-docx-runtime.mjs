@@ -12,7 +12,10 @@ if (process.arch !== "x64") throw new Error("The DOCX runtime is pinned for Linu
 const root = path.resolve(process.argv[2] || "/app/docx-runtime");
 const temporary = await mkdtemp(path.join(os.tmpdir(), "docx-runtime-build-"));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const sofficePath = path.join(root, lock.sofficeRelativePath);
+const fontconfigPath = path.join(root, lock.fontconfigRelativePath);
 const version = (binary) => execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 10_000 }).trim().split("\n")[0];
+const xmlEscape = (value) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 try {
   const archiveOverride = process.env.DOCX_RUNTIME_ARCHIVE_PATH?.trim();
@@ -37,15 +40,18 @@ try {
     }
   };
   await visit(temporary);
-  const installPackages = new Set(lock.libreOfficePackageNames);
+  const extractPackages = new Set(lock.libreOfficePackageNames);
   const selected = new Map();
   for (const deb of debs) {
     const name = execFileSync("dpkg-deb", ["--field", deb, "Package"], { encoding: "utf8", timeout: 10_000 }).trim();
-    if (installPackages.has(name)) selected.set(name, deb);
+    if (extractPackages.has(name)) selected.set(name, deb);
   }
   const missing = lock.libreOfficePackageNames.filter((name) => !selected.has(name));
   if (missing.length) throw new Error(`The pinned LibreOffice archive does not include expected packages: ${missing.join(", ")}.`);
-  execFileSync("apt-get", ["install", "-y", "--no-install-recommends", ...lock.libreOfficePackageNames.map((name) => selected.get(name))], { timeout: 240_000, stdio: "inherit" });
+  await mkdir(root, { recursive: true });
+  for (const name of lock.libreOfficePackageNames) {
+    execFileSync("dpkg-deb", ["--extract", selected.get(name), root], { timeout: 240_000, stdio: "inherit" });
+  }
 
   await mkdir(path.join(root, "fonts"), { recursive: true });
   for (const [file, expectedHash] of Object.entries(lock.fonts)) {
@@ -55,14 +61,16 @@ try {
     await copyFile(source, path.join(root, "fonts", file));
   }
   await copyFile(path.join(repository, "src/assets/fonts/LICENSE"), path.join(root, "fonts/LICENSE"));
-  await mkdir("/usr/local/share/fonts/apply-resume", { recursive: true });
-  for (const file of Object.keys(lock.fonts)) await copyFile(path.join(root, "fonts", file), path.join("/usr/local/share/fonts/apply-resume", file));
-  execFileSync("fc-cache", ["-f", "/usr/local/share/fonts/apply-resume"], { timeout: 30_000, stdio: "inherit" });
-  const installed = version(lock.sofficeBinaryPath);
+  const fontCache = path.join(root, "font-cache");
+  await mkdir(fontCache, { recursive: true });
+  await writeFile(fontconfigPath, `<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <include>/etc/fonts/fonts.conf</include>\n  <dir>${xmlEscape(path.join(root, "fonts"))}</dir>\n  <cachedir>${xmlEscape(fontCache)}</cachedir>\n</fontconfig>\n`, { mode: 0o644 });
+  const fontEnvironment = { ...process.env, FONTCONFIG_FILE: fontconfigPath };
+  execFileSync("fc-cache", ["-f", path.join(root, "fonts")], { timeout: 30_000, stdio: "inherit", env: fontEnvironment });
+  const installed = version(sofficePath);
   if (!installed.startsWith(`LibreOffice ${lock.libreOfficeVersion} `) && installed !== `LibreOffice ${lock.libreOfficeVersion}`) throw new Error(`Installed LibreOffice version mismatch: ${installed}`);
-  const font = execFileSync("fc-match", ["--format", "%{family}\n", "Noto Sans"], { encoding: "utf8", timeout: 10_000 }).trim();
+  const font = execFileSync("fc-match", ["--format", "%{family}\n", "Noto Sans"], { encoding: "utf8", timeout: 10_000, env: fontEnvironment }).trim();
   if (!font.toLowerCase().split(",").map((family) => family.trim()).includes("noto sans")) throw new Error(`Noto Sans did not resolve to its pinned font family: ${font}`);
-  await writeFile(path.join(root, "runtime.json"), JSON.stringify({ ...lock, fontFamily: "Noto Sans", fontMatch: font, installedVersion: installed }, null, 2), { mode: 0o600 });
+  await writeFile(path.join(root, "runtime.json"), JSON.stringify({ ...lock, fontFamily: "Noto Sans", fontMatch: font, installedVersion: installed }, null, 2), { mode: 0o644 });
   console.log(`Installed ${installed}; ${font}; archive SHA-256 ${lock.archiveSha256}.`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

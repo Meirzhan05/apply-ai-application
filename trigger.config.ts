@@ -3,7 +3,8 @@ import { additionalFiles, aptGet, syncEnvVars } from "@trigger.dev/build/extensi
 import { readFileSync } from "node:fs";
 
 const docxRuntimeLock = JSON.parse(readFileSync(new URL("./runtime/docx-runtime.lock.json", import.meta.url), "utf8")) as {
-  sofficeBinaryPath: string;
+  sofficeRelativePath: string;
+  fontconfigRelativePath: string;
   systemPackages: string[];
 };
 
@@ -12,7 +13,12 @@ const docxRuntimeLock = JSON.parse(readFileSync(new URL("./runtime/docx-runtime.
 const latexRoot = "/app/latex-runtime";
 const latexEnv = { TECTONIC_BIN: `${latexRoot}/tectonic`, TECTONIC_CACHE_DIR: `${latexRoot}/cache` };
 const docxRoot = "/app/docx-runtime";
-const docxEnv = { SOFFICE_BIN: docxRuntimeLock.sofficeBinaryPath, DOCX_RUNTIME_ROOT: docxRoot, DOCX_RENDERER_VERSION: "26.8.0.3" };
+const docxEnv = {
+  SOFFICE_BIN: `${docxRoot}/${docxRuntimeLock.sofficeRelativePath}`,
+  DOCX_RUNTIME_ROOT: docxRoot,
+  DOCX_RENDERER_VERSION: "26.8.0.3",
+  FONTCONFIG_FILE: `${docxRoot}/${docxRuntimeLock.fontconfigRelativePath}`,
+};
 const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];
 const productionOriginError = "Refusing production environment sync: set APP_ORIGIN and NEXT_PUBLIC_APP_URL to matching HTTPS production origins.";
 
@@ -63,7 +69,12 @@ export default defineConfig({
         name: "pinned-docx-runtime",
         onBuildComplete(context) {
           if (context.target === "dev") return;
-          context.addLayer({ id: "docx-runtime", commands: [`node ./scripts/setup-docx-runtime.mjs ${docxRoot}`], deploy: { env: docxEnv } });
+          context.addLayer({
+            id: "docx-runtime",
+            image: { pkgs: docxRuntimeLock.systemPackages },
+            commands: [`node ./scripts/setup-docx-runtime.mjs ${docxRoot}`],
+            deploy: { env: docxEnv },
+          });
         },
       },
       {
