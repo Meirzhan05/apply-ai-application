@@ -195,6 +195,70 @@ export async function reviewedPacketFile(profile: Profile, packet: ApplicationPa
     (file.sha256 !== bytesHash(bytes) || file.size !== bytes.length || file.filename !== filename(kind) || file.mimeType !== "application/pdf"))) throw new Error("The application file changed. Prepare and review a new packet before filling.");
   return { bytes, filename: filename(kind), mimeType: "application/pdf" };
 }
+
+export interface ResumeComparisonFile { bytes: Buffer; filename: string; mimeType: "application/pdf" }
+export interface ResumeComparisonFiles {
+  baseline: ResumeComparisonFile;
+  tailored: ResumeComparisonFile;
+  stale: boolean;
+  staleReasons?: string[];
+}
+
+/**
+ * Reads the immutable source-layout baseline and exact résumé attachment for
+ * inspection. Persisted hashes and owner-scoped keys are checked against the
+ * saved packet, while current input mismatches are reported separately so an
+ * old version can be identified without presenting it as current.
+ */
+export async function reviewedResumeComparisonFiles(profile: Profile, packet: ApplicationPacket): Promise<ResumeComparisonFiles> {
+  const plan = packet.resumeSourcePlan;
+  const artifact = packet.resumeArtifact;
+  const file = packet.files?.find((item) => item.kind === "resume");
+  if (packet.schemaVersion !== 3 || !plan || plan.format !== "docx" || !artifact || artifact.format !== "docx" || !file || packet.resumeMode === "original")
+    throw new Error("This packet has no source-preserving résumé comparison.");
+
+  const inputHash = docxInputHash(plan);
+  const validStoredFile = (key: string | undefined, hash: string, size: number, extension: "pdf" | "docx") =>
+    /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 &&
+    key === `${profile.id}/${inputHash}/${hash}.${extension}`;
+  const layout = artifact.layoutValidation;
+  if (plan.version !== 1 || !/^[a-f0-9]{64}$/.test(plan.sourceHash) || !/^[a-f0-9]{64}$/.test(plan.profileHash) ||
+      !/^[a-f0-9]{64}$/.test(plan.factsHash) || !/^[a-f0-9]{64}$/.test(plan.settingsHash) || !/^[a-f0-9]{64}$/.test(plan.jobHash) ||
+      artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.sourceHash !== plan.sourceHash || artifact.representationVersion !== plan.representationVersion ||
+      artifact.profileHash !== plan.profileHash || artifact.factsHash !== plan.factsHash || artifact.settingsHash !== plan.settingsHash || artifact.jobHash !== plan.jobHash ||
+      artifact.layoutPolicy !== docxLayoutPolicy || layout?.outcome !== "passed" || layout.unchangedAnchorTolerancePt !== 1 || layout.pageSizeTolerancePt !== 0.5 ||
+      layout.visualOutsideEditTolerance !== 0.001 || !Number.isFinite(layout.visualOutsideEditDifference) || layout.visualOutsideEditDifference < 0 ||
+      layout.visualOutsideEditDifference > 0.001 || !/^[a-f0-9]{64}$/.test(layout.baselinePdfHash) || layout.pageWidthPt <= 0 || layout.pageHeightPt <= 0 ||
+      artifact.baseline.mimeType !== "application/pdf" || artifact.baseline.sha256 !== layout.baselinePdfHash ||
+      artifact.source.mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || artifact.source.storageKey === profile.resumeSource?.storageKey ||
+      !validStoredFile(artifact.baseline.storageKey, artifact.baseline.sha256, artifact.baseline.size, "pdf") ||
+      !validStoredFile(artifact.source.storageKey, artifact.source.sha256, artifact.source.size, "docx") ||
+      !validStoredFile(file.storageKey, file.sha256, file.size, "pdf") || file.mimeType !== "application/pdf" || file.filename !== filename("resume") ||
+      hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds }))) ||
+      hashJson(file.factIds) !== hashJson([...new Set(plan.claims.flatMap((claim) => claim.factIds))]) ||
+      plan.grounding.findings.length !== plan.claims.length || plan.grounding.findings.some((finding) => finding.outcome !== "supported"))
+    throw new Error("The saved résumé comparison baseline, tailored file, or layout records do not match its persisted plan and artifact metadata.");
+
+  const baselineBytes = await readArtifact(profile.id, artifact.baseline.storageKey, artifact.baseline.sha256, artifact.baseline.size);
+  const tailoredBytes = await readArtifact(profile.id, file.storageKey!, file.sha256, file.size);
+  const staleReasons: string[] = [];
+  const source = profile.resumeSourceDocument;
+  if (!source || source.support.status !== "candidate" || source.sourceHash !== plan.sourceHash || profile.resumeSource?.sha256 !== plan.sourceHash) staleReasons.push("source");
+  if (!source || source.format !== plan.format || source.version !== plan.representationVersion) staleReasons.push("representation");
+  const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+  if (factsHash !== plan.factsHash) staleReasons.push("facts");
+  if (hashJson(profile.automationSettings ?? null) !== plan.settingsHash) staleReasons.push("settings");
+  if (sourceProfileHash(profile) !== plan.profileHash) staleReasons.push("profile");
+  if (staleReasons.length === 0) validateResumeArtifact(profile, packet);
+
+  return {
+    baseline: { bytes: baselineBytes, filename: "original-layout-preview.pdf", mimeType: "application/pdf" },
+    tailored: { bytes: tailoredBytes, filename: file.filename, mimeType: "application/pdf" },
+    stale: staleReasons.length > 0,
+    ...(staleReasons.length ? { staleReasons } : {}),
+  };
+}
+
 export async function reviewedResumeSource(profile: Profile, packet: ApplicationPacket) {
   if (packet.schemaVersion === 3 && packet.resumeArtifact?.format === "docx") {
     validateResumeArtifact(profile, packet);

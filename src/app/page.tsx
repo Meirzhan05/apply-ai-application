@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
+import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
@@ -840,6 +841,18 @@ export default function Dashboard() {
                           </div>
                           {activeApp.packet.resumeMode === "original" ? (
                             <OriginalResumeInspection packet={activeApp.packet} applicationId={activeApp.id} />
+                          ) : hasSourcePreservingResume(activeApp.packet) ? (
+                            <ResumeComparison
+                              applicationId={activeApp.id}
+                              profile={data.profile}
+                              packet={activeApp.packet}
+                              diagnostics={activeApp.resumeDraftDiagnostics}
+                              latestError={activeApp.resumeDraftDiagnostics ? activeApp.error : undefined}
+                              jobFingerprint={JSON.stringify(appJob)}
+                              onReviewProfile={() => setSection("profile")}
+                              onRebuildResume={activeApp.status === "draft_review" ? () => act("draft", { applicationId: activeApp.id, draftMode: "resume" }) : undefined}
+                              rebuildDisabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
+                            />
                           ) : activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
                             <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
                           ) : <>
@@ -1509,18 +1522,7 @@ export default function Dashboard() {
                     }}
                   />
                 </label>
-                {profileDraft.resumeSourceDocument && (
-                  <p className="muted" role="status">
-                    {profileDraft.resumeSourceDocument.support.status === "blocked"
-                      ? `DOCX layout is unsupported: ${profileDraft.resumeSourceDocument.support.reason}`
-                      : `DOCX source captured with ${profileDraft.resumeSourceDocument.anchors.length} stable text anchors and ${profileDraft.resumeSourceDocument.layout.fontFamilies.join(", ") || "no declared font"}. One-page layout and font rendering are checked during drafting.`}
-                  </p>
-                )}
-                {profileDraft.resumeSource?.mimeType === "application/pdf" && (
-                  <p className="muted" role="status">
-                    PDF source layout preservation is not available yet. Upload a supported one-page DOCX to tailor while retaining its layout, or use the original upload unchanged.
-                  </p>
-                )}
+                {profileDraft.resumeSourceDocument && <ResumeSourceSupportNotice source={profileDraft.resumeSourceDocument} />}
                 {profileDraft.resumeText && (
                   <details className="resume-text">
                     <summary>Review extracted resume text</summary>
