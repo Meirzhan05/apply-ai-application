@@ -11,13 +11,23 @@ export interface ResumeAuditOverride {
   requiredInformation?: string | null;
 }
 
+export interface ResumeActivityPreservation {
+  sourceClaimId: string;
+  outcome: "preserved" | "substituted" | "missing" | "uncertain";
+  preservedClaimId: string | null;
+  reason: string;
+  requiredInformation: string | null;
+}
+
 export function resumeGroundingOutput(
   claims: ResumeAuditClaim[],
   overrides: ResumeAuditOverride[] = [],
   defaultReason = "The confirmed source fact supports this claim.",
+  sourceActivityPreservations: ResumeActivityPreservation[] = [],
 ) {
   const overrideByClaimId = new Map(overrides.map((override) => [override.claimId, override]));
   return {
+    sourceActivityPreservations,
     findings: claims.map((claim) => {
       const override = overrideByClaimId.get(claim.claimId);
       return {

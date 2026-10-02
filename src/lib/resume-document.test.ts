@@ -136,14 +136,16 @@ describe("structured resume grounding", () => {
 
   it("accepts a newly worded correction of an unsupported claim from the original résumé", async () => {
     const { profile, document } = latexFixture();
+    document.experience[0].bullets[0].text = "Led three engineers to develop an XGBoost regression model to predict campaign ROI.";
     const originalBullet = document.experience[0].bullets[0];
     profile.resumeText = `Orbit Labs\n${originalBullet.text}`;
     const simplified = structuredClone(document);
-    simplified.experience[0].bullets[0].text = "Built an XGBoost model to predict campaign ROI.";
-    const finding: ResumeAuditOverride & { affectedText: string } = { claimId: "experience.0.bullets.0", affectedText: originalBullet.text, outcome: "unsupported", reason: "The confirmed fact does not establish the full scope in the source wording.", evidenceFactIds: originalBullet.factIds, requiredInformation: "Confirm the model's full scope." };
+    simplified.experience[0].bullets[0].text = "Developed an XGBoost regression model to predict campaign ROI.";
+    const finding: ResumeAuditOverride & { affectedText: string } = { claimId: "experience.0.bullets.0", affectedText: originalBullet.text, outcome: "uncertain", reason: "The confirmed facts support model development but do not establish the leadership claim.", evidenceFactIds: originalBullet.factIds, requiredInformation: "Confirm whether you led the three engineers." };
     const audit = (input: { input: Array<{ content: string }> }, unsupported: boolean) => {
       const request = JSON.parse(input.input[1].content);
-      return { output_parsed: resumeGroundingOutput(request.claims, unsupported ? [finding] : [], "The confirmed facts support this wording.") };
+      const preserved = request.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId, outcome: "preserved" as const, preservedClaimId: check.sourceClaimId, reason: "The original model-development activity remains under Orbit Labs; only the unsupported leadership qualifier was removed.", requiredInformation: null }));
+      return { output_parsed: resumeGroundingOutput(request.claims, unsupported ? [finding] : [], "The confirmed facts support this wording.", preserved) };
     };
     mocks.parse.mockResolvedValueOnce({ output_parsed: document })
       .mockImplementationOnce(async (input) => audit(input, true))
@@ -153,6 +155,37 @@ describe("structured resume grounding", () => {
     const drafted = await draftResumeDocument(profile, initialDemoState().jobs[0], Date.now() + 60_000);
     expect(drafted.experience[0].bullets[0].text).toBe(simplified.experience[0].bullets[0].text);
     expect(drafted.grounding?.findings.every((item) => item.outcome === "supported")).toBe(true);
+    expect(mocks.parse).toHaveBeenCalledTimes(4);
+  });
+
+  it("blocks replacing an uncertain original activity with another activity sharing the same source fact", async () => {
+    const { profile, document } = latexFixture();
+    profile.id = `original-activity-substitution-${Date.now()}`;
+    profile.facts.find((fact) => fact.id === "latex-fact-2")!.text += " Also automated QA checks for campaign data.";
+    document.experience[0].bullets[0].text = "Led three engineers to develop an XGBoost regression model to predict campaign ROI.";
+    profile.resumeText = `Orbit Labs\n${document.experience[0].bullets[0].text}`;
+    const unrelatedActivity = structuredClone(document);
+    unrelatedActivity.experience[0].bullets[0].text = "Automated QA checks for campaign data.";
+    const sourceClaimId = "experience.0.bullets.0";
+    const requiredInformation = "Confirm whether you led the three engineers.";
+    mocks.parse.mockResolvedValueOnce({ output_parsed: document }).mockImplementationOnce(async (input) => {
+      const request = JSON.parse(input.input[1].content);
+      return { output_parsed: resumeGroundingOutput(request.claims, [{ claimId: sourceClaimId, outcome: "uncertain", reason: "The confirmed fact does not establish whether the applicant led engineers.", requiredInformation }]) };
+    }).mockResolvedValueOnce({ output_parsed: unrelatedActivity }).mockImplementationOnce(async (input) => {
+      const request = JSON.parse(input.input[1].content);
+      return { output_parsed: resumeGroundingOutput(request.claims, [], "The confirmed fact supports this wording.", [{
+        sourceClaimId,
+        outcome: "substituted",
+        preservedClaimId: null,
+        reason: "The revised QA task is distinct from developing the regression model.",
+        requiredInformation,
+      }]) };
+    });
+
+    await expect(draftResumeDocument(profile, initialDemoState().jobs[0], Date.now() + 60_000)).rejects.toMatchObject({
+      diagnostics: { outcome: "needs_information", writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1, requiredInformation: [requiredInformation] },
+      message: expect.stringContaining(requiredInformation),
+    });
     expect(mocks.parse).toHaveBeenCalledTimes(4);
   });
 
