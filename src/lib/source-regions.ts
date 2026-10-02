@@ -35,6 +35,7 @@ const ALIGNMENT_TOLERANCE_PT = 48;
 const COLUMN_SEPARATION_PT = 120;
 const MIN_VERTICAL_EVIDENCE_PT = 24;
 const MAX_COLUMN_ASSIGNMENT_DISTANCE_PT = 64;
+const MIN_COLUMN_ASSIGNMENT_MARGIN_PT = 12;
 const OVERLAP_TOLERANCE_PT = 1;
 
 interface StartCluster {
@@ -141,6 +142,9 @@ export function groupPositionedSpansIntoRegions(spans: PositionedSourceSpan[]): 
     for (const span of pageSpans) {
       const distances = columns.map((column) => Math.abs(span.bounds.left - column.left));
       const closestDistance = Math.min(...distances);
+      if (distances.length === 2 && Math.abs(distances[0] - distances[1]) <= MIN_COLUMN_ASSIGNMENT_MARGIN_PT) {
+        return invalid("A text span falls between the detected columns, so its original reading region is ambiguous.");
+      }
       const closestColumn = distances.indexOf(closestDistance);
       if (closestDistance > MAX_COLUMN_ASSIGNMENT_DISTANCE_PT) {
         return invalid("A text span falls between the detected columns, so its original reading region is ambiguous.");
