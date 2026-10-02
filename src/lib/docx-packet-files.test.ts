@@ -80,7 +80,7 @@ async function sourcePacket(imported = false) {
   const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({ anchorId: anchor.id, text: anchor.text,
     factIds: [sourceFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id] }));
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
-  const editText = "Built an explainable recommender with 92% precision.";
+  const editText = "Built recommender with 92% precision.";
   const editedClaim = claims.find((claim) => claim.anchorId === bullet.id)!;
   editedClaim.text = editText;
   const plan: ResumeSourcePlan = { version: 1, format: "docx", sourceHash: source.sourceHash, representationVersion: source.version,
@@ -118,7 +118,7 @@ it.skipIf(!renderer)("runs a real source-to-edited-DOCX-to-PDF fidelity check an
   expect(source.bytes.length).toBeGreaterThan(100);
   expect(source).toMatchObject({ filename: "tailored-resume.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
   const revisedSource = await parseDocxSource(source.bytes);
-  expect(revisedSource.anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built an explainable recommender with 92% precision.");
+  expect(revisedSource.anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built recommender with 92% precision.");
   expect(await (await import("@/lib/original-resume")).readOriginalResume(fixture.profile.id, { ...fixture.profile.resumeSource!, filename: fixture.profile.resumeFileName! })).toEqual(fixture.originalBytes);
 });
 
