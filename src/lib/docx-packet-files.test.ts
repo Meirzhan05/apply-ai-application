@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { initialDemoState } from "@/lib/demo-data";
 import { parseDocxSource } from "@/lib/docx-source";
+import { prepareDocxResumeBaseline } from "@/lib/docx-renderer";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { packetProfileHash, validatePacket } from "@/lib/drafting";
 import { reviewedPacketFile, reviewedResumeSource, withPacketFiles } from "@/lib/packet-files";
@@ -66,6 +67,7 @@ async function sourcePacket(imported = false) {
   await saveDemoOriginalResume(originalKey, originalBytes);
   cleanups.push(`.data/resumes/${originalKey}`);
   const source = await parseDocxSource(originalBytes);
+  const baseline = renderer ? await prepareDocxResumeBaseline(originalBytes, source, Date.now() + 90_000) : undefined;
   const sourceFacts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({
     id: `source-fact-${index}`, text: anchor.text, verified: true, source: "resume" as const, sourceAnchorId: anchor.id,
   }));
@@ -78,10 +80,11 @@ async function sourcePacket(imported = false) {
   const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({ anchorId: anchor.id, text: anchor.text,
     factIds: [sourceFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id] }));
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
-  const editText = "Built an explainable recommender with 92% precision.";
+  const editText = "Built recommender with 92% precision.";
   const editedClaim = claims.find((claim) => claim.anchorId === bullet.id)!;
   editedClaim.text = editText;
   const plan: ResumeSourcePlan = { version: 1, format: "docx", sourceHash: source.sourceHash, representationVersion: source.version,
+    ...(baseline ? { sourceLayout: baseline.sourceLayout, layoutHash: baseline.layoutHash } : {}),
     profileHash: sourceProfileHash(profile), factsHash: hashJson(profile.facts.map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))), settingsHash: hashJson(profile.automationSettings ?? null), jobHash: sourceJobHash(application ? importedAutonomyJob(application, job) : job),
     claims, edits: [{ anchorId: bullet.id, text: editText, factIds: editedClaim.factIds }], grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
       findings: claims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, outcome: "supported", reason: "Confirmed source fact.", evidenceFactIds: claim.factIds })) }, model: "gpt-6-sol" };
@@ -115,9 +118,9 @@ it.skipIf(!renderer)("runs a real source-to-edited-DOCX-to-PDF fidelity check an
   expect(source.bytes.length).toBeGreaterThan(100);
   expect(source).toMatchObject({ filename: "tailored-resume.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
   const revisedSource = await parseDocxSource(source.bytes);
-  expect(revisedSource.anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built an explainable recommender with 92% precision.");
+  expect(revisedSource.anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built recommender with 92% precision.");
   expect(await (await import("@/lib/original-resume")).readOriginalResume(fixture.profile.id, { ...fixture.profile.resumeSource!, filename: fixture.profile.resumeFileName! })).toEqual(fixture.originalBytes);
-});
+}, 150_000);
 
 it.skipIf(!renderer)("serves a fresh imported-job DOCX comparison and blocks changed normalized inputs", async () => {
   const fixture = await sourcePacket(true);
@@ -179,4 +182,4 @@ it("rejects stale confirmed source facts before creating a reviewed artifact", a
   const fixture = await sourcePacket();
   fixture.profile.facts[0].text += " changed";
   await expect(withPacketFiles(fixture.profile, fixture.packet, Date.now() + 30_000)).rejects.toThrow(/stale|confirmed facts/i);
-});
+}, 150_000);

@@ -31,15 +31,17 @@ import org.apache.pdfbox.util.Version;
 public final class PdfSourceRewrite {
   private static final float PAGE_TOLERANCE_PT = 0.5f;
   private static final float WIDTH_TOLERANCE_PT = 0.01f;
-  private static final float PIXEL_MASK_PADDING_PT = 1.5f;
+  // Includes the measured Noto Sans descender/antialias fringe beyond PDF.js item bounds.
+  private static final float PIXEL_MASK_PADDING_PT = 2.5f;
   private static final int MAX_BYTES = 5 * 1024 * 1024;
   private static final int MAX_EDITS = 80;
+  private static final int MAX_PAGES = 8;
 
-  private record Edit(String anchorId, String sourceText, String replacementText, String expectedFamily,
+  private record Edit(String anchorId, int pageNumber, String sourceText, String replacementText, String expectedFamily,
                       float left, float top, float right, float bottom) {}
   private static final class Scope { int showOperators; boolean unsupportedShow; }
   private record Target(int stringIndex, COSString source, PDFont font, float fontSize, Scope scope) {}
-  private record Box(float left, float top, float right, float bottom) {}
+  private record Box(int pageNumber, float left, float top, float right, float bottom) {}
 
   private static String decode(String value) {
     return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
@@ -52,9 +54,11 @@ public final class PdfSourceRewrite {
       while ((line = reader.readLine()) != null) {
         if (line.isBlank()) continue;
         String[] fields = line.split("\\t", -1);
-        if (fields.length != 8 || edits.size() >= MAX_EDITS) throw new IllegalArgumentException("The PDF source edit manifest is invalid or too large.");
-        edits.add(new Edit(decode(fields[0]), decode(fields[1]), decode(fields[2]), decode(fields[3]),
-            Float.parseFloat(fields[4]), Float.parseFloat(fields[5]), Float.parseFloat(fields[6]), Float.parseFloat(fields[7])));
+        if (fields.length != 9 || edits.size() >= MAX_EDITS) throw new IllegalArgumentException("The PDF source edit manifest is invalid or too large.");
+        int pageNumber = Integer.parseInt(fields[1]);
+        if (pageNumber < 1 || pageNumber > MAX_PAGES) throw new IllegalArgumentException("The PDF edit targets a page outside the supported source profile.");
+        edits.add(new Edit(decode(fields[0]), pageNumber, decode(fields[2]), decode(fields[3]), decode(fields[4]),
+            Float.parseFloat(fields[5]), Float.parseFloat(fields[6]), Float.parseFloat(fields[7]), Float.parseFloat(fields[8])));
       }
     }
     return edits;
@@ -67,18 +71,19 @@ public final class PdfSourceRewrite {
 
   private static void assertSupported(PDDocument document) throws Exception {
     if (document.isEncrypted()) throw new IllegalArgumentException("This PDF is encrypted. Remove its password and upload an unlocked PDF or editable DOCX.");
-    if (document.getNumberOfPages() != 1) throw new IllegalArgumentException("This PDF has multiple pages. PDF layout-preserving tailoring currently supports one page; use an editable DOCX to preserve a multi-page résumé.");
+    if (document.getNumberOfPages() < 1 || document.getNumberOfPages() > MAX_PAGES) throw new IllegalArgumentException("This PDF exceeds the bounded eight-page source-preserving profile; no pages were removed.");
     if (!document.getSignatureDictionaries().isEmpty() || !document.getSignatureFields().isEmpty()) throw new IllegalArgumentException("This PDF contains a digital signature. Remove the signature before requesting edits.");
     if (document.getDocumentCatalog().getAcroForm() != null) throw new IllegalArgumentException("This PDF contains interactive form fields outside the supported text-only profile.");
-    PDPage page = document.getPage(0);
-    if (page.getRotation() != 0) throw new IllegalArgumentException("This PDF page is rotated. Save an upright PDF or upload an editable DOCX.");
-    PDRectangle media = page.getMediaBox();
-    PDRectangle crop = page.getCropBox();
-    if (Math.abs(media.getLowerLeftX() - crop.getLowerLeftX()) > PAGE_TOLERANCE_PT || Math.abs(media.getLowerLeftY() - crop.getLowerLeftY()) > PAGE_TOLERANCE_PT ||
-        Math.abs(media.getWidth() - crop.getWidth()) > PAGE_TOLERANCE_PT || Math.abs(media.getHeight() - crop.getHeight()) > PAGE_TOLERANCE_PT)
-      throw new IllegalArgumentException("This PDF uses a cropped page box outside the supported source profile. Save a standard page-sized PDF or upload an editable DOCX.");
-    if (crop.getWidth() > 900 || crop.getHeight() > 1100 || (double) crop.getWidth() * crop.getHeight() > 600_000)
-      throw new IllegalArgumentException("This PDF page is larger than the bounded one-page layout profile. Save it to a standard résumé page size or upload an editable DOCX.");
+    for (PDPage page : document.getPages()) {
+      if (page.getRotation() != 0) throw new IllegalArgumentException("A PDF page is rotated. Save the résumé pages upright or upload an editable DOCX.");
+      PDRectangle media = page.getMediaBox();
+      PDRectangle crop = page.getCropBox();
+      if (Math.abs(media.getLowerLeftX() - crop.getLowerLeftX()) > PAGE_TOLERANCE_PT || Math.abs(media.getLowerLeftY() - crop.getLowerLeftY()) > PAGE_TOLERANCE_PT ||
+          Math.abs(media.getWidth() - crop.getWidth()) > PAGE_TOLERANCE_PT || Math.abs(media.getHeight() - crop.getHeight()) > PAGE_TOLERANCE_PT)
+        throw new IllegalArgumentException("This PDF uses a cropped page box outside the supported source profile. Save standard page boxes or upload an editable DOCX.");
+      if (crop.getWidth() > 900 || crop.getHeight() > 1100 || (double) crop.getWidth() * crop.getHeight() > 600_000)
+        throw new IllegalArgumentException("A PDF page exceeds the bounded page-size profile. Save standard résumé page dimensions or upload an editable DOCX.");
+    }
   }
 
   private static List<Object> parse(PDPage page) throws Exception { return new PDFStreamParser(page).parse(); }
@@ -140,7 +145,7 @@ public final class PdfSourceRewrite {
     float afterWidth = font.getStringWidth(edit.replacementText()) / 1000f * target.fontSize();
     float sourceBoxWidth = edit.right() - edit.left();
     if (afterWidth > beforeWidth + WIDTH_TOLERANCE_PT || afterWidth > sourceBoxWidth + PAGE_TOLERANCE_PT)
-      throw new IllegalArgumentException("The rewritten bullet needs more width than its original PDF text box. Keep it shorter or choose a supported source document; its font and position will not be changed.");
+      throw new IllegalArgumentException("LAYOUT_FIT anchorId=" + edit.anchorId() + " page=" + edit.pageNumber() + " reason=width");
     tokens.set(target.stringIndex(), new COSString(encoded));
   }
 
@@ -149,7 +154,7 @@ public final class PdfSourceRewrite {
     return stripper.getText(document).replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
   }
 
-  private static BufferedImage render(PDDocument document, int dpi) throws Exception { return new PDFRenderer(document).renderImageWithDPI(0, dpi); }
+  private static BufferedImage render(PDDocument document, int pageIndex, int dpi) throws Exception { return new PDFRenderer(document).renderImageWithDPI(pageIndex, dpi); }
 
   private static double outsideDifference(BufferedImage before, BufferedImage after, List<Box> boxes, int dpi) {
     if (before.getWidth() != after.getWidth() || before.getHeight() != after.getHeight()) throw new IllegalArgumentException("The PDF renderer changed page dimensions after editing.");
@@ -193,40 +198,60 @@ public final class PdfSourceRewrite {
     Path sourcePath = Path.of(args[0]); Path outputPath = Path.of(args[1]);
     if (Files.size(sourcePath) < 1 || Files.size(sourcePath) > MAX_BYTES) throw new IllegalArgumentException("The source PDF must be between 1 byte and 5 MB.");
     List<Edit> edits = readEdits(Path.of(args[2]));
-    List<Box> boxes = edits.stream().map(edit -> new Box(edit.left() - PIXEL_MASK_PADDING_PT, edit.top() - PIXEL_MASK_PADDING_PT, edit.right() + PIXEL_MASK_PADDING_PT, edit.bottom() + PIXEL_MASK_PADDING_PT)).toList();
-    BufferedImage before144; BufferedImage before300; float pageWidth; float pageHeight;
+    List<Box> boxes = edits.stream().map(edit -> new Box(edit.pageNumber(), edit.left() - PIXEL_MASK_PADDING_PT, edit.top() - PIXEL_MASK_PADDING_PT, edit.right() + PIXEL_MASK_PADDING_PT, edit.bottom() + PIXEL_MASK_PADDING_PT)).toList();
+    List<BufferedImage> before144 = new ArrayList<>(); List<BufferedImage> before300 = new ArrayList<>();
+    List<Float> pageWidths = new ArrayList<>(); List<Float> pageHeights = new ArrayList<>();
     try (PDDocument document = Loader.loadPDF(sourcePath.toFile())) {
       assertSupported(document);
-      PDPage page = document.getPage(0);
-      rejectUnsupportedOperations(page);
-      pageWidth = page.getCropBox().getWidth(); pageHeight = page.getCropBox().getHeight();
-      before144 = render(document, 144); before300 = render(document, 300);
-      if (!edits.isEmpty()) {
-        List<Object> tokens = parse(page);
-        for (Edit edit : edits) applyEdit(page, tokens, edit);
-        saveTokens(document, page, tokens);
-      } else {
-        Files.copy(sourcePath, outputPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+        int pageNumber = pageIndex + 1;
+        PDPage page = document.getPage(pageIndex);
+        rejectUnsupportedOperations(page);
+        pageWidths.add(page.getCropBox().getWidth()); pageHeights.add(page.getCropBox().getHeight());
+        before144.add(render(document, pageIndex, 144)); before300.add(render(document, pageIndex, 300));
+        List<Edit> pageEdits = edits.stream().filter(edit -> edit.pageNumber() == pageNumber).toList();
+        if (!pageEdits.isEmpty()) {
+          List<Object> tokens = parse(page);
+          for (Edit edit : pageEdits) applyEdit(page, tokens, edit);
+          saveTokens(document, page, tokens);
+        }
       }
-      if (!edits.isEmpty()) document.save(outputPath.toFile());
+      if (edits.isEmpty()) {
+        Files.copy(sourcePath, outputPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } else document.save(outputPath.toFile());
     }
-    double difference144; double difference300;
+    List<Double> differences144 = new ArrayList<>(); List<Double> differences300 = new ArrayList<>();
     try (PDDocument output = Loader.loadPDF(outputPath.toFile()); PDDocument input = Loader.loadPDF(sourcePath.toFile())) {
       assertSupported(output);
-      if (Math.abs(output.getPage(0).getCropBox().getWidth() - pageWidth) > PAGE_TOLERANCE_PT || Math.abs(output.getPage(0).getCropBox().getHeight() - pageHeight) > PAGE_TOLERANCE_PT)
-        throw new IllegalArgumentException("The PDF rewrite changed the original page dimensions beyond 0.5 pt.");
+      if (output.getNumberOfPages() != input.getNumberOfPages()) throw new IllegalArgumentException("The PDF rewrite changed the original page count; no content may be added or removed.");
+      for (int pageIndex = 0; pageIndex < input.getNumberOfPages(); pageIndex++) {
+        PDRectangle before = input.getPage(pageIndex).getCropBox();
+        PDRectangle after = output.getPage(pageIndex).getCropBox();
+        if (Math.abs(after.getWidth() - before.getWidth()) > PAGE_TOLERANCE_PT || Math.abs(after.getHeight() - before.getHeight()) > PAGE_TOLERANCE_PT ||
+            Math.abs(after.getLowerLeftX() - before.getLowerLeftX()) > PAGE_TOLERANCE_PT || Math.abs(after.getLowerLeftY() - before.getLowerLeftY()) > PAGE_TOLERANCE_PT)
+          throw new IllegalArgumentException("The PDF rewrite changed page " + (pageIndex + 1) + " dimensions beyond 0.5 pt.");
+      }
       String beforeText = extracted(input); String afterText = extracted(output);
       for (Edit edit : edits) {
         if (!afterText.contains(edit.replacementText())) throw new IllegalStateException("The saved PDF does not contain the exact rewritten résumé bullet.");
         if (!edit.sourceText().equals(edit.replacementText()) && !edit.replacementText().contains(edit.sourceText()) && countOccurrences(afterText, edit.sourceText()) >= countOccurrences(beforeText, edit.sourceText()))
           throw new IllegalStateException("The original résumé bullet remains extractable after the PDF rewrite.");
       }
-      rejectUnsupportedOperations(output.getPage(0));
-      difference144 = outsideDifference(before144, render(output, 144), boxes, 144);
-      difference300 = outsideDifference(before300, render(output, 300), boxes, 300);
-      if (difference144 != 0 || difference300 != 0) throw new IllegalArgumentException("The PDF render changed pixels outside the edited text boxes (144 dpi: " + difference144 + ", 300 dpi: " + difference300 + "). No font substitution or overlay will be used.");
+      for (int pageIndex = 0; pageIndex < output.getNumberOfPages(); pageIndex++) {
+        int pageNumber = pageIndex + 1;
+        rejectUnsupportedOperations(output.getPage(pageIndex));
+        List<Box> pageBoxes = boxes.stream().filter(box -> box.pageNumber() == pageNumber).toList();
+        double difference144 = outsideDifference(before144.get(pageIndex), render(output, pageIndex, 144), pageBoxes, 144);
+        double difference300 = outsideDifference(before300.get(pageIndex), render(output, pageIndex, 300), pageBoxes, 300);
+        differences144.add(difference144); differences300.add(difference300);
+        if (difference144 != 0 || difference300 != 0) throw new IllegalArgumentException("The PDF render changed page " + (pageIndex + 1) + " pixels outside edited text boxes (144 dpi: " + difference144 + ", 300 dpi: " + difference300 + "). No font substitution or overlay will be used.");
+      }
     }
-    System.out.printf(Locale.ROOT, "pdfbox=%s\tpages=1\tpageWidthPt=%.3f\tpageHeightPt=%.3f\toutsideDifferenceAt144Dpi=%.8f\toutsideDifferenceAt300Dpi=%.8f%n",
-        Version.getVersion(), pageWidth, pageHeight, difference144, difference300);
+    System.out.printf(Locale.ROOT, "pdfbox=%s\tpages=%d\tpageWidthPt=%.3f\tpageHeightPt=%.3f\toutsideDifferenceAt144Dpi=%.8f\toutsideDifferenceAt300Dpi=%.8f%n",
+        Version.getVersion(), pageWidths.size(), pageWidths.get(0), pageHeights.get(0), differences144.stream().mapToDouble(Double::doubleValue).max().orElse(0), differences300.stream().mapToDouble(Double::doubleValue).max().orElse(0));
+    for (int pageIndex = 0; pageIndex < pageWidths.size(); pageIndex++) {
+      System.out.printf(Locale.ROOT, "page=%d\tpageWidthPt=%.3f\tpageHeightPt=%.3f\toutsideDifferenceAt144Dpi=%.8f\toutsideDifferenceAt300Dpi=%.8f%n",
+          pageIndex + 1, pageWidths.get(pageIndex), pageHeights.get(pageIndex), differences144.get(pageIndex), differences300.get(pageIndex));
+    }
   }
 }

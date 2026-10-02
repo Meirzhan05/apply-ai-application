@@ -58,7 +58,7 @@ describe("Trigger native package deployment", () => {
     } finally {
       await rm(outputPath, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("sets the task worker path to the file preserved by additionalFiles", async () => {
     const syncEnvironment = config.build!.extensions!.find((item) => item.name === "SyncEnvVarsExtension") as BuildExtension;

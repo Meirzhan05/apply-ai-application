@@ -73,7 +73,8 @@ async function unsafePackageReason(zip: JSZip): Promise<string | undefined> {
     const xml = await file.async("string");
     if (/<!DOCTYPE|<!ENTITY/i.test(xml)) return "This DOCX contains XML declarations outside the supported package profile.";
     const supplemental = parseXml(xml, file.name);
-    if (descendants(supplemental, "p").some((paragraph) => paragraphText(paragraph).trim())) return "This DOCX has visible header, footer, note, or comment text outside its inspectable document body. Move the text into ordinary body paragraphs.";
+    if (/^word\/(?:footnotes|endnotes|comments)[^/]*\.xml$/i.test(file.name) && descendants(supplemental, "p").some((paragraph) => paragraphText(paragraph).trim()))
+      return "This DOCX has visible notes or comments outside its inspectable document body. Move that content into ordinary body paragraphs.";
   }
   return undefined;
 }
@@ -209,8 +210,8 @@ function hasUnsupportedStructure(document: XmlDomDocument): string | undefined {
   const sectionProperties = descendants(document, "sectPr");
   if (sectionProperties.length !== 1) return "This DOCX has multiple sections. The current source editor supports one section only.";
   const columns = first(sectionProperties[0], "cols");
-  if (Number(attr(columns, "num") ?? "1") !== 1 || descendants(sectionProperties[0], "col").length > 1) return "This DOCX uses multiple columns. The current source editor supports a single-column page only.";
-  if (descendants(document, "br").some((item) => attr(item, "type") === "page") || descendants(document, "pageBreakBefore").length) return "This DOCX contains an explicit page break. The current source editor supports one naturally flowing page only.";
+  if (Number(attr(columns, "num") ?? "1") > 2 || descendants(sectionProperties[0], "col").length > 2)
+    return "This DOCX uses more than two columns. The source editor supports up to two text columns per page.";
   return undefined;
 }
 
@@ -310,8 +311,9 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
       const text = part.paragraphs[paragraphIndex];
       const entryId = `entry-${hash(`${sectionId}:${paragraphIndex}`).slice(0, 12)}`;
       const id = `docx:${sourceHash.slice(0, 12)}:${hash(`${part.partName}:${paragraphIndex}:${text}`).slice(0, 24)}`;
+      const repeatedRole = /\/header[^/]*\.xml$/i.test(part.partName) ? "header" as const : /\/footer[^/]*\.xml$/i.test(part.partName) ? "footer" as const : undefined;
       anchors.push({ id, partName: part.partName, paragraphIndex, text, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
-        kind: "paragraph", candidateClaim: false, editable: false, styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false } });
+        kind: "paragraph", candidateClaim: false, editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false } });
       section.anchorIds.push(id);
       textLines.push(text);
     }
@@ -320,7 +322,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
   if (!anchors.some((anchor) => anchor.candidateClaim)) reason ??= "This DOCX has no clearly separated résumé claim paragraphs to confirm and preserve. Add ordinary experience, project, or education paragraphs before tailoring.";
   const completeText = textLines.join("\n").trim();
   if (!completeText) throw new Error("This DOCX has no readable text. Add facts manually in your profile.");
-  if (completeText.length > MAX_SOURCE_TEXT) throw new Error(`This DOCX contains ${completeText.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported one-page version; no text was dropped.`);
+  if (completeText.length > MAX_SOURCE_TEXT) throw new Error(`This DOCX contains ${completeText.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported version; no text was dropped.`);
   return {
     version: 1, parser: "docx-ooxml-1", format: "docx", sourceHash, text: completeText,
     support: reason ? { status: "blocked", reason } : { status: "candidate" },
@@ -344,7 +346,7 @@ export function suggestDocxFacts(source: DocxSourceRepresentation): DocxFactSugg
 
 export async function applyDocxEdits(bytes: Buffer, source: DocxSourceRepresentation, edits: ResumeSourceEdit[], facts: VerifiedFact[]): Promise<Buffer> {
   if (bytesHash(bytes) !== source.sourceHash || source.version !== 1 || source.format !== "docx") throw new Error("The original DOCX no longer matches its inspected source. Upload and confirm it again.");
-  if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "This DOCX layout is unsupported. Upload a single-column one-page DOCX with supported fonts.");
+  if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "This DOCX layout is unsupported. Upload a DOCX with supported fonts and no more than two columns; the renderer checks its actual page count (up to eight pages).");
   if (!Array.isArray(edits) || edits.length > source.anchors.length) throw new Error("The source edit plan is invalid.");
   const byId = new Map(source.anchors.map((anchor) => [anchor.id, anchor]));
   const factsById = new Map(facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));

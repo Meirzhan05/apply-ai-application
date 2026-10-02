@@ -77,7 +77,7 @@ export function ResumeSourceSupportNotice({ source }: { source: SourceDocument }
     ...(columns ? [`${columns} ${columns === 1 ? "column" : "columns"}`] : []),
     ...(fonts?.length ? [fonts.join(", ")] : []),
   ];
-  return <p className="muted" role="status">{format} source captured with {details.join(" · ")}. Layout is checked before a tailored file is saved.</p>;
+  return <p className="muted" role="status">{format} source captured with {details.join(" · ")}. Up to eight pages and two text columns per page are supported; DOCX page count is verified after rendering. Layout is checked before a tailored file is saved.</p>;
 }
 
 function anchorLabel(source: SourceDocument | undefined, anchorId: string): string | undefined {

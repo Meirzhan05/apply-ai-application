@@ -60,6 +60,8 @@ describe("ResumeComparison", () => {
 
     expect(supported).toContain("DOCX source captured");
     expect(supported).toContain("1 column");
+    expect(supported).toContain("Up to eight pages and two text columns per page are supported");
+    expect(supported).toContain("DOCX page count is verified after rendering");
     expect(supported).toContain("Layout is checked before a tailored file is saved");
     expect(blocked).toContain("DOCX layout is unsupported");
     expect(blocked).toContain("The source uses unsupported columns.");

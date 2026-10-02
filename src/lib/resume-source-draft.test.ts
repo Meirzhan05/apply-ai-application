@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import { parseDocxSource } from "@/lib/docx-source";
+import { parsePdfSource } from "@/lib/pdf-source";
 import { draftResumeSourcePlan } from "@/lib/resume-source-draft";
+import { pdfSourceLayout } from "@/lib/resume-source-layout";
 
 const mocks = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; } }));
@@ -16,6 +19,18 @@ async function fixture() {
   state.profile.resumeSourceDocument = source;
   state.profile.facts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({ id: `source-fact-${index}`, text: `${anchor.sectionHeading} · ${anchor.entryHeading} · ${anchor.text}`, source: "resume" as const, verified: true, sourceAnchorId: anchor.id }));
   return { profile: state.profile, job: state.jobs[0], source };
+}
+
+async function pdfFixture() {
+  const state = initialDemoState();
+  state.profile.id = "pdf-writer-owner";
+  const bytes = await createPdfSourceFixture();
+  const source = await parsePdfSource(bytes);
+  state.profile.resumeSource = { sha256: source.sourceHash, size: bytes.length, mimeType: "application/pdf", storageKey: `${state.profile.id}/synthetic.pdf` };
+  state.profile.resumeSourceDocument = source;
+  state.profile.resumeFileName = "synthetic.pdf";
+  state.profile.facts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({ id: `source-fact-${index}`, text: `${anchor.sectionHeading} · ${anchor.entryHeading} · ${anchor.text}`, source: "resume" as const, verified: true, sourceAnchorId: anchor.id }));
+  return { profile: state.profile, job: state.jobs[0], source, layout: pdfSourceLayout(source)! };
 }
 
 function sourcePlanResponse(request: { input: Array<{ content: string }> }, editText = "Built an explainable recommender with 92% precision.") {
@@ -56,6 +71,24 @@ it("asks for confirmation of source claims before writing and never treats sourc
   profile.facts[0].verified = false;
 
   await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({ diagnostics: { outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 } });
+  expect(mocks.parse).not.toHaveBeenCalled();
+});
+
+it("checks run authorization before the first writer call", async () => {
+  const { profile, job, source } = await fixture();
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, async () => {
+    throw new Error("The application run is no longer authorized.");
+  })).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "other", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 } });
+  expect(mocks.parse).not.toHaveBeenCalled();
+});
+
+it("does not start writer or checker calls after the shared deadline expires", async () => {
+  const { profile, job, source } = await fixture();
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() - 1)).rejects.toMatchObject({
+    diagnostics: { outcome: "technical_failure", technicalFailure: "deadline", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 },
+  });
   expect(mocks.parse).not.toHaveBeenCalled();
 });
 
@@ -100,4 +133,57 @@ it("blocks a repair that substitutes a different activity even when it cites the
   expect(JSON.parse(mocks.parse.mock.calls[2][0].input[1].content).sourceActivityPreservationChecks).toEqual([
     expect.objectContaining({ sourceClaimId: bulletId, originalClaimText: "Built a recommender with 92% precision." }),
   ]);
+});
+
+it("shortens a layout-rejected source bullet once, then reruns the full grounding audit", async () => {
+  const { profile, job, source, layout } = await pdfFixture();
+  const anchor = source.anchors.find((item) => item.kind === "bullet")!;
+  const mapped = layout.anchors.find((item) => item.anchorId === anchor.id)!;
+  const tooLong = "Built a search index for 1,200 users with improved retrieval and search APIs.";
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never, tooLong))
+    .mockImplementationOnce(async (request) => auditResponse(request as never))
+    .mockImplementationOnce(async (request) => {
+      const body = JSON.parse(request.input[1].content);
+      expect(body.layoutFeedback).toMatchObject({ anchorId: anchor.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId });
+      expect(body.findings).toBeUndefined();
+      return { output_parsed: { claims: body.currentDraft.map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
+        anchorId: claim.anchor.id, text: claim.anchor.id === anchor.id ? "Built search index for 1,200 users." : claim.text, factIds: claim.factIds,
+      })) } };
+    }).mockImplementationOnce(async (request) => auditResponse(request as never));
+
+  let layoutCalls = 0;
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, layout, async () => layoutCalls++ === 0 ? ({
+    anchorId: anchor.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId, reason: "Shorten wording to fit the original line.",
+  }) : undefined);
+
+  expect(plan.edits.find((edit) => edit.anchorId === anchor.id)?.text).toBe("Built search index for 1,200 users.");
+  expect(plan.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
+  expect(mocks.parse).toHaveBeenCalledTimes(4);
+  expect(mocks.parse.mock.calls[2][0].input[0].content).toContain("layout fit repair");
+});
+
+it("blocks impossible layout repairs after the shared two-repair budget with no factual findings", async () => {
+  const { profile, job, source, layout } = await pdfFixture();
+  const anchor = source.anchors.find((item) => item.kind === "bullet")!;
+  const tooLong = "Built a search index for 1,200 users with improved retrieval and search APIs.";
+  const shorter = "Built search index for 1,200 users.";
+  const shortest = "Built 1,200-user search index.";
+  let writerCall = 0;
+  mocks.parse.mockImplementation(async (request) => {
+    if (request.text.format.name === "anchored_resume_edit_plan") {
+      writerCall++;
+      if (writerCall === 1) return sourcePlanResponse(request as never, tooLong);
+      const body = JSON.parse(request.input[1].content);
+      return { output_parsed: { claims: body.currentDraft.map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
+        anchorId: claim.anchor.id, text: claim.anchor.id === anchor.id ? (writerCall === 2 ? shorter : shortest) : claim.text, factIds: claim.factIds,
+      })) } };
+    }
+    return auditResponse(request as never);
+  });
+
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, layout, async () => {
+    const mapped = layout.anchors.find((item) => item.anchorId === anchor.id)!;
+    return { anchorId: anchor.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId, reason: "Still does not fit the original line." };
+  })).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2, findings: [] } });
+  expect(mocks.parse).toHaveBeenCalledTimes(6);
 });

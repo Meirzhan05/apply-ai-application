@@ -1,5 +1,5 @@
 import { draftAutonomousEssays } from "@/lib/autonomous-essays";
-import { originalResumeManifest } from "@/lib/original-resume";
+import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -10,6 +10,9 @@ import { draftEssayAnswers } from "@/lib/essay-drafting";
 import { validateAiEssay } from "@/lib/answer-policy";
 import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
 import { draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
+import { prepareDocxResumeBaseline, renderDocxResume, type PreparedDocxResumeBaseline } from "@/lib/docx-renderer";
+import { renderPdfResume } from "@/lib/pdf-renderer";
+import { ResumeLayoutFeedbackError } from "@/lib/resume-layout-feedback";
 import { answerOwner } from "@/lib/answer-responsibility";
 import type {
   ApplicationPacket,
@@ -71,11 +74,32 @@ export async function draftPacket(
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
     );
+  let preparedDocxBaseline: PreparedDocxResumeBaseline | undefined;
+  let validatedSourceRender: { plan: NonNullable<ApplicationPacket["resumeSourcePlan"]>; format: "pdf"; rendered: Awaited<ReturnType<typeof renderPdfResume>> }
+    | { plan: NonNullable<ApplicationPacket["resumeSourcePlan"]>; format: "docx"; rendered: Awaited<ReturnType<typeof renderDocxResume>> } | undefined;
+  const reuseStoredSourceArtifact = Boolean(options?.preserveResume && previous?.resumeArtifact);
   const sourcePlan = originalResumeOnly || !profile.resumeSourceDocument ? undefined
-    : options?.preserveResume && previous ? previous.resumeSourcePlan
-      : options ? await draftResumeSourcePlan(profile, job, profile.resumeSourceDocument, options.deadline, options.beforeModelCall) : undefined;
+    : options?.preserveResume && previous?.resumeArtifact ? previous.resumeSourcePlan
+      : options ? await (async () => {
+        const source = profile.resumeSourceDocument!;
+        if (source.format === "docx") {
+          const originalBytes = await readOriginalResume(profile.id, originalResumeManifest(profile));
+          preparedDocxBaseline = await prepareDocxResumeBaseline(originalBytes, source, options.deadline, options.beforeModelCall);
+        }
+        const baselineLayout = preparedDocxBaseline?.sourceLayout;
+        return draftResumeSourcePlan(profile, job, source, options.deadline, options.beforeModelCall, baselineLayout, async (plan) => {
+          try {
+            if (plan.format === "pdf") validatedSourceRender = { plan, format: "pdf", rendered: await renderPdfResume(profile, plan, options.deadline, options.beforeModelCall) };
+            else validatedSourceRender = { plan, format: "docx", rendered: await renderDocxResume(profile, plan, options.deadline, options.beforeModelCall, preparedDocxBaseline) };
+            return undefined;
+          } catch (error) {
+            if (error instanceof ResumeLayoutFeedbackError) return error.feedback;
+            throw error;
+          }
+        });
+      })() : undefined;
   const resumeDocument = originalResumeOnly || sourcePlan ? undefined
-    : options?.preserveResume && previous ? previous.resumeDocument
+    : options?.preserveResume && previous?.resumeArtifact ? previous.resumeDocument
       : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
   if (!originalResumeOnly && options?.preserveResume && previous) validatePacket(profile, previous);
   let selected = facts.slice(0, 4);
@@ -172,7 +196,7 @@ export async function draftPacket(
     model: answers.find((answer) => answer.aiDraft)?.aiDraft?.model ?? model,
     profileHash: packetProfileHash(profile),
     ...(previousCoverValid ? { coverLetter: previous!.coverLetter, coverLetterFactIds: previous!.coverLetterFactIds, coverLetterContext: previous!.coverLetterContext } : {}),
-  }, options?.deadline, options?.beforeModelCall);
+  }, options?.deadline, options?.beforeModelCall, !reuseStoredSourceArtifact ? validatedSourceRender : undefined);
   return options?.knownAnswersOnly && profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, packet, options.beforeModelCall) : packet;
 }
 

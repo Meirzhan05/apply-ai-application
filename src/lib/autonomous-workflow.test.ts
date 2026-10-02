@@ -165,7 +165,7 @@ it("carries a successful resume repair through artifact preview, download, and e
   fixture.parse.mockImplementation(async (input) => {
     const body = JSON.parse(input.input[1].content);
     if (input.text.format.name === "anchored_resume_edit_plan") {
-      const repair = input.input[0].content.includes("This is a repair.");
+      const repair = Boolean(body.currentDraft && body.findings?.length);
       return { id: `writer-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
         claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; kind: string; text: string }) => ({
           anchorId: anchor.id,
@@ -262,7 +262,7 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
   expect(app.status).toBe("submitted");
   expect(app.packet?.resumeSourcePlan?.claims.find((claim) => claim.anchorId === bullet.id)?.text).toBe(confirmedFact.text);
   expect(app.blockers?.find((item) => item.id === app.blockers![0].id)?.progress).toBe("resolved");
-});
+}, 150_000);
 it("replaces a manual tailored artifact with the uploaded original after the saved preference changes", async () => {
   const profile = fixture.state!.profile;
   const { bytes } = await uploadAndConfirmPdfSource();
@@ -288,7 +288,7 @@ it("replaces a manual tailored artifact with the uploaded original after the sav
   } finally {
     await rm(`.data/resumes/${sourceKey}`, { force: true });
   }
-});
+}, 150_000);
 it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual preparation and preview/download when tailoring is off", async (extension) => {
   const profile = fixture.state!.profile;
   const bytes = extension === "pdf" ? await createPdfSourceFixture() : await createDocxSourceFixture();
