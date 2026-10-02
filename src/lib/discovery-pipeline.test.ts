@@ -42,6 +42,7 @@ function query(table: string) {
     update(value: Record<string, unknown>): QueryBuilder;
     upsert(value: Record<string, unknown>[]): QueryBuilder;
     maybeSingle(): Promise<{ data: unknown; error: unknown }>;
+    single(): Promise<{ data: unknown; error: unknown }>;
     then(resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown): unknown;
   };
   const builder = {} as QueryBuilder;
@@ -57,6 +58,7 @@ function query(table: string) {
     upsert(value: Record<string, unknown>[]) { operation = "upsert"; patch = { rows: value }; return builder; },
   });
   const execute = async () => {
+    if (table === "catalog_revision") return { data: [{ revision: createHash("sha256").update(JSON.stringify(fixture.jobs)).digest("hex") }], error: null };
     if (operation === "upsert") {
       for (const value of (patch.rows as Record<string, unknown>[])) {
         const existing = fixture.jobs.findIndex((job) => job.id === value.id);
@@ -98,6 +100,10 @@ function query(table: string) {
     return { data: values.map((row) => ({ user_id: row.user_id, data: row.data, revision: row.revision })), error: null };
   };
   return Object.assign(builder, {
+    single: async () => {
+      const result = await execute();
+      return { data: result.data?.[0] ?? null, error: result.error };
+    },
     maybeSingle: async () => {
       const result = await execute();
       return { data: result.data?.[0] ?? null, error: result.error };

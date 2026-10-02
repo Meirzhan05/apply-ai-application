@@ -4,7 +4,7 @@ import { adminSupabase } from "@/lib/supabase-admin";
 import { initialDemoState } from "@/lib/demo-data";
 
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: vi.fn() }));
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); });
 
 function database(count: number, serverCap = 500, onPage?: (page: number, rows: CatalogRow[]) => void) {
   const base = initialDemoState().jobs[0];
@@ -13,8 +13,13 @@ function database(count: number, serverCap = 500, onPage?: (page: number, rows: 
     return { id, data: { ...base, id }, discovered_at: base.discoveredAt };
   });
   let page = 0;
+  let revision = 1;
   const cursors: Array<string | undefined> = [];
-  const from = vi.fn(() => {
+  const from = vi.fn((table: string) => {
+    if (table === "catalog_revision") {
+      const query = { select: () => query, eq: () => query, single: async () => ({ data: { revision }, error: null }) };
+      return query;
+    }
     let cursor: string | undefined;
     let requested = 0;
     const query: Record<string, unknown> = {};
@@ -33,7 +38,7 @@ function database(count: number, serverCap = 500, onPage?: (page: number, rows: 
     return query;
   });
   vi.mocked(adminSupabase).mockReturnValue({ from } as unknown as ReturnType<typeof adminSupabase>);
-  return { from, cursors, deleteFirst: (amount: number) => { rows = rows.slice(amount); } };
+  return { from, cursors, deleteFirst: (amount: number) => { rows = rows.slice(amount); revision++; } };
 }
 
 describe("complete shared catalog reads", () => {
@@ -63,4 +68,28 @@ describe("complete shared catalog reads", () => {
     vi.mocked(adminSupabase).mockReturnValue({ from: () => query } as unknown as ReturnType<typeof adminSupabase>);
     await expect(readActiveCatalogRows()).rejects.toMatchObject({ message: "Database unavailable" });
   });
+});
+
+it("shares one catalog download across concurrent owners, isolates returned objects, and invalidates on a database revision", async () => {
+  const { readActiveCatalogRows: read } = await import("@/lib/catalog");
+  const db = database(5, 2);
+  const [first, second] = await Promise.all([read({ cache: true }), read({ cache: true })]);
+  expect(first).toHaveLength(5);
+  expect(second).toHaveLength(5);
+  expect(db.cursors).toHaveLength(4);
+  first[0].data.title = "Owner-local change";
+  expect(second[0].data.title).not.toBe("Owner-local change");
+  expect((await read({ cache: true }))[0].data.title).not.toBe("Owner-local change");
+  expect(db.cursors).toHaveLength(4);
+  db.deleteFirst(2);
+  expect((await read({ cache: true })).map((row) => row.id)).toEqual(["job:000002", "job:000003", "job:000004"]);
+  expect(db.cursors).toHaveLength(7);
+});
+
+it("never caches a partial catalog after a failed page", async () => {
+  const { readActiveCatalogRows: read } = await import("@/lib/catalog");
+  const db = database(5, 2, (page) => { if (page === 1) throw new Error("Network failure"); });
+  await expect(read({ cache: true })).rejects.toThrow("Network failure");
+  expect(await read({ cache: true })).toHaveLength(5);
+  expect(db.cursors).toHaveLength(5);
 });

@@ -1,6 +1,7 @@
 "use client";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createWorkspaceRefresh } from "@/lib/workspace-refresh";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
@@ -74,23 +75,12 @@ export default function Dashboard() {
   const [answerDraft, setAnswerDraft] = useState<ScreeningAnswer[]>([]);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
-  const reload = useCallback(async () => {
-    const response = await fetch("/api/state", { cache: "no-store" });
-    const body = await response.json();
-    if (!response.ok)
-      throw new Error(body.error || "Could not load workspace.");
-    setData(body);
-    return body as ViewState;
-  }, []);
+  const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData), []);
+  const reload = useCallback(() => refresh.reload(), [refresh]);
   useEffect(() => {
     let live = true;
-    fetch("/api/state", { cache: "no-store" })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok)
-          throw new Error(body.error || "Could not load workspace.");
-        return body as ViewState;
-      })
+    refresh.start();
+    reload()
       .then((body) => {
         if (live) {
           setData(body);
@@ -100,17 +90,11 @@ export default function Dashboard() {
       .catch((err) => {
         if (live) setError(err.message);
       });
-    const timer = setInterval(() => {
-      if (live) reload().catch(() => undefined);
-    }, 15000);
-    const events = new EventSource("/api/status");
-    events.addEventListener("state", (event) => { if (live) setData(JSON.parse((event as MessageEvent).data)); });
     return () => {
       live = false;
-      clearInterval(timer);
-      events.close();
+      refresh.stop();
     };
-  }, [reload]);
+  }, [reload, refresh]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusy(action);
     setError("");
