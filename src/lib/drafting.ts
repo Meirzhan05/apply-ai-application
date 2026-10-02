@@ -1,6 +1,7 @@
 import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -118,8 +119,8 @@ export async function draftPacket(
   if (!originalResumeOnly && !options && process.env.OPENAI_API_KEY && !previous) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
     try {
-      const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", "gpt-6-sol", () => client.responses.parse({
-        model: "gpt-6-sol",
+      const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", DEFAULT_AI_MODEL, () => client.responses.parse({
+        model: DEFAULT_AI_MODEL,
         service_tier: "default",
         store: false,
         input: [
@@ -164,7 +165,7 @@ export async function draftPacket(
           factIds: [],
           requiresUserInput: true,
         });
-        model = "gpt-6-sol";
+        model = DEFAULT_AI_MODEL;
       }
     } catch {
       // A usable verified-fact packet remains available when the model fails.

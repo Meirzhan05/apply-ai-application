@@ -1,4 +1,5 @@
 import { meterModelResponse } from "@/lib/model-usage";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -154,11 +155,11 @@ export async function assessMatch(
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
   let freshnessGuardPassed = !options?.beforeModelCall;
   try {
-    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", "gpt-6-luna", async () => {
+    const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `matching:${job.id}` }, "matching", DEFAULT_AI_MODEL, async () => {
       await options?.beforeModelCall?.();
       freshnessGuardPassed = true;
       return client.responses.parse({
-      model: "gpt-6-luna",
+      model: DEFAULT_AI_MODEL,
       service_tier: "default",
       input: [
         {
@@ -199,7 +200,7 @@ export async function assessMatch(
       gaps,
       uncertainty: [...new Set([...base.uncertainty, ...value.uncertainty])],
       evaluatedAt: new Date().toISOString(),
-      model: "gpt-6-luna",
+      model: DEFAULT_AI_MODEL,
     };
   } catch (error) {
     if (!freshnessGuardPassed) throw error;

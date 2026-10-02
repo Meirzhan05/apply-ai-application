@@ -15,7 +15,7 @@ it("retains measured drafting and audit usage even when grounding fails", async 
   state.profile.id = userId;
   const fact = state.profile.facts[0];
   const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 }, output_tokens: 100, output_tokens_details: { reasoning_tokens: 60 } };
-  parse.mockResolvedValueOnce({ id: "draft-response", model: "gpt-6-sol", service_tier: "default", usage, output_parsed: { sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }, { text: "I want to contribute.", kind: "perspective", factIds: [] }] } });
+  parse.mockResolvedValueOnce({ id: "draft-response", model: "gpt-6-luna", service_tier: "default", usage, output_parsed: { sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }, { text: "I want to contribute.", kind: "perspective", factIds: [] }] } });
   parse.mockResolvedValueOnce({ id: "audit-response", model: "gpt-6-luna", service_tier: "default", usage, output_parsed: { grounded: false, unsupportedClaims: ["uncertain"] } });
   const answer = await withModelUsageContext({ userId, applicationId: "application", runId: "draft-run", jobId: state.jobs[0].id }, () => draftAiEssay(state.profile, state.jobs[0], "Why are you interested?"));
   expect(answer.aiDraft).toBeUndefined();
@@ -23,7 +23,8 @@ it("retains measured drafting and audit usage even when grounding fails", async 
   expect(report.records).toHaveLength(2);
   expect(report.records.every((record) => record.applicationId === "application" && record.runId === "draft-run")).toBe(true);
   expect(report.records.find((record) => record.operation === "essay-generation")?.tokens).toEqual({ input: 1000, cachedInput: 200, cacheWrite: 0, output: 100, reasoningOutput: 60 });
-  expect(report.records.find((record) => record.operation === "essay-generation")?.estimatedUsd).toBeCloseTo(0.00264, 8);
+  expect(parse.mock.calls[0][0].model).toBe("gpt-6-luna");
+  expect(report.records.find((record) => record.operation === "essay-generation")?.estimatedUsd).toBeCloseTo(0.000132, 8);
   expect(report.reconciledUsd).toBeNull();
 });
 
