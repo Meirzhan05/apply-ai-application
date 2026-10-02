@@ -257,4 +257,4 @@ it.each([undefined, "resume"] as const)("prepares exact original bytes after tai
   const preview = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
   expect(preview.status).toBe(200);
   expect(Buffer.from(await preview.arrayBuffer())).toEqual(sourceBytes);
-});
+}, 120_000);

@@ -8,6 +8,7 @@ import { draftResumeSourcePlan } from "@/lib/resume-source-draft";
 import { pdfSourceLayout } from "@/lib/resume-source-layout";
 import { renderPdfSourceBytes } from "@/lib/pdf-renderer";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 const mocks = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; } }));
@@ -23,16 +24,27 @@ async function fixture() {
   return { profile: state.profile, job: state.jobs[0], source };
 }
 
-async function pdfFixture() {
+async function pdfFixture(sourceBytes?: Buffer) {
   const state = initialDemoState();
   state.profile.id = "pdf-writer-owner";
-  const bytes = await createPdfSourceFixture();
+  const bytes = sourceBytes ?? await createPdfSourceFixture();
   const source = await parsePdfSource(bytes, state.profile.name);
   state.profile.resumeSource = { sha256: source.sourceHash, size: bytes.length, mimeType: "application/pdf", storageKey: `${state.profile.id}/synthetic.pdf` };
   state.profile.resumeSourceDocument = source;
   state.profile.resumeFileName = "synthetic.pdf";
   state.profile.facts = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({ id: `source-fact-${index}`, text: `${anchor.sectionHeading} · ${anchor.entryHeading} · ${anchor.text}`, source: "resume" as const, verified: true, sourceAnchorId: anchor.id }));
   return { profile: state.profile, job: state.jobs[0], source, layout: pdfSourceLayout(source)! };
+}
+
+async function createUnembeddedPdfSourceFixture(name: string) {
+  const document = await PDFDocument.create({ updateMetadata: false });
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const page = document.addPage([612, 792]);
+  page.drawText(name, { x: 72, y: 744, size: 20, font });
+  page.drawText("Experience", { x: 72, y: 710, size: 12, font });
+  page.drawText("Orbit Labs — Data Intern | 2025", { x: 72, y: 686, size: 10, font });
+  page.drawText("• Built a search index for 1,200 users.", { x: 84, y: 664, size: 10, font });
+  return Buffer.from(await document.save({ useObjectStreams: false }));
 }
 
 function sourcePlanResponse(request: { input: Array<{ content: string }> }, editText = "Built an explainable recommender with 92% precision.") {
@@ -122,6 +134,27 @@ it("shows an actionable font diagnostic for a real PDFBox missing-glyph failure"
 
   expect(failure).toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
   expect(failure).toMatchObject({ message: expect.stringMatching(/embedded PDF source font cannot render/i) });
+  expect((failure as Error).message).not.toMatch(/Command failed:|PdfSourceRewrite|\/tmp\//);
+}, 120_000);
+
+it("shows the source font limitation for a real PDFBox unembedded-font rejection", async () => {
+  await ensurePdfTestRuntime();
+  const state = initialDemoState();
+  const bytes = await createUnembeddedPdfSourceFixture(state.profile.name);
+  const { profile, job, source } = await pdfFixture(bytes);
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never))
+    .mockImplementationOnce(async (request) => auditResponse(request as never));
+
+  let rendererFailure: unknown;
+  const failure = await draftResumeSourcePlan(profile, job, source, Date.now() + 90_000, undefined, pdfSourceLayout(source)!, async (plan) => {
+    try { await renderPdfSourceBytes(bytes, source, plan, Date.now() + 90_000, undefined, profile.name); }
+    catch (error) { rendererFailure = error; throw error; }
+    return undefined;
+  }).catch((error: unknown) => error);
+
+  expect(rendererFailure).toMatchObject({ name: "PdfWorkerDiagnosticError", diagnosticCode: "unembedded_font" });
+  expect(failure).toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+  expect((failure as Error).message).toMatch(/source font .* not embedded/i);
   expect((failure as Error).message).not.toMatch(/Command failed:|PdfSourceRewrite|\/tmp\//);
 }, 120_000);
 

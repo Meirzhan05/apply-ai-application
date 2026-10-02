@@ -70,7 +70,7 @@ function actionableRendererMessage(error: unknown): string | undefined {
     /^The PDF source font changed after inspection\. Re-upload the original PDF and confirm its current text before drafting\.$/,
     /^The PDF renderer changed page dimensions after editing\.$/,
     /^The PDF rewrite changed (?:the original page count|source page \d+ dimensions or mapping beyond 0\.5 pt)\..*$/,
-    /^The PDF render changed page \d+ pixels outside edited text boxes \(144 dpi: \d+, 300 dpi: \d+\)\. No font substitution or overlay will be used\.$/,
+    /^The PDF render changed page \d+ pixels outside edited text boxes \(144 dpi: [\d.]+, 300 dpi: [\d.]+\)\. No font substitution or overlay will be used\.$/,
     /^The source font for “[^”]{1,60}” cannot be identified\. Upload an editable DOCX rather than substituting a font\.$/,
     /^The rendered paragraph “[^”]{1,70}” uses [\p{L}\p{N} ,._-]+ instead of source font [\p{L}\p{N} ,._-]+\. Upload a DOCX using the pinned Noto Sans source font\.$/u,
   ];

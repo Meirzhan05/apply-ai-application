@@ -15,12 +15,35 @@ const MAX_PDF_BYTES = 5 * 1024 * 1024;
 const EXPECTED_PDFBOX_VERSION = "3.0.8";
 const EXPECTED_JAVA_MAJOR = 21;
 const UNSUPPORTED_GLYPH_MESSAGE = "The embedded PDF source font cannot render one or more requested characters. Use wording supported by the font or upload an editable DOCX; no font substitution will be used.";
+const UNEMBEDDED_FONT_MESSAGE = "The source font for an edited résumé bullet is not embedded as a supported outline font. Embed that font or upload an editable DOCX; no substitute font will be used.";
+const CHANGED_SOURCE_FONT_MESSAGE = "The PDF source font changed after inspection. Re-upload the original PDF and confirm its current text before drafting.";
+
+type PdfWorkerDiagnosticCode = "unsupported_glyph" | "unembedded_font" | "changed_source_font" | "page_dimensions" | "page_count" | "outside_edit_pixels";
+
+class PdfWorkerDiagnosticError extends Error {
+  constructor(readonly diagnosticCode: PdfWorkerDiagnosticCode, message: string) {
+    super(message);
+    this.name = "PdfWorkerDiagnosticError";
+  }
+}
 
 function safePdfWorkerError(error: unknown): Error | undefined {
   if (!error || typeof error !== "object" || !("stderr" in error) || typeof error.stderr !== "string") return undefined;
-  return /No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(error.stderr)
-    ? new Error(UNSUPPORTED_GLYPH_MESSAGE)
-    : undefined;
+  const stderr = error.stderr;
+  if (/No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(stderr))
+    return new PdfWorkerDiagnosticError("unsupported_glyph", UNSUPPORTED_GLYPH_MESSAGE);
+  if (stderr.includes(UNEMBEDDED_FONT_MESSAGE)) return new PdfWorkerDiagnosticError("unembedded_font", UNEMBEDDED_FONT_MESSAGE);
+  if (stderr.includes(CHANGED_SOURCE_FONT_MESSAGE)) return new PdfWorkerDiagnosticError("changed_source_font", CHANGED_SOURCE_FONT_MESSAGE);
+  if (stderr.includes("The PDF renderer changed page dimensions after editing."))
+    return new PdfWorkerDiagnosticError("page_dimensions", "The PDF renderer changed page dimensions after editing.");
+  if (stderr.includes("The PDF rewrite changed the original page count; no content may be added or removed."))
+    return new PdfWorkerDiagnosticError("page_count", "The PDF rewrite changed the original page count; no content may be added or removed.");
+
+  const pageDimensions = stderr.match(/The PDF rewrite changed page (\d{1,2}) dimensions beyond 0\.5 pt\./);
+  if (pageDimensions) return new PdfWorkerDiagnosticError("page_dimensions", `The PDF rewrite changed source page ${pageDimensions[1]} dimensions or mapping beyond 0.5 pt.`);
+  const outsidePixels = stderr.match(/The PDF render changed page (\d{1,2}) pixels outside edited text boxes \(144 dpi: ([\d.]+), 300 dpi: ([\d.]+)\)\. No font substitution or overlay will be used\./);
+  if (outsidePixels) return new PdfWorkerDiagnosticError("outside_edit_pixels", `The PDF render changed page ${outsidePixels[1]} pixels outside edited text boxes (144 dpi: ${outsidePixels[2]}, 300 dpi: ${outsidePixels[3]}). No font substitution or overlay will be used.`);
+  return undefined;
 }
 
 export interface RenderedPdfResume {
