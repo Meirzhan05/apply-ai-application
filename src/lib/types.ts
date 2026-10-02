@@ -61,10 +61,8 @@ export interface ResumeSource {
   mimeType: "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 }
 
-export interface DocxSourceAnchor {
+export interface ResumeSourceAnchorBase {
   id: string;
-  partName: string;
-  paragraphIndex: number;
   text: string;
   sectionId: string;
   sectionHeading: string;
@@ -73,6 +71,11 @@ export interface DocxSourceAnchor {
   kind: "section" | "entry" | "bullet" | "paragraph";
   candidateClaim: boolean;
   editable: boolean;
+}
+
+export interface DocxSourceAnchor extends ResumeSourceAnchorBase {
+  partName: string;
+  paragraphIndex: number;
   styleHash: string;
   paragraphStyle: { alignment?: string; beforePt?: number; afterPt?: number; leftIndentPt?: number; rightIndentPt?: number; firstLineIndentPt?: number; numbered: boolean };
   font?: { family: string; sizePt: number; bold: boolean; italic: boolean; color?: string };
@@ -97,6 +100,38 @@ export interface DocxSourceRepresentation {
   anchors: DocxSourceAnchor[];
 }
 
+export interface PdfSourceAnchor extends ResumeSourceAnchorBase {
+  pageNumber: number;
+  sourceText: string;
+  bulletPrefix: string;
+  boundsPt: { left: number; top: number; right: number; bottom: number };
+  operatorFingerprint: string;
+  fontResourceName: string;
+  font: { family: string; sizePt: number; bold: boolean; italic: boolean };
+  styleHash: string;
+}
+
+export interface PdfSourceRepresentation {
+  version: 1;
+  parser: "pdfjs-text-1";
+  format: "pdf";
+  sourceHash: string;
+  text: string;
+  support: { status: "candidate" | "blocked"; reason?: string };
+  layout: {
+    columns: number;
+    pageCount: number;
+    pageSizePt: { width: number; height: number };
+    marginsPt: { top: number; right: number; bottom: number; left: number };
+    fontFamilies: string[];
+  };
+  sections: Array<{ id: string; heading: string; anchorIds: string[] }>;
+  anchors: PdfSourceAnchor[];
+}
+
+export type ResumeSourceAnchor = DocxSourceAnchor | PdfSourceAnchor;
+export type ResumeSourceDocument = DocxSourceRepresentation | PdfSourceRepresentation;
+
 export interface Profile {
   id: string;
   name: string;
@@ -117,7 +152,7 @@ export interface Profile {
   resumeFileName?: string;
   resumeText?: string;
   resumeSource?: ResumeSource;
-  resumeSourceDocument?: DocxSourceRepresentation;
+  resumeSourceDocument?: ResumeSourceDocument;
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;
@@ -239,7 +274,7 @@ export interface ResumeSourceClaim {
 }
 export interface ResumeSourcePlan {
   version: 1;
-  format: "docx";
+  format: "docx" | "pdf";
   sourceHash: string;
   representationVersion: 1;
   profileHash: string;
@@ -275,7 +310,37 @@ export interface DocxResumeArtifact {
   baseline: { storageKey: string; sha256: string; size: number; mimeType: "application/pdf" };
   source: { storageKey: string; sha256: string; size: number; mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
 }
-export type ResumeArtifact = LatexResumeArtifact | DocxResumeArtifact;
+export interface PdfResumeArtifact {
+  format: "pdf";
+  inputHash: string;
+  pageCount: 1;
+  renderer: "apache-pdfbox";
+  rendererVersion: string;
+  javaVersion: string;
+  runtimeArchitecture: string;
+  sourceHash: string;
+  representationVersion: 1;
+  profileHash: string;
+  factsHash: string;
+  settingsHash: string;
+  jobHash: string;
+  layoutPolicy: "pdf-single-column-one-page-v1";
+  layoutValidation: {
+    outcome: "passed";
+    pageWidthPt: number;
+    pageHeightPt: number;
+    unchangedAnchorTolerancePt: 0.5;
+    pageSizeTolerancePt: 0.5;
+    visualMaskPaddingPt: 1.5;
+    visualOutsideEditTolerance: 0;
+    visualOutsideEditDifferenceAt144Dpi: 0;
+    visualOutsideEditDifferenceAt300Dpi: 0;
+    baselinePdfHash: string;
+  };
+  baseline: { storageKey: string; sha256: string; size: number; mimeType: "application/pdf" };
+  source: { storageKey: string; sha256: string; size: number; mimeType: "application/pdf" };
+}
+export type ResumeArtifact = LatexResumeArtifact | DocxResumeArtifact | PdfResumeArtifact;
 
 export interface AutomaticEssayAuthorization {
   version: 1;

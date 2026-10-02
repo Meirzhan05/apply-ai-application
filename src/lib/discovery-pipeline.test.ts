@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
 import { initialDemoState } from "@/lib/demo-data";
 import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { AppState, Job } from "@/lib/types";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 
 type Row = { user_id: string; data: Partial<AppState>; revision: number };
 const fixture = vi.hoisted(() => ({
@@ -109,8 +111,8 @@ fixture.admin.mockImplementation(() => ({
   from: (table: string) => query(table),
   rpc: async () => ({ data: null, error: null }),
   storage: { from: () => ({
-    upload: async (key: string, bytes: Buffer) => { fixture.files.set(key, bytes); return { data: { path: key }, error: null }; },
-    download: async (key: string) => ({ data: new Blob([fixture.files.get(key)?.toString("utf8") ?? ""]), error: null }),
+    upload: async (key: string, bytes: Buffer) => { fixture.files.set(key, Buffer.from(bytes)); return { data: { path: key }, error: null }; },
+    download: async (key: string) => ({ data: new Blob([new Uint8Array(fixture.files.get(key) ?? Buffer.alloc(0))]), error: null }),
   }) },
 }));
 
@@ -155,12 +157,17 @@ async function runPipeline(hoursAfterRefresh: number) {
   state.profile.id = "owner-1";
   state.profile.workAuthorization = "Authorized to work in the US";
   state.profile.preferredTitles = ["Product Analyst"];
-  state.profile.automationSettings!.resumeTailoring = true;
+  state.profile.automationSettings!.resumeTailoring = false;
   saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
   activateAutomation(state.profile, "synthetic controlled discovery");
   fixture.rows = [{ user_id: "owner-1", data: { ...state, jobs: [] }, revision: 1 }];
   fixture.jobs = [];
   fixture.files = new Map();
+  const originalBytes = await createPdfSourceFixture();
+  const originalKey = `${state.profile.id}/${randomUUID()}.pdf`;
+  fixture.files.set(originalKey, originalBytes);
+  state.profile.resumeFileName = "source.pdf";
+  state.profile.resumeSource = { storageKey: originalKey, sha256: createHash("sha256").update(originalBytes).digest("hex"), size: originalBytes.length, mimeType: "application/pdf" };
   fixture.calls = [];
   fixture.trigger.mockImplementation(async (task: string, payload: Record<string, unknown>) => { fixture.calls.push({ task, payload }); return { id: `${task}-accepted` }; });
   fixture.prepare.mockImplementation(async (application: { packet?: { files?: Array<{ filename: string; size: number; sha256: string }> } }, job: Job, _profile: unknown, onSession: (session: Record<string, unknown>) => Promise<unknown>, onAction: (label: string) => Promise<unknown>) => {

@@ -13,6 +13,8 @@ const docxEnv = {
   DOCX_RENDERER_VERSION: docxRuntimeLock.libreOfficeVersion,
   FONTCONFIG_FILE: `${docxRoot}/${docxRuntimeLock.fontconfigRelativePath}`,
 };
+const pdfRoot = "/app/pdf-runtime";
+const pdfEnv = { PDFBOX_RUNTIME_ROOT: pdfRoot, PDFBOX_JAVA_BIN: `${pdfRoot}/jre/bin/java` };
 const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];
 const productionOriginError = "Refusing production environment sync: set APP_ORIGIN and NEXT_PUBLIC_APP_URL to matching HTTPS production origins.";
 
@@ -49,7 +51,8 @@ export default defineConfig({
     // Let the Linux runtime install choose the matching native Canvas binary.
     external: ["playwright-core", "@napi-rs/canvas"],
     extensions: [
-      additionalFiles({ files: ["./src/assets/fonts/*", "./scripts/setup-latex.mjs", "./scripts/setup-docx-runtime.mjs", "./runtime/docx-runtime.lock.json"] }),
+      additionalFiles({ files: ["./src/assets/fonts/*", "./scripts/setup-latex.mjs", "./scripts/setup-docx-runtime.mjs", "./runtime/docx-runtime.lock.json",
+        "./scripts/setup-pdf-runtime.mjs", "./runtime/pdf/PdfSourceRewrite.java", "./runtime/pdf/pdf-runtime.lock.json"] }),
       aptGet({ packages: docxRuntimeLock.systemPackages }),
       {
         name: "pinned-latex-runtime",
@@ -72,6 +75,13 @@ export default defineConfig({
         },
       },
       {
+        name: "pinned-pdf-runtime",
+        onBuildComplete(context) {
+          if (context.target === "dev") return;
+          context.addLayer({ id: "pdf-runtime", commands: [`node ./scripts/setup-pdf-runtime.mjs ${pdfRoot}`], deploy: { env: pdfEnv } });
+        },
+      },
+      {
         name: "production-origin-guard",
         onBuildComplete(context, manifest) {
           if (context.target === "dev") return;
@@ -84,6 +94,7 @@ export default defineConfig({
         { name: "DEMO_MODE", value: "false", isSecret: false },
         ...Object.entries(latexEnv).map(([name, value]) => ({ name, value, isSecret: false })),
         ...Object.entries(docxEnv).map(([name, value]) => ({ name, value, isSecret: false })),
+        ...Object.entries(pdfEnv).map(([name, value]) => ({ name, value, isSecret: false })),
         ]);
       }, { override: true }),
     ],

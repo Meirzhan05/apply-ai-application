@@ -216,7 +216,9 @@ function supportedApproval(approval: Approval): boolean {
 
 export function hasFillApproval(application: Application, userId: string, targetUrl: string | undefined): boolean {
   return Boolean(targetUrl && application.userId === userId && application.packet &&
-    (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 || (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact)) &&
+    (application.packet.schemaVersion === undefined || application.packet.schemaVersion === 1 ||
+      (application.packet.schemaVersion === 2 && application.packet.resumeDocument && application.packet.resumeArtifact) ||
+      (application.packet.schemaVersion === 3 && application.packet.resumeSourcePlan && application.packet.resumeArtifact)) &&
     application.packetHash === hashJson(application.packet) &&
     application.approvals.some((approval) => supportedApproval(approval) &&
       approval.kind === "fill" && approval.userId === userId &&

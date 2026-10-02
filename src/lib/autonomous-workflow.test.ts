@@ -1,8 +1,8 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
-const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), afterSession: undefined as undefined | (() => void | Promise<void>), budget: true, storageDemo: false, captureAttachment: false, attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>, extractedText: "Confirmed experience from the uploaded résumé.", beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), afterSession: undefined as undefined | (() => void | Promise<void>), budget: true, storageDemo: false, captureAttachment: false, attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>, originalKey: "", originalBytes: null as Buffer | null, extractedText: "Confirmed experience from the uploaded résumé.", beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
   return { ...fs, writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
@@ -24,7 +24,6 @@ vi.mock("mammoth", () => ({ default: { extractRawText: async () => ({ value: fix
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-controlled"), source: "controlled compiler" }) }));
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, preflightBrowser: fixture.preflight, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
-import { sealResume } from "@/lib/resume-document";
 import { initialDemoState } from "@/lib/demo-data";
 import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
 import { runDraft, runFill } from "@/lib/application-runs";
@@ -37,6 +36,9 @@ import { setPacket } from "@/lib/workflow";
 import { recordApplicationBlocker } from "@/lib/application-blockers";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
+import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
 function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
@@ -47,22 +49,63 @@ function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
 }
 async function step() { const next = fixture.pending.shift()!; if (next.task === "draft-application-packet") await runDraft(next.payload); else if (next.task === "fill-application-form") await runFill(next.payload); else if (next.task === "submit-application-form") await runSubmission(next.payload); return next; }
 async function progress() { while (fixture.pending.length) await step(); }
-beforeEach(() => {
+async function rehomeFixtureOriginal(ownerId: string) {
+  const profile = fixture.state!.profile;
+  const bytes = fixture.originalBytes!;
+  if (fixture.originalKey) await rm(`.data/resumes/${fixture.originalKey}`, { force: true });
+  profile.id = ownerId;
+  fixture.originalKey = `${ownerId}/${randomUUID()}.pdf`;
+  await saveDemoOriginalResume(fixture.originalKey, bytes);
+  profile.resumeSource = { storageKey: fixture.originalKey, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: "application/pdf" };
+}
+async function uploadAndConfirmPdfSource() {
+  const profile = fixture.state!.profile;
+  if (profile.resumeSource?.storageKey) await rm(`.data/resumes/${profile.resumeSource.storageKey}`, { force: true });
+  const bytes = await createPdfSourceFixture();
+  fixture.storageDemo = true;
+  const uploaded = await uploadResume(resumeUploadRequest("pdf", bytes));
+  fixture.storageDemo = false;
+  expect(uploaded.status, await uploaded.clone().text()).toBe(200);
+  const confirmedFacts = profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const confirmed = await action("onboarding", { facts: confirmedFacts });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  const settings = await action("automationSettings", { settings: { resumeTailoring: true } });
+  expect(settings.status, await settings.clone().text()).toBe(200);
+  const activated = await action("activateAutomation", { reason: "Confirmed the uploaded source facts." });
+  expect(activated.status, await activated.clone().text()).toBe(200);
+  fixture.originalKey = profile.resumeSource!.storageKey!;
+  fixture.originalBytes = bytes;
+  return { bytes, source: profile.resumeSourceDocument! };
+}
+beforeAll(async () => { await ensurePdfTestRuntime(); }, 150_000);
+beforeEach(async () => {
   vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.afterSession = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.storageDemo = false; fixture.captureAttachment = false; fixture.attached = []; fixture.extractedText = "Confirmed experience from the uploaded résumé."; fixture.beforeUsageStart = undefined;
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
   saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
+  const sourceBytes = await createPdfSourceFixture();
+  fixture.originalBytes = sourceBytes;
+  fixture.originalKey = `${fixture.state.profile.id}/${randomUUID()}.pdf`;
+  await saveDemoOriginalResume(fixture.originalKey, sourceBytes);
+  fixture.state.profile.resumeFileName = "my-original.pdf";
+  fixture.state.profile.resumeSource = { storageKey: fixture.originalKey, sha256: createHash("sha256").update(sourceBytes).digest("hex"), size: sourceBytes.length, mimeType: "application/pdf" };
+  fixture.state.profile.automationSettings!.resumeTailoring = false;
   fixture.parse.mockImplementation(async (input) => {
     const format = input.text.format.name;
     const request = format === "resume_grounding_audit" ? JSON.parse(input.input[1].content) : undefined;
-    const output_parsed = format === "structured_resume" ? source.document : format === "resume_grounding_audit" ? resumeGroundingOutput(request.claims, [], "The confirmed facts support this claim.") : { grounded: true, unsupportedClaims: [] };
+    const sourceRequest = format === "anchored_resume_edit_plan" || format === "anchored_resume_grounding_audit" ? JSON.parse(input.input[1].content) : undefined;
+    const output_parsed = format === "structured_resume" ? source.document
+      : format === "resume_grounding_audit" ? resumeGroundingOutput(request.claims, [], "The confirmed facts support this claim.")
+        : format === "anchored_resume_edit_plan" ? { claims: sourceRequest.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; text: string }) => ({ anchorId: anchor.id, text: anchor.text, factIds: [sourceRequest.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)?.id].filter(Boolean) })) }
+          : format === "anchored_resume_grounding_audit" ? { findings: sourceRequest.claims.map((claim: { claimId: string; factIds: string[] }) => ({ claimId: claim.claimId, outcome: "supported", reason: "Confirmed source facts support this wording.", evidenceFactIds: claim.factIds, requiredInformation: null })), sourceActivityPreservations: sourceRequest.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId, outcome: "preserved", preservedClaimId: check.sourceClaimId, reason: "The same activity remains under the same source entry.", requiredInformation: null })) }
+            : { grounded: true, unsupportedClaims: [] };
     return { id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
   });
   fixture.preflight.mockReset();
   fixture.prepare.mockImplementation(async (app, job, profile, onSession, onAction) => { await onSession({ sessionId: "session", provider: "browser-use" }); const afterSession = fixture.afterSession; fixture.afterSession = undefined; await afterSession?.(); await onAction("Checking permission: Resume"); const file = app.packet.files[0]; if (fixture.captureAttachment) { const attachment = await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet, "resume"); fixture.attached.push(attachment); } return { sessionId: "session", provider: "browser-use", needsAction: false, needsCoverLetter: false, form: { version: 1, url: job.applyUrl, fields: [{ label: "Resume", value: file.filename, identifier: "resume", kind: "file", required: true, valid: true, fileHashes: [`${file.filename}:${file.size}:${file.sha256}`] }], attachments: [file.filename], capturedAt: new Date().toISOString(), readyToSubmit: true, blockers: [], submitControl: { label: "Submit application", identifier: "submit", action: job.applyUrl, method: "post" } } }; });
   fixture.submit.mockImplementation(async (app: Application, options: { beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }) => { const baseline = { version: 1 as const, kind: "captcha" as const, sessionId: app.browserSessionId!, targetUrl: app.form!.url, attemptedAt: new Date().toISOString(), beforeHash: "baseline", beforeHadConfirmation: false }; expect(await options.beforeAttempt(baseline)).toBe(true); expect(fixture.state!.applications[0].submissionAttemptedAt).toBe(baseline.attemptedAt); return { confirmed: true, evidence: "Application received", receipt: { version: 1, url: app.form!.url, text: "Application received", capturedAt: new Date().toISOString() } }; });
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(async () => { vi.unstubAllEnvs(); if (fixture.originalKey) await rm(`.data/resumes/${fixture.originalKey}`, { force: true }); });
 it("completes a known-answer application from one action without legacy approvals", async () => {
   const response = await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
   expect(response.status).toBe(200);
@@ -75,7 +118,7 @@ it("completes a known-answer application from one action without legacy approval
 });
 it("stops a manual résumé draft before another provider attempt after cancellation", async () => {
   const source = latexFixture();
-  fixture.state!.profile.id = "manual-resume-cancel-user";
+  await rehomeFixtureOriginal("manual-resume-cancel-user");
   expect((await action("select", { jobId: fixture.state!.jobs[0].id })).status).toBe(200);
   const app = fixture.state!.applications[0];
   expect(app.autonomousAuthorization).toBeUndefined();
@@ -87,14 +130,15 @@ it("stops a manual résumé draft before another provider attempt after cancella
     return { id: "cancelled-manual-write", model: "gpt-6-sol", output_parsed: source.document, usage: { input_tokens: 10, output_tokens: 10 } };
   });
 
-  await expect(runDraft(draftRun.payload)).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", writerAttempts: 1, checkerAttempts: 0, repairAttempts: 0 } });
+  await expect(runDraft(draftRun.payload)).rejects.toThrow(/cancelled or changed before provider work/i);
   expect(app.status).toBe("cancelled");
   expect(app.packet).toBeUndefined();
-  expect((await readModelUsage(fixture.state!.profile.id)).records.map((record) => record.operation)).toEqual(["resume-generation"]);
+  expect(fixture.parse).toHaveBeenCalledTimes(1);
+  expect((await readModelUsage(fixture.state!.profile.id)).records.map((record) => record.operation)).toEqual(["essay-generation"]);
 });
 it("stops a manual résumé draft before checking when confirmed profile inputs change", async () => {
   const source = latexFixture();
-  fixture.state!.profile.id = "manual-resume-stale-profile-user";
+  await rehomeFixtureOriginal("manual-resume-stale-profile-user");
   expect((await action("select", { jobId: fixture.state!.jobs[0].id })).status).toBe(200);
   const app = fixture.state!.applications[0];
   expect((await action("draft", { applicationId: app.id })).status).toBe(200);
@@ -108,30 +152,40 @@ it("stops a manual résumé draft before checking when confirmed profile inputs 
     return { id: "stale-manual-write", model: "gpt-6-sol", output_parsed: source.document, usage: { input_tokens: 10, output_tokens: 10 } };
   });
 
-  await expect(runDraft(draftRun.payload)).rejects.toMatchObject({ message: expect.stringContaining("profile, job, or prior packet changed"), diagnostics: { outcome: "technical_failure", writerAttempts: 1, checkerAttempts: 0, repairAttempts: 0 } });
+  await expect(runDraft(draftRun.payload)).rejects.toThrow(/profile, job, or prior packet changed before provider work/i);
   expect(app.status).toBe("selected");
   expect(app.packet).toBeUndefined();
-  expect((await readModelUsage(fixture.state!.profile.id)).records.map((record) => record.operation)).toEqual(["resume-generation"]);
+  expect(fixture.parse).toHaveBeenCalledTimes(1);
+  expect((await readModelUsage(fixture.state!.profile.id)).records.map((record) => record.operation)).toEqual(["essay-generation"]);
 });
 it("carries a successful resume repair through artifact preview, download, and employer attachment", async () => {
-  const source = latexFixture();
-  const unsupported = structuredClone(source.document);
-  unsupported.experience[0].bullets[0].text = "Increased company revenue by 90%.";
-  fixture.state!.profile.id = "resume-repair-flow-user";
-  let writes = 0;
-  let audits = 0;
+  const { source } = await uploadAndConfirmPdfSource();
+  const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
+  fixture.captureAttachment = true;
   fixture.parse.mockImplementation(async (input) => {
-    if (input.text.format.name === "structured_resume") {
-      writes++;
-      return { id: `write-${writes}`, model: input.model, service_tier: "default", output_parsed: writes === 1 ? unsupported : source.document, usage: { input_tokens: 20, output_tokens: 10 } };
+    const body = JSON.parse(input.input[1].content);
+    if (input.text.format.name === "anchored_resume_edit_plan") {
+      const repair = input.input[0].content.includes("This is a repair.");
+      return { id: `writer-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
+        claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; kind: string; text: string }) => ({
+          anchorId: anchor.id,
+          text: anchor.id === bullet.id ? (repair ? "Built search index for 1,200 users." : "Built a faster search index for 1,200 users.") : anchor.text,
+          factIds: [body.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)!.id],
+        })),
+      } };
     }
-    if (input.text.format.name === "resume_grounding_audit") {
-      audits++;
-      const request = JSON.parse(input.input[1].content);
-      const overrides = audits === 1 ? [{ claimId: "experience.0.bullets.0", outcome: "unsupported" as const, reason: "The confirmed fact describes a prediction model, not increased revenue.", requiredInformation: "Confirm whether revenue increased and provide the measured amount." }] : [];
-      return { id: `audit-${audits}`, model: input.model, service_tier: "default", output_parsed: resumeGroundingOutput(request.claims, overrides, "The confirmed facts support this claim."), usage: { input_tokens: 20, output_tokens: 10 } };
+    if (input.text.format.name === "anchored_resume_grounding_audit") {
+      return { id: `audit-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
+        findings: body.claims.map((claim: { claimId: string; affectedText: string; factIds: string[] }) => ({ claimId: claim.claimId, outcome: claim.affectedText.includes("faster") ? "unsupported" : "supported",
+          reason: claim.affectedText.includes("faster") ? "The confirmed fact does not establish the speed comparison." : "Confirmed facts support this wording.",
+          evidenceFactIds: claim.factIds, requiredInformation: claim.affectedText.includes("faster") ? "Confirm the speed comparison or remove it." : null })),
+        sourceActivityPreservations: body.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId, outcome: "preserved", preservedClaimId: check.sourceClaimId,
+          reason: "The same search-index activity remains in the same source entry.", requiredInformation: null })),
+      } };
     }
-    return { id: "essay-response", model: input.model, service_tier: "default", output_parsed: { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10 } };
+    if (input.text.format.name === "application_essay") return { id: "essay", model: input.model, output_parsed: { sentences: [{ text: "I am interested in this role.", kind: "perspective", factIds: [] }, { text: "I build search tools.", kind: "fact", factIds: [fixture.state!.profile.facts.find((fact) => fact.verified)!.id] }] }, usage: { input_tokens: 20, output_tokens: 10 } };
+    if (input.text.format.name === "essay_grounding_check") return { id: "essay-check", model: input.model, output_parsed: { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10 } };
+    throw new Error(`Unexpected model format: ${input.text.format.name}`);
   });
 
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
@@ -139,34 +193,50 @@ it("carries a successful resume repair through artifact preview, download, and e
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("submitted");
   expect(app.approvals).toEqual([]);
-  expect(app.packet?.resumeDocument?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
-  expect(app.packet?.resumeDocument?.experience[0].bullets[0].text).not.toContain("90%");
-  const resume = app.packet!.files!.find((file) => file.kind === "resume")!;
-  expect(app.submissionMaterials?.files.find((file) => file.kind === "resume")).toEqual(resume);
-  expect(app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes).toEqual([`${resume.filename}:${resume.size}:${resume.sha256}`]);
-
+  expect(app.packet?.resumeSourcePlan?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
+  expect(app.packet?.resumeArtifact).toMatchObject({ format: "pdf", pageCount: 1, layoutValidation: { outcome: "passed" } });
   const preview = await getApplicationFile(new Request(`https://apply.example/api/applications/${app.id}/files/resume`), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
   const download = await getApplicationFile(new Request(`https://apply.example/api/applications/${app.id}/files/resume?download=1`), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
   expect(preview.status).toBe(200); expect(download.status).toBe(200);
-  expect(Buffer.from(await preview.arrayBuffer())).toEqual(Buffer.from(await download.arrayBuffer()));
+  const finalBytes = Buffer.from(await preview.arrayBuffer());
+  expect(finalBytes).toEqual(Buffer.from(await download.arrayBuffer()));
+  expect(fixture.attached[0].bytes).toEqual(finalBytes);
+  const finalSource = await (await import("@/lib/pdf-source")).parsePdfSource(finalBytes);
+  expect(finalSource.text).toContain("Built search index for 1,200 users.");
+  expect(finalSource.text).not.toContain("faster");
+  const resume = app.packet!.files!.find((file) => file.kind === "resume")!;
+  expect(app.submissionMaterials?.files.find((file) => file.kind === "resume")).toEqual(resume);
+  expect(app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes).toEqual([`${resume.filename}:${resume.size}:${resume.sha256}`]);
   expect(preview.headers.get("content-disposition")).toContain("inline");
   expect(download.headers.get("content-disposition")).toContain("attachment");
-  await rm(`.data/application-files/${resume.storageKey}`, { force: true });
-  await rm(`.data/application-files/${app.packet!.resumeArtifact!.source.storageKey}`, { force: true });
-});
+}, 30_000);
 it("keeps exhausted grounding findings as an actionable blocker and schedules no attachment", async () => {
-  const source = latexFixture();
-  const unsupported = structuredClone(source.document);
-  unsupported.experience[0].bullets[0].text = "Increased company revenue by 90%.";
-  fixture.state!.profile.resumeText = "Orbit Labs · Built an XGBoost model to predict campaign ROI.";
-  let writes = 0;
+  const { source } = await uploadAndConfirmPdfSource();
+  const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
   let allowRetry = false;
-  let corrected: typeof source.document;
   fixture.parse.mockImplementation(async (input) => {
-    if (input.text.format.name === "structured_resume") { writes++; return { id: `write-${writes}`, model: input.model, service_tier: "default", output_parsed: allowRetry ? corrected : unsupported, usage: { input_tokens: 20, output_tokens: 10 } }; }
-    const request = JSON.parse(input.input[1].content);
-    const overrides = !allowRetry ? [{ claimId: "experience.0.bullets.0", outcome: writes === 3 ? "contradiction" as const : "unsupported" as const, reason: "The confirmed fact describes prediction, not increased revenue.", requiredInformation: "Confirm whether revenue increased and provide the measured amount." }] : [];
-    return { id: `audit-${writes}`, model: input.model, service_tier: "default", output_parsed: resumeGroundingOutput(request.claims, overrides, "The confirmed facts support this claim."), usage: { input_tokens: 20, output_tokens: 10 } };
+    const body = JSON.parse(input.input[1].content);
+    if (input.text.format.name === "anchored_resume_edit_plan") {
+      return { id: `writer-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
+        claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; text: string }) => ({
+          anchorId: anchor.id,
+          text: anchor.id === bullet.id ? (allowRetry ? "Built faster index for 1,200 users." : "Built a faster search index for 1,200 users.") : anchor.text,
+          factIds: [body.confirmedFacts.find((fact: { id: string; sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id && (!allowRetry || fact.id === "user-confirmed-speed"))?.id ?? body.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)!.id],
+        })),
+      } };
+    }
+    if (input.text.format.name === "anchored_resume_grounding_audit") {
+      return { id: `audit-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
+        findings: body.claims.map((claim: { claimId: string; affectedText: string; factIds: string[] }) => ({ claimId: claim.claimId, outcome: claim.affectedText.includes("faster") && !allowRetry ? "unsupported" : "supported",
+          reason: claim.affectedText.includes("faster") && !allowRetry ? "The confirmed fact does not establish the speed claim." : "The confirmed facts support this wording.",
+          evidenceFactIds: claim.factIds, requiredInformation: claim.affectedText.includes("faster") && !allowRetry ? "Confirm the speed claim or remove it." : null })),
+        sourceActivityPreservations: body.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId, outcome: "preserved", preservedClaimId: check.sourceClaimId,
+          reason: "The same search-index activity remains in the same source entry.", requiredInformation: null })),
+      } };
+    }
+    if (input.text.format.name === "application_essay") return { id: "essay", model: input.model, output_parsed: { sentences: [{ text: "I am interested in this role.", kind: "perspective", factIds: [] }, { text: "I build search tools.", kind: "fact", factIds: [fixture.state!.profile.facts.find((fact) => fact.verified)!.id] }] }, usage: { input_tokens: 20, output_tokens: 10 } };
+    if (input.text.format.name === "essay_grounding_check") return { id: "essay-check", model: input.model, output_parsed: { grounded: true, unsupportedClaims: [] }, usage: { input_tokens: 20, output_tokens: 10 } };
+    throw new Error(`Unexpected model format: ${input.text.format.name}`);
   });
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
   const draft = fixture.pending.shift()!;
@@ -174,37 +244,30 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("needs_user_action");
   expect(app.packet).toBeUndefined();
-  expect(app.resumeDraftDiagnostics?.findings.find((finding) => finding.claimId === "experience.0.bullets.0")).toMatchObject({ outcome: "contradiction", affectedText: "Increased company revenue by 90%.", evidenceFactIds: ["latex-fact-2"] });
+  expect(app.resumeDraftDiagnostics?.findings.find((finding) => finding.claimId === bullet.id)).toMatchObject({ outcome: "unsupported", affectedText: "Built a faster search index for 1,200 users." });
   expect(app.blockers?.[0]).toMatchObject({ reason: "missing_answer", progress: "blocked" });
-  expect(app.blockers?.[0].message).toContain("Confirm whether revenue increased and provide the measured amount");
+  expect(app.blockers?.[0].message).toContain("Confirm the speed claim or remove it");
   expect(fixture.prepare).not.toHaveBeenCalled();
   expect(fixture.pending).toEqual([]);
 
-  const confirmedFact = { id: "user-confirmed-revenue", text: "Orbit Labs campaign revenue increased by 90% in Q2 2026.", verified: true, source: "user" as const };
+  const confirmedFact = { id: "user-confirmed-speed", text: "Built faster index for 1,200 users.", verified: true, source: "resume" as const, sourceAnchorId: bullet.id };
   fixture.storageDemo = true;
   const profileUpdate = await action("profile", { facts: [...fixture.state!.profile.facts, confirmedFact] });
   fixture.storageDemo = false;
   expect(profileUpdate.status, await profileUpdate.clone().text()).toBe(200);
-  corrected = structuredClone(unsupported);
-  corrected.experience[0].bullets[0] = { ...corrected.experience[0].bullets[0], text: confirmedFact.text, factIds: [confirmedFact.id] };
-  corrected = sealResume(fixture.state!.profile, corrected);
   allowRetry = true;
   const resumed = await action("resolveBlocker", { applicationId: app.id, blockerId: app.blockers![0].id });
   expect(resumed.status).toBe(200);
   await progress();
   expect(app.status).toBe("submitted");
-  expect(app.packet?.resumeDocument?.experience[0].bullets[0].text).toBe(confirmedFact.text);
+  expect(app.packet?.resumeSourcePlan?.claims.find((claim) => claim.anchorId === bullet.id)?.text).toBe(confirmedFact.text);
   expect(app.blockers?.find((item) => item.id === app.blockers![0].id)?.progress).toBe("resolved");
 });
 it("replaces a manual tailored artifact with the uploaded original after the saved preference changes", async () => {
   const profile = fixture.state!.profile;
-  const bytes = Buffer.from("%PDF original after preference change\n");
-  fixture.storageDemo = true;
-  const upload = await uploadResume(resumeUploadRequest("pdf", bytes));
-  expect(upload.status).toBe(200);
+  const { bytes } = await uploadAndConfirmPdfSource();
   const sourceKey = profile.resumeSource!.storageKey!;
   try {
-    fixture.storageDemo = false;
     expect((await action("select", { jobId: fixture.state!.jobs[0].id })).status).toBe(200);
     const app = fixture.state!.applications[0];
     expect((await action("draft", { applicationId: app.id })).status).toBe(200);
@@ -223,13 +286,12 @@ it("replaces a manual tailored artifact with the uploaded original after the sav
     expect(fixture.parse.mock.calls.some(([input]) => input.text?.format?.name === "structured_resume")).toBe(false);
     expect((await (await import("@/lib/packet-files")).reviewedPacketFile(profile, app.packet!, "resume")).bytes.equals(bytes)).toBe(true);
   } finally {
-    fixture.storageDemo = false;
     await rm(`.data/resumes/${sourceKey}`, { force: true });
   }
 });
 it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual preparation and preview/download when tailoring is off", async (extension) => {
   const profile = fixture.state!.profile;
-  const bytes = extension === "pdf" ? Buffer.from("%PDF uploaded original bytes\npage one\n") : await createDocxSourceFixture();
+  const bytes = extension === "pdf" ? await createPdfSourceFixture() : await createDocxSourceFixture();
   const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   fixture.extractedText = "Work Experience\nOrbit Labs\nMachine Learning Engineer\n2024-2025\n• Built a vector retrieval service with Python that improved ranking quality by 22%.";
   fixture.storageDemo = true;
@@ -665,6 +727,7 @@ it.each(["form", "action"])("blocks an unexpected same-origin posting in the obs
   expect(fixture.state!.applications[0].status).toBe("needs_user_action"); expect(fixture.state!.applications[0].error).toMatch(/destination|form/); expect(fixture.submit).not.toHaveBeenCalled();
 });
 it("checks current policy between paid résumé generation and its grounding call", async () => {
+  await uploadAndConfirmPdfSource();
   const generated = deferred(), resume = deferred(); const known = fixture.parse.getMockImplementation()!;
   fixture.parse.mockImplementationOnce(async (...args) => { const result = await known(...args); generated.resolve(); await resume.promise; return result; });
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); const running = step(); await generated.promise;
@@ -714,10 +777,11 @@ it("blocks saved material preferences changed before a queued fill", async () =>
 });
 it("lets the owner inspect exact submitted artifacts after changing profile facts", async () => {
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id }); await progress(); const app = fixture.state!.applications[0];
+  const submittedOriginal = await readOriginalResume(fixture.state!.profile.id, originalResumeManifest(fixture.state!.profile));
   fixture.state!.profile.facts[0].text = "A later profile revision must not replace the material already used";
   const { GET } = await import("@/app/api/applications/[id]/files/[kind]/route");
   const response = await GET(new Request("https://apply.example/file?download=1"), { params: Promise.resolve({ id: app.id, kind: "resume" }) });
-  expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("%PDF-controlled");
+  expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer())).toEqual(submittedOriginal);
 });
 it("submits the résumé when enabled letters have no supported control and records no unused letter", async () => {
   fixture.state!.profile.automationSettings!.coverLetterMode = "enabled"; activateAutomation(fixture.state!.profile, "enabled optional material");
@@ -860,7 +924,7 @@ it.each(["Why us?", "Why this company?", "Why this role?"])("answers the clear m
   expect(fixture.state!.applications[0].status).toBe("submitted"); expect(fixture.state!.applications[0].packet!.answers[0].question).toBe(question); expect(fixture.state!.applications[0].approvals).toEqual([]);
 });
 it("renders an essay-only owned receiver and accepts only the exact authorized essay once", async () => {
-  vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-signer"); const state = fixture.state!; state.profile.id = "00000000-0000-4000-8000-000000000002"; state.profile.email = "cloud-submit-00000000-0000-4000-8000-000000000001@example.com"; activateAutomation(state.profile, "synthetic receiver");
+  vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-signer"); await rehomeFixtureOriginal("00000000-0000-4000-8000-000000000002"); const state = fixture.state!; state.profile.email = "cloud-submit-00000000-0000-4000-8000-000000000001@example.com"; activateAutomation(state.profile, "synthetic receiver");
   await action("startAutonomous", { jobId: state.jobs[0].id }); const app = state.applications[0];
   const issued = (await import("@/lib/controlled-tests")).issueControlledTestGrant(state.profile.id, app.id); const url = `https://apply.example/api/internal/controlled-form?token=${issued.token}`;
   state.jobs[0].url = state.jobs[0].applyUrl = url; app.jobSnapshot = structuredClone(state.jobs[0]); app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, essayOnly: true };
@@ -884,8 +948,8 @@ it("renders an essay-only owned receiver and accepts only the exact authorized e
 });
 it("renders a factual-only receiver and accepts the exact known fields once", async () => {
   vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-signer");
+  await rehomeFixtureOriginal("00000000-0000-4000-8000-000000000002");
   const state = fixture.state!;
-  state.profile.id = "00000000-0000-4000-8000-000000000002";
   state.profile.email = "cloud-submit-00000000-0000-4000-8000-000000000001@example.com";
   const { selectApplication, setPacket, approveFill, setFormSnapshot, approveSubmit, transition } = await import("@/lib/workflow");
   const { packetProfileHash } = await import("@/lib/drafting");

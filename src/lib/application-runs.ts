@@ -15,9 +15,25 @@ import { recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBlockers } from "@/lib/application-blockers";
 import { importedAutonomyJob } from "@/lib/import-compatibility";
-import type { Application } from "@/lib/types";
+import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
+import type { Application, Profile } from "@/lib/types";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
+
+async function assertTailoringSourceReady(profile: Profile): Promise<void> {
+  if (!profile.resumeSource || !profile.resumeFileName)
+    throw new Error("Upload and confirm your original PDF or DOCX résumé before tailoring. Choose the original-résumé setting only when you want to attach unchanged source bytes.");
+  const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
+  if (!profile.resumeSourceDocument)
+    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
+  if (profile.resumeSourceDocument.format !== (format === "PDF" ? "pdf" : "docx") ||
+      profile.resumeSourceDocument.sourceHash !== profile.resumeSource.sha256)
+    throw new Error(`The inspected ${format} no longer matches the uploaded original. Re-upload it before tailoring.`);
+  if (profile.resumeSourceDocument.support.status !== "candidate")
+    throw new Error(profile.resumeSourceDocument.support.reason ?? `This ${format} layout is not supported for source-preserving tailoring. Upload an editable DOCX or choose the exact original-résumé setting.`);
+  const original = originalResumeManifest(profile);
+  await readOriginalResume(profile.id, original);
+}
 
 async function releaseParkedBrowser(userId: string, application: Application, sessionId: string, provider: Application["browserProvider"]): Promise<boolean> {
   try {
@@ -97,6 +113,10 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
+    if (state.profile.automationSettings?.resumeTailoring !== false && (!app.packet || draftMode === "resume"))
+      await assertTailoringSourceReady(state.profile);
+    else if (state.profile.automationSettings?.resumeTailoring === false)
+      await readOriginalResume(state.profile.id, originalResumeManifest(state.profile));
     const eligibilityJob = importedAutonomyJob(app, job);
     assertJobEligible(state.profile, eligibilityJob);
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");

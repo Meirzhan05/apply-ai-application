@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { parsePdfSource } from "@/lib/pdf-source";
+import { saveDemoOriginalResume } from "@/lib/original-resume";
+import { bytesHash } from "@/lib/resume-artifacts";
 const mocks = vi.hoisted(() => ({ state: null as AppState | null, draft: vi.fn(), validate: vi.fn(), set: vi.fn() }));
 vi.mock("@/lib/repository", () => ({ loadState: async () => mocks.state, mutateState: async (_owner: string, change: (state: AppState) => unknown) => change(mocks.state!) }));
 vi.mock("@/lib/drafting", () => ({ draftPacket: mocks.draft, validatePacket: mocks.validate }));
@@ -8,7 +14,18 @@ vi.mock("@/lib/workflow", async (original) => ({ ...await original<typeof import
 import { runDraft } from "@/lib/application-runs";
 import { selectApplication } from "@/lib/workflow";
 import { ResumeDraftError } from "@/lib/resume-document";
-beforeEach(() => { vi.clearAllMocks(); mocks.state = initialDemoState(); });
+let sourcePath = "";
+beforeEach(async () => {
+  vi.clearAllMocks(); vi.stubEnv("DEMO_MODE", "true"); mocks.state = initialDemoState();
+  const bytes = await createPdfSourceFixture();
+  const key = `${mocks.state.profile.id}/${randomUUID()}.pdf`;
+  sourcePath = `.data/resumes/${key}`;
+  await saveDemoOriginalResume(key, bytes);
+  mocks.state.profile.resumeFileName = "source-resume.pdf";
+  mocks.state.profile.resumeSource = { storageKey: key, sha256: bytesHash(bytes), size: bytes.length, mimeType: "application/pdf" };
+  mocks.state.profile.resumeSourceDocument = await parsePdfSource(bytes);
+});
+afterEach(async () => { vi.unstubAllEnvs(); if (sourcePath) await rm(sourcePath, { force: true }); });
 describe("LaTeX drafting worker recovery", () => {
   it("persists actionable grounding findings for manual drafting and preserves the last valid packet", async () => {
     const state = mocks.state!; const app = selectApplication(state, state.jobs[0].id, state.profile.id);

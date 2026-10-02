@@ -34,6 +34,7 @@
     "test:latex-ai": "DEMO_MODE=true node --env-file=.env --import tsx scripts/test-latex-ai.ts",
     "test:latex-worker": "node --env-file=.env --import tsx scripts/test-latex-worker.ts",
     "test:docx-worker": "node --env-file=.env --import tsx scripts/test-docx-worker.ts",
+    "test:pdf-worker": "node --env-file=.env --import tsx scripts/test-pdf-worker.ts",
     "test:live-browser": "node --env-file=.env --import tsx scripts/test-live-browser.ts"
   },
   "dependencies": {

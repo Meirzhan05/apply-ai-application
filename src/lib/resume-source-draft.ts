@@ -4,7 +4,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { hashJson } from "@/lib/crypto";
 import { meterModelResponse } from "@/lib/model-usage";
 import { ResumeDraftError } from "@/lib/resume-document";
-import type { DocxSourceAnchor, DocxSourceRepresentation, Job, Profile, ResumeDraftAttempts, ResumeGroundingFinding, ResumeSourceClaim, ResumeSourceEdit, ResumeSourcePlan } from "@/lib/types";
+import type { Job, Profile, ResumeDraftAttempts, ResumeGroundingFinding, ResumeSourceAnchor, ResumeSourceClaim, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan } from "@/lib/types";
 
 const PlanSchema = z.object({
   claims: z.array(z.object({ anchorId: z.string().min(1).max(200), text: z.string().trim().min(1).max(500), factIds: z.array(z.string().min(1).max(160)).min(1).max(80) }).strict()).max(80),
@@ -20,7 +20,7 @@ const AuditSchema = z.object({ findings: z.array(z.object({
 }).strict()).max(80) }).strict();
 
 type Counts = ResumeDraftAttempts;
-type DraftClaim = { anchor: DocxSourceAnchor; text: string; factIds: string[] };
+type DraftClaim = { anchor: ResumeSourceAnchor; text: string; factIds: string[] };
 type SourceActivityCheck = { sourceClaimId: string; experienceEntryId: string; originalClaimText: string; requiredInformation: string };
 type SourceActivityFailure = { check: SourceActivityCheck; reason: string; requiredInformation: string };
 type ValidatedAudit = { findings: ResumeGroundingFinding[]; preservationFailures: SourceActivityFailure[] };
@@ -37,14 +37,14 @@ export function sourceProfileHash(profile: Profile) {
     resumeFileName: profile.resumeFileName });
 }
 
-function candidateFactIds(profile: Profile, anchor: DocxSourceAnchor): string[] {
+function candidateFactIds(profile: Profile, anchor: ResumeSourceAnchor): string[] {
   const sourceText = normalize(anchor.text);
   return profile.facts.filter((fact) => fact.verified && (
     fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalize(fact.text).includes(sourceText))
   )).map((fact) => fact.id);
 }
 
-function missingSourceInformation(source: DocxSourceRepresentation, profile: Profile): ResumeDraftError | undefined {
+function missingSourceInformation(source: ResumeSourceDocument, profile: Profile): ResumeDraftError | undefined {
   const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && candidateFactIds(profile, anchor).length === 0).map((anchor) => ({
     claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [],
     requiredInformation: `Confirm this source claim in your profile facts: “${anchor.text}”`,
@@ -95,7 +95,7 @@ function auditFindings(parsed: unknown, claims: DraftClaim[], byId: Map<string, 
   return checked.size === checkById.size ? { findings, preservationFailures } : undefined;
 }
 
-function validatePlan(parsed: unknown, source: DocxSourceRepresentation, profile: Profile): DraftClaim[] | undefined {
+function validatePlan(parsed: unknown, source: ResumeSourceDocument, profile: Profile): DraftClaim[] | undefined {
   const result = PlanSchema.safeParse(parsed);
   if (!result.success) return undefined;
   const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
@@ -133,10 +133,10 @@ function resumeGroundingFindings(findings: ResumeGroundingFinding[], counts: Cou
   return new ResumeDraftError({ version: 1, outcome: "needs_information", ...counts, findings, requiredInformation: remaining });
 }
 
-export async function draftResumeSourcePlan(profile: Profile, job: Job, source: DocxSourceRepresentation, deadline: number, beforeModelCall?: () => Promise<void>): Promise<ResumeSourcePlan> {
+export async function draftResumeSourcePlan(profile: Profile, job: Job, source: ResumeSourceDocument, deadline: number, beforeModelCall?: () => Promise<void>): Promise<ResumeSourcePlan> {
   const counts: Counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
-  if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This DOCX layout is unsupported.");
-  if (source.format !== "docx" || source.version !== 1 || source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 80) throw new Error("The inspected DOCX source is missing, stale, or outside the supported context limit.");
+  if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This source résumé layout is unsupported.");
+  if (source.version !== 1 || source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 80) throw new Error("The inspected source résumé is missing, stale, or outside the supported context limit.");
   const missing = missingSourceInformation(source, profile);
   if (missing) throw missing;
   const facts = verifiedFacts(profile);
@@ -221,7 +221,7 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       const finalClaims: ResumeSourceClaim[] = claims.map(({ anchor, text, factIds }) => ({ anchorId: anchor.id, text, factIds }));
       const edits = planEdits(claims);
       return {
-        version: 1, format: "docx", sourceHash: source.sourceHash, representationVersion: source.version,
+        version: 1, format: source.format, sourceHash: source.sourceHash, representationVersion: source.version,
         profileHash: sourceProfileHash(profile), factsHash: factHash(profile), settingsHash: settingsHash(profile), jobHash: sourceJobHash(job),
         claims: finalClaims, edits,
         grounding: { version: 1, writerAttempts: counts.writerAttempts, checkerAttempts: counts.checkerAttempts, repairAttempts: counts.repairAttempts, findings }, model: "gpt-6-sol",

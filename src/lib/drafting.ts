@@ -58,9 +58,11 @@ export async function draftPacket(
   const facts = relevantFacts(profile, job);
   const originalResumeOnly = profile.automationSettings?.resumeTailoring === false;
   const originalResume = originalResumeOnly ? originalResumeManifest(profile) : undefined;
-  if (!originalResumeOnly && profile.resumeSource?.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && !profile.resumeSourceDocument)
-    throw new Error("This saved DOCX predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.");
-  if (!originalResumeOnly && profile.resumeSourceDocument && !options) throw new Error("A source-preserving DOCX draft needs the authorized application worker. Start a new draft from the public application action.");
+  if (!originalResumeOnly && profile.resumeSource && !profile.resumeSourceDocument) {
+    const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
+    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
+  }
+  if (!originalResumeOnly && profile.resumeSourceDocument && !options) throw new Error("A source-preserving résumé draft needs the authorized application worker. Start a new draft from the public application action.");
   if (options?.knownAnswersOnly && originalResumeOnly) {
     const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResume!, version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline, options.beforeModelCall);
     return profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
@@ -231,7 +233,7 @@ export function validatePacket(
     if (!source || source.support.status !== "candidate" || !plan || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
       plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||
-      hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The tailored DOCX source plan is stale or differs from the reviewed preview.");
+      hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The tailored source résumé plan is stale or differs from the reviewed preview.");
   }
   for (const line of packet.schemaVersion === 2 || packet.schemaVersion === 3 ? [] : packet.resumeLines) {
     if (
