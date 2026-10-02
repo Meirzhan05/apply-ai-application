@@ -73,10 +73,11 @@ const publicAction = (action: string, payload: Record<string, unknown>) => actio
 function responseFor(request: { input: Array<{ content: string }>; text: { format: { name: string } }; model: string }) {
   const name = request.text.format.name;
   if (name === "anchored_resume_edit_plan") {
+    const layoutRepair = request.input[0].content.includes("This is a layout fit repair");
     const body = JSON.parse(request.input[1].content) as { sourceDocument: { anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean }> }; confirmedFacts: Array<{ id: string; sourceAnchorId?: string }> };
     return { claims: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({
       anchorId: anchor.id,
-      text: anchor.text === "Built a recommender with 92% precision." ? "Built an explainable recommender with 92% precision." : anchor.text,
+      text: anchor.text === "Built a recommender with 92% precision." ? layoutRepair ? "Built recommender with 92% precision." : "Built an explainable recommender with 92% precision." : anchor.text,
       factIds: [body.confirmedFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id],
     })) };
   }
@@ -160,6 +161,7 @@ async function exerciseDocxFlow(multiPage: boolean) {
   await runDraft(draftHandoff.payload);
   expect(application.status).toBe("draft_review");
   expect(application.packet).toMatchObject({ schemaVersion: 3, resumeArtifact: { format: "docx", pageCount: multiPage ? 2 : 1, layoutValidation: { outcome: "passed" } } });
+  expect(application.packet?.resumeSourcePlan?.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
 
   const preview = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
   const download = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume?download=1`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
@@ -175,7 +177,7 @@ async function exerciseDocxFlow(multiPage: boolean) {
   expect(sourceDownload.status).toBe(200);
   expect(sourceDownload.headers.get("content-type")).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   const savedDocx = Buffer.from(await sourceDownload.arrayBuffer());
-  expect((await parseDocxSource(savedDocx)).anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built an explainable recommender with 92% precision.");
+  expect((await parseDocxSource(savedDocx)).anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built recommender with 92% precision.");
 
   const essayIndex = application.packet!.answers.findIndex((answer) => answer.aiDraft);
   expect(essayIndex, JSON.stringify({ answers: application.packet!.answers, formats: fixture.parse.mock.calls.map((call) => call[0].text.format.name) })).toBeGreaterThanOrEqual(0);
