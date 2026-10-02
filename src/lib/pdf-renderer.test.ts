@@ -48,6 +48,23 @@ describe("PDFBox source-preserving renderer", () => {
     expect(bytesHash(rendered.pdf)).not.toBe(bytesHash(sourceBytes));
   }, 120_000);
 
+  it("keeps a separate list marker immutable while replacing its same-column body text", async () => {
+    const sourceBytes = await createPdfSourceFixture({ separateBulletMarker: "same-column" });
+    const source = await parsePdfSource(sourceBytes);
+    const anchor = source.anchors.find((item) => item.text === "Built a search index for 1,200 users.");
+    expect(anchor).toMatchObject({ kind: "bullet", editable: true, bulletPrefix: "" });
+    const plan = planFor(source, { anchorId: anchor!.id, text: "Built search index for 1,200 users." });
+
+    const rendered = await renderPdfSourceBytes(sourceBytes, source, plan, Date.now() + 90_000);
+    const reparsed = await parsePdfSource(rendered.pdf);
+
+    expect(rendered.visualOutsideEditDifferenceAt144Dpi).toBe(0);
+    expect(rendered.visualOutsideEditDifferenceAt300Dpi).toBe(0);
+    expect(reparsed.text).toContain("• Built search index for 1,200 users.");
+    expect(reparsed.text).not.toContain("Built a search index for 1,200 users.");
+    expect(reparsed.anchors.filter((item) => item.text === "Built search index for 1,200 users.")).toHaveLength(1);
+  }, 120_000);
+
   it("rewrites a continued bullet on page two and preserves page count, page geometry, and repeated furniture", async () => {
     const sourceBytes = await createPdfMultiPageFixture();
     const source = await parsePdfSource(sourceBytes);

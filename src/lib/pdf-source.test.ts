@@ -52,6 +52,22 @@ it("keeps complete long source text but blocks bullets too long to safely edit",
   expect(source.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/extends outside|too long|source font\/layout/i) });
 });
 
+it("pairs a separate typographic bullet marker with the nearest same-line text in its original column", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ separateBulletMarker: "same-column" }));
+  const bullet = source.anchors.find((anchor) => anchor.text === "Built a search index for 1,200 users.");
+
+  expect(source.support).toMatchObject({ status: "candidate" });
+  expect(bullet).toMatchObject({ kind: "bullet", candidateClaim: true, editable: true, bulletPrefix: "", sourceText: "Built a search index for 1,200 users." });
+  expect(source.anchors.some((anchor) => anchor.text === "")).toBe(false);
+  expect(source.text).toContain("• Built a search index for 1,200 users.");
+});
+
+it("does not pair a standalone bullet marker with text in another column", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ columns: true, separateBulletMarker: "cross-column" }));
+
+  expect(source.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/same page and column/i) });
+});
+
 it("blocks duplicate bullet text whose PDF operator cannot be uniquely mapped", async () => {
   const source = await parsePdfSource(await createPdfSourceFixture({ duplicateBullet: true }));
   const bullets = source.anchors.filter((anchor) => anchor.sourceText === "• Built a search index for 1,200 users.");
