@@ -120,7 +120,7 @@ it.skipIf(!renderer)("runs a real source-to-edited-DOCX-to-PDF fidelity check an
   const revisedSource = await parseDocxSource(source.bytes);
   expect(revisedSource.anchors.find((anchor) => anchor.kind === "bullet")?.text).toBe("Built recommender with 92% precision.");
   expect(await (await import("@/lib/original-resume")).readOriginalResume(fixture.profile.id, { ...fixture.profile.resumeSource!, filename: fixture.profile.resumeFileName! })).toEqual(fixture.originalBytes);
-});
+}, 150_000);
 
 it.skipIf(!renderer)("serves a fresh imported-job DOCX comparison and blocks changed normalized inputs", async () => {
   const fixture = await sourcePacket(true);
