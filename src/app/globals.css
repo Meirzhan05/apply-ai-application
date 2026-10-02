@@ -1315,3 +1315,11 @@ a {
 }
 
 .resume-entry-title { font-weight: 600; }
+
+/* Reviewed documents support the current application task. */
+.packet-reference { border-top: 1px solid var(--line); margin: 24px 0; padding-top: 16px; }
+.packet-reference > summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+.packet-reference[open] > summary { margin-bottom: 12px; }
+.detail-head .employer-name { color: var(--forest); font-weight: 600; margin-bottom: 8px; }
+.app-layout:has(.app-list[hidden]) { grid-template-columns: minmax(0, 1fr); }
+.app-list[hidden] { display: none; }

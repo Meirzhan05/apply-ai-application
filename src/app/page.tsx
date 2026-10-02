@@ -172,6 +172,168 @@ export default function Dashboard() {
       </div>
     );
 
+  const applicationMaterials = activeApp?.packet && appJob &&
+                      [
+                        "draft_review",
+                        "authorized_to_fill",
+                        "filling",
+                        "needs_user_action",
+                        "final_review",
+                        "approved_to_submit",
+                        "submitting",
+                        "submitted",
+                        "uncertain",
+                      ].includes(activeApp.status) && (
+                        <div className="step-card">
+                          <div className="card-title">
+                            <FileText size={20} />
+                            <h3>Application packet</h3>
+                            <span>Version {activeApp.packet.version}</span>
+                          </div>
+                          {activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
+                            <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
+                          ) : <>
+                          <p className="muted">
+                            Each resume line comes from a confirmed profile
+                            fact.
+                          </p>
+                          <div className="resume-preview">
+                            <strong>{data.profile.name}</strong>
+                            <small>
+                              {data.profile.email}
+                              {data.profile.school
+                                ? ` · ${data.profile.school}`
+                                : ""}
+                            </small>
+                            <h4>Selected experience & projects</h4>
+                            {activeApp.packet.resumeLines.map((line, i) => (
+                              <p key={i}>
+                                • {line.text}{" "}
+                                <small>
+                                  Verified fact: {line.factIds.join(", ")}
+                                </small>
+                              </p>
+                            ))}
+                          </div>
+                          <a
+                            className="text-button"
+                            href={`/api/applications/${activeApp.id}/files/resume`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open tailored resume PDF ↗
+                          </a>
+                          </>}
+                          {activeApp.packet.coverLetter && (
+                            <div className="cover-letter">
+                              <h4>Cover letter</h4>
+                              <pre>{activeApp.packet.coverLetter}</pre>
+                              <a
+                                className="text-button"
+                                href={`/api/applications/${activeApp.id}/files/cover-letter`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open cover letter PDF ↗
+                              </a>
+                            </div>
+                          )}
+                          <div className="answers">
+                            <h4>Screening answers</h4>
+                            <p className="muted">AI writes essays; you confirm them. Personal and consent answers come from you.</p>
+                            {activeApp.packet.answers.map((answer, i) => (
+                              <div className="screening-answer" key={i}>
+                                <label htmlFor={`screening-${activeApp.id}-${i}`}>{answer.question}</label>
+                                <textarea
+                                  id={`screening-${activeApp.id}-${i}`}
+                                  disabled={activeApp.status !== "draft_review" || Boolean(activeApp.queuedRun)}
+                                  readOnly={answerOwner(answer.question) === "ai"}
+                                  value={answerOwner(answer.question) === "ai" ? answer.answer : (answerDraft[i] ?? answer).answer}
+                                  onChange={(event) => {
+                                    if (answerOwner(answer.question) === "ai") return;
+                                    const draft = [
+                                      ...(answerDraft.length
+                                        ? answerDraft
+                                        : activeApp.packet!.answers),
+                                    ];
+                                    draft[i] = {
+                                      ...draft[i],
+                                      answer: event.target.value,
+                                      userProvided: true,
+                                      requiresUserInput: false,
+                                    };
+                                    setAnswerDraft(draft);
+                                  }}
+                                />
+                                <small>
+                                  {answerOwner(answer.question) === "ai" ? (answer.aiDraft ? (answer.confirmedAt ? "AI essay · confirmed by you" : "AI essay · your confirmation needed") : "AI draft needed · use Write essays with AI below") : answer.requiresUserInput &&
+                                  !answer.userProvided
+                                    ? "Human-only · your answer needed"
+                                    : answer.userProvided
+                                      ? "Your own answer"
+                                      : "From your confirmed profile"}
+                                </small>
+                                {answerOwner(answer.question) === "ai" && answer.aiDraft && (
+                                  <details><summary>Facts used in this essay</summary><ul>{answer.factIds.map((id) => <li key={id}>{data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source fact unavailable"}</li>)}</ul></details>
+                                )}
+                                {answerOwner(answer.question) === "ai" && answer.aiDraft && !answer.confirmedAt && activeApp.status === "draft_review" && (
+                                  <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet!.answers))}
+                                    onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answer.aiDraft!.contentHash })}>Confirm essay</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          {activeApp.status === "draft_review" && (
+                            <div className="action-row">
+                              <button
+                                className="outline-action"
+                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
+                                onClick={() =>
+                                  act("editPacket", {
+                                    applicationId: activeApp.id,
+                                    answers: answerDraft.length
+                                      ? answerDraft
+                                      : activeApp.packet!.answers,
+                                  })
+                                }
+                              >
+                                Save my answers
+                              </button>
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
+                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
+                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
+                              <p className="target-url">
+                                Approved destination:{" "}
+                                <a
+                                  href={appJob.applyUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {new URL(appJob.applyUrl).hostname} ↗
+                                </a>
+                              </p>
+                              <button
+                                className="dark-button"
+                                disabled={
+                                  Boolean(busy) || Boolean(activeApp.queuedRun) ||
+                                  (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers)) ||
+                                  activeApp.packet.answers.some(answerNeedsAction)
+                                }
+                                onClick={() =>
+                                  act("approveFill", {
+                                    applicationId: activeApp.id,
+                                    packetHash: activeApp.packetHash,
+                                  })
+                                }
+                              >
+                                Approve packet for form fill
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+
   const nav: {
     key: Section;
     label: string;
@@ -583,14 +745,13 @@ export default function Dashboard() {
         )}
         {section === "applications" && (
           <main className="wide-panel">
-            <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>
             <h1>Your applications</h1>
             <p className="subheading">
               Review the details before the agent enters a form, then review the
               exact form before submission.
             </p>
             <div className="app-layout">
-              <div className="app-list">
+              <div className="app-list" hidden={!applications.length}>
                 {applications.length ? (
                   applications.map((app) => {
                     const job = jobs.find((item) => item.id === app.jobId);
@@ -634,7 +795,7 @@ export default function Dashboard() {
                   <>
                     <div className="detail-head">
                       <div>
-                        <p className="eyebrow">{appJob.company}</p>
+                        <p className="employer-name">{appJob.company}</p>
                         <h2>{appJob.title}</h2>
                         <p>
                           {appJob.location} · {appJob.sourceLabel}
@@ -695,167 +856,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
-                    {activeApp.packet &&
-                      [
-                        "draft_review",
-                        "authorized_to_fill",
-                        "filling",
-                        "needs_user_action",
-                        "final_review",
-                        "approved_to_submit",
-                        "submitting",
-                        "submitted",
-                        "uncertain",
-                      ].includes(activeApp.status) && (
-                        <div className="step-card">
-                          <div className="card-title">
-                            <FileText size={20} />
-                            <h3>Application packet</h3>
-                            <span>Version {activeApp.packet.version}</span>
-                          </div>
-                          {activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
-                            <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
-                          ) : <>
-                          <p className="muted">
-                            Each resume line comes from a confirmed profile
-                            fact.
-                          </p>
-                          <div className="resume-preview">
-                            <strong>{data.profile.name}</strong>
-                            <small>
-                              {data.profile.email}
-                              {data.profile.school
-                                ? ` · ${data.profile.school}`
-                                : ""}
-                            </small>
-                            <h4>Selected experience & projects</h4>
-                            {activeApp.packet.resumeLines.map((line, i) => (
-                              <p key={i}>
-                                • {line.text}{" "}
-                                <small>
-                                  Verified fact: {line.factIds.join(", ")}
-                                </small>
-                              </p>
-                            ))}
-                          </div>
-                          <a
-                            className="text-button"
-                            href={`/api/applications/${activeApp.id}/files/resume`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open tailored resume PDF ↗
-                          </a>
-                          </>}
-                          {activeApp.packet.coverLetter && (
-                            <div className="cover-letter">
-                              <h4>Cover letter</h4>
-                              <pre>{activeApp.packet.coverLetter}</pre>
-                              <a
-                                className="text-button"
-                                href={`/api/applications/${activeApp.id}/files/cover-letter`}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Open cover letter PDF ↗
-                              </a>
-                            </div>
-                          )}
-                          <div className="answers">
-                            <h4>Screening answers</h4>
-                            <p className="muted">AI writes essays; you confirm them. Personal and consent answers come from you.</p>
-                            {activeApp.packet.answers.map((answer, i) => (
-                              <div className="screening-answer" key={i}>
-                                <label htmlFor={`screening-${activeApp.id}-${i}`}>{answer.question}</label>
-                                <textarea
-                                  id={`screening-${activeApp.id}-${i}`}
-                                  disabled={activeApp.status !== "draft_review" || Boolean(activeApp.queuedRun)}
-                                  readOnly={answerOwner(answer.question) === "ai"}
-                                  value={answerOwner(answer.question) === "ai" ? answer.answer : (answerDraft[i] ?? answer).answer}
-                                  onChange={(event) => {
-                                    if (answerOwner(answer.question) === "ai") return;
-                                    const draft = [
-                                      ...(answerDraft.length
-                                        ? answerDraft
-                                        : activeApp.packet!.answers),
-                                    ];
-                                    draft[i] = {
-                                      ...draft[i],
-                                      answer: event.target.value,
-                                      userProvided: true,
-                                      requiresUserInput: false,
-                                    };
-                                    setAnswerDraft(draft);
-                                  }}
-                                />
-                                <small>
-                                  {answerOwner(answer.question) === "ai" ? (answer.aiDraft ? (answer.confirmedAt ? "AI essay · confirmed by you" : "AI essay · your confirmation needed") : "AI draft needed · use Write essays with AI below") : answer.requiresUserInput &&
-                                  !answer.userProvided
-                                    ? "Human-only · your answer needed"
-                                    : answer.userProvided
-                                      ? "Your own answer"
-                                      : "From your confirmed profile"}
-                                </small>
-                                {answerOwner(answer.question) === "ai" && answer.aiDraft && (
-                                  <details><summary>Facts used in this essay</summary><ul>{answer.factIds.map((id) => <li key={id}>{data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source fact unavailable"}</li>)}</ul></details>
-                                )}
-                                {answerOwner(answer.question) === "ai" && answer.aiDraft && !answer.confirmedAt && activeApp.status === "draft_review" && (
-                                  <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet!.answers))}
-                                    onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answer.aiDraft!.contentHash })}>Confirm essay</button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                          {activeApp.status === "draft_review" && (
-                            <div className="action-row">
-                              <button
-                                className="outline-action"
-                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
-                                onClick={() =>
-                                  act("editPacket", {
-                                    applicationId: activeApp.id,
-                                    answers: answerDraft.length
-                                      ? answerDraft
-                                      : activeApp.packet!.answers,
-                                  })
-                                }
-                              >
-                                Save my answers
-                              </button>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
-                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers))}
-                                onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
-                              <p className="target-url">
-                                Approved destination:{" "}
-                                <a
-                                  href={appJob.applyUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {new URL(appJob.applyUrl).hostname} ↗
-                                </a>
-                              </p>
-                              <button
-                                className="dark-button"
-                                disabled={
-                                  Boolean(busy) || Boolean(activeApp.queuedRun) ||
-                                  (answerDraft.length > 0 && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers)) ||
-                                  activeApp.packet.answers.some(answerNeedsAction)
-                                }
-                                onClick={() =>
-                                  act("approveFill", {
-                                    applicationId: activeApp.id,
-                                    packetHash: activeApp.packetHash,
-                                  })
-                                }
-                              >
-                                Approve packet for form fill
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                    {activeApp.status === "draft_review" && applicationMaterials}
                     {activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
@@ -893,7 +894,6 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
-                    <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />
                     {activeApp.status === "filling" && (
                       <div className="step-card">
                         <LoaderCircle className="spin" size={24} /> Filling the
@@ -948,6 +948,17 @@ export default function Dashboard() {
                         <button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review packet for a new browser session</button>
                       </div>
                       </>
+                    )}
+                    {activeApp.status === "submitted" && (
+                      <div className="success-note">
+                        <Check size={20} />
+                        <div>
+                          <strong>Submission confirmed</strong>
+                          <p>{activeApp.confirmation}</p>
+                          {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View confirmation proof ↗</a>}
+                          <label>Minutes this application saved you (optional)<input type="number" min={0} max={240} defaultValue={activeApp.timeSavedMinutes ?? ""} onBlur={(event) => { if (event.target.value && Number(event.target.value) !== activeApp.timeSavedMinutes) act("timeSaved", { applicationId: activeApp.id, minutes: Number(event.target.value) }); }} /></label>
+                        </div>
+                      </div>
                     )}
                     {activeApp.form &&
                       [
@@ -1050,17 +1061,6 @@ export default function Dashboard() {
                           )}
                         </div>
                       )}
-                    {activeApp.status === "submitted" && (
-                      <div className="success-note">
-                        <Check size={20} />
-                        <div>
-                          <strong>Submission confirmed</strong>
-                          <p>{activeApp.confirmation}</p>
-                          {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View confirmation proof ↗</a>}
-                          <label>Minutes this application saved you (optional)<input type="number" min={0} max={240} defaultValue={activeApp.timeSavedMinutes ?? ""} onBlur={(event) => { if (event.target.value && Number(event.target.value) !== activeApp.timeSavedMinutes) act("timeSaved", { applicationId: activeApp.id, minutes: Number(event.target.value) }); }} /></label>
-                        </div>
-                      </div>
-                    )}
                     {activeApp.status === "uncertain" && (
                       <div className="warning-note">
                         <CircleHelp size={20} />
@@ -1105,6 +1105,13 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
+                    <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />
+                    {activeApp.status !== "draft_review" && applicationMaterials && (
+                      <details className="packet-reference" key={`materials-${activeApp.id}-${activeApp.status}`}>
+                        <summary>Saved application materials · version {activeApp.packet?.version}</summary>
+                        {applicationMaterials}
+                      </details>
+                    )}
                     {activeApp.error && activeApp.status !== "uncertain" && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
@@ -1127,7 +1134,9 @@ export default function Dashboard() {
                   </>
                 ) : (
                   <div className="empty">
-                    <p>Choose an application to see its next step.</p>
+                    <h2>Start with a role you want</h2>
+                    <p>Choose a match to prepare your first application. You review the materials and the employer form before submission.</p>
+                    <button className="dark-button" onClick={() => setSection("matches")}>Browse matches <ArrowRight size={16} /></button>
                   </div>
                 )}
               </div>
