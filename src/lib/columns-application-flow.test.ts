@@ -266,7 +266,9 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx") {
   expect(aster).toMatchObject({ pageNumber: 2, regionId: "page-2-column-1" });
   expect(orbit!.entryId).not.toBe(campus!.entryId);
   expect(continuation!.entryId).toBe(campus!.entryId);
+  expect(continuation!.entryHeading).toBe("Campus Access Checker");
   expect(aster!.entryId).not.toBe(continuation!.entryId);
+  expect(aster!.entryHeading).toBe("Aster Systems — Software Intern, 2021–2022");
   expect(orbit!.readingOrder).toBeLessThan(campus!.readingOrder);
   const sourceFacts = new Map(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => [fact.id, fact.sourceAnchorId]));
   const confirmedContinuationFact = flow.state!.profile.facts.find((fact) => fact.sourceAnchorId === continuation!.id);
