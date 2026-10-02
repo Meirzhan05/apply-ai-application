@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { PDFParse } from "pdf-parse";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument } from "@/lib/pdfjs-runtime";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import { hashJson } from "@/lib/crypto";
 import { bytesHash } from "@/lib/resume-artifacts";
+import { readablePdfFontFamily } from "@/lib/pdf-fonts";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { applyDocxEdits } from "@/lib/docx-source";
 import { ResumeDraftError } from "@/lib/resume-document";
@@ -94,6 +95,8 @@ async function readPdfLayout(pdfBytes: Buffer): Promise<PdfPageLayout[]> {
       if (page.rotate !== 0) throw new Error("Rotated page text is outside the supported DOCX layout profile.");
       const viewport = page.getViewport({ scale: 1 });
       const content = await page.getTextContent({ includeMarkedContent: false });
+      await page.getOperatorList({ intent: "display" });
+      const commonObjects = (page as unknown as { commonObjs: { get(name: string): { name?: string } } }).commonObjs;
       const items = content.items.filter(isTextItem);
       const anchors = items.map((item) => {
         const a = item.transform[0];
@@ -103,8 +106,12 @@ async function readPdfLayout(pdfBytes: Buffer): Promise<PdfPageLayout[]> {
         const fontSize = Math.hypot(a, b);
         if (Math.abs(b) > 0.01) throw new Error("Rotated text is outside the supported DOCX layout profile.");
         const style = content.styles[item.fontName];
+        let embeddedFontName = "";
+        try { embeddedFontName = commonObjects.get(item.fontName).name ?? ""; }
+        catch { /* The strict family comparison below rejects an unresolved descriptor. */ }
+        const resolvedFamily = embeddedFontName ? readablePdfFontFamily(embeddedFontName) : "";
         return { text: normalize(item.str), box: { left: x, top: viewport.height - y - item.height, right: x + item.width, bottom: viewport.height - y },
-          fontFamilies: [style?.fontFamily ?? ""], fontSizes: [fontSize] };
+          fontFamilies: [resolvedFamily || style?.fontFamily || ""], fontSizes: [fontSize] };
       }).filter((item) => item.text);
       pages.push({ width: viewport.width, height: viewport.height, anchors });
       page.cleanup();
@@ -197,8 +204,7 @@ function validateAnchorGeometry(source: DocxSourceRepresentation, baseline: PdfP
     if (before.page !== baseline[0] || after.page !== final[0]) throw new Error("The DOCX moved content to another page.");
     const beforeFont = anchor.font?.family.toLowerCase();
     const afterFonts = after.fontFamilies.map((family) => family.toLowerCase());
-    const localPdfFontAlias = process.env.NODE_ENV === "test" && process.platform === "darwin" && beforeFont === "noto sans" && afterFonts.length > 0 && afterFonts.every((family) => family === "sans-serif");
-    if (!beforeFont || afterFonts.some((family) => family !== beforeFont) && !localPdfFontAlias) throw new Error(`The rendered paragraph “${anchor.text.slice(0, 70)}” uses ${afterFonts.join(", ") || "an unknown font"} instead of source font ${beforeFont || "unknown"}. Upload a DOCX using the pinned Noto Sans source font.`);
+    if (!beforeFont || afterFonts.some((family) => family !== beforeFont)) throw new Error(`The rendered paragraph “${anchor.text.slice(0, 70)}” uses ${afterFonts.join(", ") || "an unknown font"} instead of source font ${beforeFont || "unknown"}. Upload a DOCX using the pinned Noto Sans source font.`);
     if (after.fontSizes.some((size) => Math.abs(size - (anchor.font?.sizePt ?? 0)) > 0.5)) throw new Error(`The rendered paragraph “${anchor.text.slice(0, 70)}” changed font size by more than 0.5 pt.`);
     if (!replacement) {
       if (!near(before.box.left, after.box.left, unchangedGeometryTolerancePt) || !near(before.box.top, after.box.top, unchangedGeometryTolerancePt) ||

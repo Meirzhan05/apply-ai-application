@@ -8,9 +8,9 @@ const nextConfig: NextConfig = {
     // pdfjs loads its optional native polyfills dynamically. Static tracing
     // omitted them on Vercel, crashing the resume route before authentication.
     "/api/resume": ["./node_modules/@napi-rs/canvas*/**", "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
-    "/api/actions": ["./node_modules/@napi-rs/canvas*/**"],
-    "/api/applications/*": ["./node_modules/@napi-rs/canvas*/**"],
-    "/api/pilot/evidence/*": ["./node_modules/@napi-rs/canvas*/**"],
+    "/api/actions": ["./node_modules/@napi-rs/canvas*/**", "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
+    "/api/applications/*": ["./node_modules/@napi-rs/canvas*/**", "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
+    "/api/pilot/evidence/*": ["./node_modules/@napi-rs/canvas*/**", "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
   },
   devIndicators: false,
 };
