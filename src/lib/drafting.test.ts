@@ -9,7 +9,7 @@ describe("truthful application facts", () => {
     const packet = await draftPacket(state.profile, state.jobs[0]);
     packet.version = 2;
     expect(() => validatePacket(state.profile, packet)).not.toThrow();
-    Object.assign(packet, { schemaVersion: 3 });
+    Object.assign(packet, { schemaVersion: 4 });
     expect(() => validatePacket(state.profile, packet)).toThrow(/Unsupported application packet schema version/);
   });
   it("rejects an invented answer that cites a real fact", async () => {

@@ -36,6 +36,7 @@ import { GET as getApplicationFile } from "@/app/api/applications/[id]/files/[ki
 import { setPacket } from "@/lib/workflow";
 import { recordApplicationBlocker } from "@/lib/application-blockers";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
+import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
 function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
@@ -228,7 +229,7 @@ it("replaces a manual tailored artifact with the uploaded original after the sav
 });
 it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual preparation and preview/download when tailoring is off", async (extension) => {
   const profile = fixture.state!.profile;
-  const bytes = Buffer.from(extension === "pdf" ? "%PDF uploaded original bytes\npage one\n" : "PK uploaded original DOCX bytes\n");
+  const bytes = extension === "pdf" ? Buffer.from("%PDF uploaded original bytes\npage one\n") : await createDocxSourceFixture();
   const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   fixture.extractedText = "Work Experience\nOrbit Labs\nMachine Learning Engineer\n2024-2025\n• Built a vector retrieval service with Python that improved ranking quality by 22%.";
   fixture.storageDemo = true;

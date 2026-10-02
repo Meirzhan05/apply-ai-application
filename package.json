@@ -33,6 +33,7 @@
     "test:latex-storage": "DEMO_MODE=false node --env-file=.env --import tsx scripts/test-latex-storage.ts",
     "test:latex-ai": "DEMO_MODE=true node --env-file=.env --import tsx scripts/test-latex-ai.ts",
     "test:latex-worker": "node --env-file=.env --import tsx scripts/test-latex-worker.ts",
+    "test:docx-worker": "node --env-file=.env --import tsx scripts/test-docx-worker.ts",
     "test:live-browser": "node --env-file=.env --import tsx scripts/test-live-browser.ts"
   },
   "dependencies": {
@@ -42,12 +43,15 @@
     "@supabase/ssr": "0.7.0",
     "@supabase/supabase-js": "2.117.2",
     "@trigger.dev/sdk": "4.6.4",
+    "@xmldom/xmldom": "0.9.12",
+    "jszip": "3.10.2",
     "lucide-react": "0.468.0",
     "mammoth": "1.11.0",
     "next": "16.3.7",
     "openai": "7.25.0",
     "pdf-lib": "1.17.1",
     "pdf-parse": "2.4.5",
+    "pdfjs-dist": "5.4.296",
     "playwright-core": "1.55.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -5,11 +5,19 @@ import { coverLetterPdf, resumePdf } from "@/lib/resume-pdf";
 import { fitResume } from "@/lib/latex-compiler";
 import { resumeFactIds, resumeFields, resumeInputHash, validateResumeDocument } from "@/lib/resume-document";
 import { bytesHash, readArtifact, saveArtifact } from "@/lib/resume-artifacts";
-import type { ApplicationPacket, PacketFile, Profile } from "@/lib/types";
+import { renderDocxResume } from "@/lib/docx-renderer";
+import { sourceProfileHash } from "@/lib/resume-source-draft";
+import type { ApplicationPacket, PacketFile, Profile, ResumeSourcePlan } from "@/lib/types";
 
 export type PacketFileKind = PacketFile["kind"];
 const legacyResumeInputHash = (profile: Profile, packet: ApplicationPacket) => hashJson({ kind: "resume", profile: { name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills }, lines: packet.resumeLines });
 const coverInputHash = (packet: ApplicationPacket) => hashJson({ kind: "cover-letter", text: packet.coverLetter });
+const docxLayoutPolicy = "docx-single-column-one-page-v1" as const;
+function docxInputHash(plan: ResumeSourcePlan) {
+  return hashJson({ kind: "source-preserving-docx", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
+    profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+    layoutPolicy: docxLayoutPolicy, claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+}
 const filename = (kind: PacketFileKind) => kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
 async function render(profile: Profile, packet: ApplicationPacket, kind: PacketFileKind) {
   if (kind === "resume") return resumePdf(profile, packet);
@@ -17,10 +25,52 @@ async function render(profile: Profile, packet: ApplicationPacket, kind: PacketF
   return coverLetterPdf(packet.coverLetter);
 }
 export function validateResumeArtifact(profile: Profile, packet: ApplicationPacket): void {
-  const doc = packet.resumeDocument;
   const artifact = packet.resumeArtifact;
   const file = packet.files?.find((item) => item.kind === "resume");
-  if (!doc || !artifact || !file) throw new Error("Prepare the LaTeX application files before review.");
+  if (!artifact || !file) throw new Error("Prepare the application files before review.");
+  if (artifact.format === "docx") {
+    const source = profile.resumeSourceDocument;
+    const plan = packet.resumeSourcePlan;
+    if (packet.schemaVersion !== 3 || !source || source.support.status !== "candidate" || !plan || !profile.resumeSource) throw new Error("The inspected DOCX source is no longer available. Rebuild the packet.");
+    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    const candidateAnchors = source.anchors.filter((anchor) => anchor.candidateClaim);
+    const claimIds = new Set(plan.claims.map((claim) => claim.anchorId));
+    const editMap = new Map(plan.edits.map((edit) => [edit.anchorId, edit]));
+    const verified = new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+    if (plan.version !== 1 || plan.format !== "docx" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
+      plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
+      !/^[a-f0-9]{64}$/.test(plan.jobHash) || candidateAnchors.length !== plan.claims.length || candidateAnchors.some((anchor) => !claimIds.has(anchor.id)) ||
+      plan.claims.some((claim) => {
+        const anchor = source.anchors.find((item) => item.id === claim.anchorId);
+        const edit = editMap.get(claim.anchorId);
+        return !anchor || !claim.factIds.length || claim.factIds.some((id) => !verified.has(id)) ||
+          (anchor.kind !== "bullet" && claim.text !== anchor.text) ||
+          (claim.text !== anchor.text && (!anchor.editable || !edit || edit.text !== claim.text || hashJson(edit.factIds) !== hashJson(claim.factIds))) ||
+          (claim.text === anchor.text && edit !== undefined);
+      }) || plan.edits.length !== [...editMap.keys()].length || plan.edits.some((edit) => !claimIds.has(edit.anchorId)) ||
+      plan.grounding.findings.length !== plan.claims.length || plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||
+      plan.grounding.writerAttempts < 1 || plan.grounding.writerAttempts > 3 || plan.grounding.checkerAttempts < 1 || plan.grounding.checkerAttempts > 3 || plan.grounding.repairAttempts > 2) throw new Error("The DOCX source plan is stale or does not preserve the complete reviewed source.");
+    const inputHash = docxInputHash(plan);
+    const valid = (key: string | undefined, hash: string, size: number, extension: string) =>
+      /^[a-f0-9]{64}$/.test(hash) && Number.isInteger(size) && size > 0 && size <= 5 * 1024 * 1024 && key === `${profile.id}/${inputHash}/${hash}.${extension}`;
+    const expectedRendererVersion = process.env.DOCX_RENDERER_VERSION ?? "26.8.0.3";
+    const rendererName = expectedRendererVersion.includes("alpha") ? "LibreOfficeDev" : "LibreOffice";
+    if (artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.renderer !== `libreoffice-${expectedRendererVersion}` || !artifact.rendererVersion.startsWith(`${rendererName} ${expectedRendererVersion}`) || artifact.sourceHash !== source.sourceHash ||
+      artifact.representationVersion !== source.version || artifact.profileHash !== plan.profileHash || artifact.factsHash !== plan.factsHash || artifact.settingsHash !== plan.settingsHash ||
+      artifact.jobHash !== plan.jobHash || artifact.layoutPolicy !== docxLayoutPolicy || artifact.layoutValidation?.outcome !== "passed" ||
+      artifact.layoutValidation?.unchangedAnchorTolerancePt !== 1 || artifact.layoutValidation?.pageSizeTolerancePt !== 0.5 || artifact.layoutValidation?.visualOutsideEditTolerance !== 0.001 ||
+      !Number.isFinite(artifact.layoutValidation?.visualOutsideEditDifference) || artifact.layoutValidation.visualOutsideEditDifference < 0 || artifact.layoutValidation.visualOutsideEditDifference > 0.001 ||
+      !/^[a-f0-9]{64}$/.test(artifact.layoutValidation?.baselinePdfHash ?? "") || artifact.layoutValidation.pageWidthPt <= 0 || artifact.layoutValidation.pageHeightPt <= 0 ||
+      artifact.source.mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || artifact.source.storageKey === profile.resumeSource.storageKey ||
+      !artifact.baseline || artifact.baseline.mimeType !== "application/pdf" || artifact.baseline.sha256 !== artifact.layoutValidation.baselinePdfHash ||
+      !valid(artifact.baseline.storageKey, artifact.baseline.sha256, artifact.baseline.size, "pdf") ||
+      !valid(file.storageKey, file.sha256, file.size, "pdf") || file.mimeType !== "application/pdf" || file.filename !== "tailored-resume.pdf" ||
+      !valid(artifact.source.storageKey, artifact.source.sha256, artifact.source.size, "docx")) throw new Error("The saved DOCX résumé does not match its reviewed source and layout checks. Rebuild the packet.");
+    if (hashJson(file.factIds) !== hashJson([...new Set(plan.claims.flatMap((claim) => claim.factIds))])) throw new Error("The saved DOCX résumé cites facts outside its reviewed source plan.");
+    return;
+  }
+  const doc = packet.resumeDocument;
+  if (!doc) throw new Error("Prepare the LaTeX application files before review.");
   validateResumeDocument(profile, doc);
   const inputHash = resumeInputHash(profile, doc);
   const valid = (key: string | undefined, hash: string, size: number, extension: string) =>
@@ -28,7 +78,7 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
   if (artifact.inputHash !== inputHash || artifact.pageCount !== 1 || artifact.compiler !== "tectonic-0.17.0" ||
     !valid(file.storageKey, file.sha256, file.size, "pdf") || !valid(artifact.source.storageKey, artifact.source.sha256, artifact.source.size, "tex")) throw new Error("The saved resume does not match its reviewed content. Rebuild the packet.");
 }
-export async function withPacketFiles(profile: Profile, original: ApplicationPacket, deadline = Date.now() + 90_000): Promise<ApplicationPacket> {
+export async function withPacketFiles(profile: Profile, original: ApplicationPacket, deadline = Date.now() + 90_000, beforeRender?: () => Promise<void>): Promise<ApplicationPacket> {
   let packet = { ...original };
   let resumeFile: PacketFile;
   if (packet.resumeMode === "original") {
@@ -60,6 +110,36 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
       packet = { ...packet, resumeDocument: fitted.document, resumeLines: resumeFields(fitted.document).map(({ text, factIds }) => ({ text, factIds })),
         resumeArtifact: { inputHash, pageCount: 1, compiler: "tectonic-0.17.0", source } };
       resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", ...pdf, factIds: resumeFactIds(fitted.document) };
+    }
+  } else if (packet.schemaVersion === 3) {
+    const plan = packet.resumeSourcePlan;
+    if (!plan) throw new Error("The anchored DOCX source plan is missing. Rebuild the packet.");
+    if (packet.resumeArtifact) {
+      if (packet.resumeArtifact.format !== "docx") throw new Error("This source-preserving packet has an unsupported artifact format.");
+      validateResumeArtifact(profile, packet);
+      resumeFile = packet.files!.find((file) => file.kind === "resume")!;
+      await readArtifact(profile.id, resumeFile.storageKey!, resumeFile.sha256, resumeFile.size);
+      await readArtifact(profile.id, packet.resumeArtifact.baseline.storageKey, packet.resumeArtifact.baseline.sha256, packet.resumeArtifact.baseline.size);
+    } else {
+      validateResumeArtifactInputs(profile, packet);
+      let rendered: Awaited<ReturnType<typeof renderDocxResume>>;
+      try { rendered = await renderDocxResume(profile, plan, deadline, beforeRender); }
+      catch (error) {
+        if (error instanceof ResumeDraftError) throw error;
+        throw new ResumeDraftError({ version: 1, outcome: "technical_failure", writerAttempts: plan.grounding.writerAttempts, checkerAttempts: plan.grounding.checkerAttempts,
+          repairAttempts: plan.grounding.repairAttempts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, error instanceof Error ? error.message : "The DOCX layout could not be checked. Your last valid packet is preserved.");
+      }
+      const inputHash = docxInputHash(plan);
+      const pdf = await saveArtifact(profile.id, inputHash, rendered.pdf, "pdf");
+      const baseline = await saveArtifact(profile.id, inputHash, rendered.baselinePdf, "pdf");
+      const source = await saveArtifact(profile.id, inputHash, rendered.docx, "docx");
+      packet = { ...packet, resumeArtifact: { format: "docx", inputHash, pageCount: 1, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion, sourceHash: plan.sourceHash,
+        representationVersion: plan.representationVersion, profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+        layoutPolicy: docxLayoutPolicy, layoutValidation: { outcome: "passed", pageWidthPt: rendered.pageWidthPt, pageHeightPt: rendered.pageHeightPt,
+          unchangedAnchorTolerancePt: 1, pageSizeTolerancePt: 0.5, visualOutsideEditTolerance: 0.001, visualOutsideEditDifference: rendered.visualOutsideEditDifference, baselinePdfHash: rendered.baselinePdfHash },
+        baseline: { ...baseline, mimeType: "application/pdf" },
+        source: { ...source, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" } } };
+      resumeFile = { kind: "resume", filename: filename("resume"), mimeType: "application/pdf", ...pdf, factIds: [...new Set(plan.claims.flatMap((claim) => claim.factIds))] };
     }
   } else {
     const inputHash = legacyResumeInputHash(profile, packet);
@@ -99,6 +179,11 @@ export async function reviewedPacketFile(profile: Profile, packet: ApplicationPa
     const bytes = await readArtifact(profile.id, file!.storageKey!, file!.sha256, file!.size);
     return { bytes, filename: filename(kind), mimeType: "application/pdf" };
   }
+  if (kind === "resume" && packet.schemaVersion === 3) {
+    validateResumeArtifact(profile, packet);
+    const bytes = await readArtifact(profile.id, file!.storageKey!, file!.sha256, file!.size);
+    return { bytes, filename: filename(kind), mimeType: "application/pdf" };
+  }
   if (file?.storageKey) {
     const inputHash = kind === "resume" ? legacyResumeInputHash(profile, packet) : coverInputHash(packet);
     if (file.filename !== filename(kind) || file.mimeType !== "application/pdf" || file.storageKey !== `${profile.id}/${inputHash}/${file.sha256}.pdf`) throw new Error("The application file changed or no longer matches its current content.");
@@ -111,10 +196,27 @@ export async function reviewedPacketFile(profile: Profile, packet: ApplicationPa
   return { bytes, filename: filename(kind), mimeType: "application/pdf" };
 }
 export async function reviewedResumeSource(profile: Profile, packet: ApplicationPacket) {
-  if (packet.schemaVersion !== 2) throw new Error("This legacy packet has no LaTeX source. Rebuild the resume first.");
+  if (packet.schemaVersion === 3 && packet.resumeArtifact?.format === "docx") {
+    validateResumeArtifact(profile, packet);
+    const source = packet.resumeArtifact.source;
+    return { bytes: await readArtifact(profile.id, source.storageKey, source.sha256, source.size), filename: "tailored-resume.docx", mimeType: source.mimeType };
+  }
+  if (packet.schemaVersion !== 2) throw new Error("This legacy packet has no editable source. Rebuild the resume first.");
   validateResumeArtifact(profile, packet);
   const source = packet.resumeArtifact!.source;
   return { bytes: await readArtifact(profile.id, source.storageKey, source.sha256, source.size), filename: "tailored-resume.tex", mimeType: "text/plain; charset=utf-8" };
+}
+
+function validateResumeArtifactInputs(profile: Profile, packet: ApplicationPacket): void {
+  const plan = packet.resumeSourcePlan;
+  const source = profile.resumeSourceDocument;
+  if (!plan || !source || source.support.status !== "candidate" || plan.profileHash !== sourceProfileHash(profile) || plan.sourceHash !== source.sourceHash ||
+    plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) ||
+    plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error("The DOCX source plan is stale. Review the source and confirmed facts before drafting again.");
+  const claims = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
+  const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
+  if (claims.size !== anchors.length || anchors.some((anchor) => !claims.has(anchor.id)) ||
+    hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The DOCX source plan does not cover the complete reviewed résumé.");
 }
 
 // Historical inspection verifies the bytes recorded at the durable claim. It

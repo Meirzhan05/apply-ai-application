@@ -1,0 +1,10 @@
+{
+  "libreOfficeVersion": "26.8.0.3",
+  "archiveUrl": "https://download.documentfoundation.org/libreoffice/stable/26.8.0/deb/x86_64/LibreOffice_26.8.0_Linux_x86-64_deb.tar.gz",
+  "archiveSha256": "d0a6031a3837e48f9854e6d2da6489b9fadbd814afa4741fa32a197741663a22",
+  "architecture": "x86_64",
+  "fonts": {
+    "NotoSans-Regular.ttf": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5",
+    "NotoSans-Bold.ttf": "c976e4b1b99edc88775377fcc21692ca4bfa46b6d6ca6522bfda505b28ff9d6a"
+  }
+}

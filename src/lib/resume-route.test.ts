@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
 
@@ -11,6 +12,10 @@ import { POST } from "@/app/api/resume/route";
 
 const request = () => {
   const form = new FormData(); form.append("file", new File(["%PDF-synthetic"], "resume.pdf", { type: "application/pdf" }));
+  return new Request("http://localhost/api/resume", { method: "POST", headers: { Origin: "http://localhost" }, body: form });
+};
+const docxRequest = (bytes: Buffer) => {
+  const form = new FormData(); form.append("file", new File([Uint8Array.from(bytes).buffer], "resume.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   return new Request("http://localhost/api/resume", { method: "POST", headers: { Origin: "http://localhost" }, body: form });
 };
 beforeEach(() => {
@@ -45,5 +50,18 @@ describe("resume upload confirmation boundaries", () => {
     mocks.user.mockRejectedValue(new Error("AUTH_REQUIRED"));
     expect((await POST(request())).status).toBe(400);
     expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  it("stores the complete structured DOCX representation and anchored unconfirmed facts", async () => {
+    const bytes = await createDocxSourceFixture();
+    const response = await POST(docxRequest(bytes));
+    const result = await response.json();
+    const bullet = mocks.state!.profile.resumeSourceDocument?.anchors.find((anchor) => anchor.kind === "bullet");
+
+    expect(response.status).toBe(200);
+    expect(result.extracted).toContain("Built a recommender with 92% precision.");
+    expect(mocks.state!.profile.resumeText).toBe(mocks.state!.profile.resumeSourceDocument?.text);
+    expect(mocks.state!.profile.resumeSourceDocument).toMatchObject({ version: 1, format: "docx", support: { status: "candidate" }, layout: { columns: 1 } });
+    expect(mocks.state!.profile.facts).toContainEqual(expect.objectContaining({ verified: false, source: "resume", sourceAnchorId: bullet!.id, text: expect.stringContaining("Built a recommender with 92% precision.") }));
+    expect(mocks.upload.mock.calls[0][1]).toEqual(bytes);
   });
 });

@@ -1509,6 +1509,18 @@ export default function Dashboard() {
                     }}
                   />
                 </label>
+                {profileDraft.resumeSourceDocument && (
+                  <p className="muted" role="status">
+                    {profileDraft.resumeSourceDocument.support.status === "blocked"
+                      ? `DOCX layout is unsupported: ${profileDraft.resumeSourceDocument.support.reason}`
+                      : `DOCX source captured with ${profileDraft.resumeSourceDocument.anchors.length} stable text anchors and ${profileDraft.resumeSourceDocument.layout.fontFamilies.join(", ") || "no declared font"}. One-page layout and font rendering are checked during drafting.`}
+                  </p>
+                )}
+                {profileDraft.resumeSource?.mimeType === "application/pdf" && (
+                  <p className="muted" role="status">
+                    PDF source layout preservation is not available yet. Upload a supported one-page DOCX to tailor while retaining its layout, or use the original upload unchanged.
+                  </p>
+                )}
                 {profileDraft.resumeText && (
                   <details className="resume-text">
                     <summary>Review extracted resume text</summary>

@@ -20,6 +20,7 @@ export interface VerifiedFact {
   text: string;
   verified: boolean;
   source: "resume" | "user";
+  sourceAnchorId?: string;
 }
 
 export type FactualDeclaration = "yes" | "no" | "unknown";
@@ -60,6 +61,42 @@ export interface ResumeSource {
   mimeType: "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 }
 
+export interface DocxSourceAnchor {
+  id: string;
+  partName: string;
+  paragraphIndex: number;
+  text: string;
+  sectionId: string;
+  sectionHeading: string;
+  entryId: string;
+  entryHeading: string;
+  kind: "section" | "entry" | "bullet" | "paragraph";
+  candidateClaim: boolean;
+  editable: boolean;
+  styleHash: string;
+  paragraphStyle: { alignment?: string; beforePt?: number; afterPt?: number; leftIndentPt?: number; rightIndentPt?: number; firstLineIndentPt?: number; numbered: boolean };
+  font?: { family: string; sizePt: number; bold: boolean; italic: boolean; color?: string };
+}
+
+export interface DocxSourceRepresentation {
+  version: 1;
+  parser: "docx-ooxml-1";
+  format: "docx";
+  sourceHash: string;
+  text: string;
+  support: { status: "candidate" | "blocked"; reason?: string };
+  layout: {
+    columns: number;
+    sectionCount: number;
+    pageSizePt: { width: number; height: number };
+    marginsPt: { top: number; right: number; bottom: number; left: number };
+    pageCount?: number;
+    fontFamilies: string[];
+  };
+  sections: Array<{ id: string; heading: string; anchorIds: string[] }>;
+  anchors: DocxSourceAnchor[];
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -80,6 +117,7 @@ export interface Profile {
   resumeFileName?: string;
   resumeText?: string;
   resumeSource?: ResumeSource;
+  resumeSourceDocument?: DocxSourceRepresentation;
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;
@@ -189,12 +227,55 @@ export interface ResumeDocument {
   contentHash: string;
   evidenceHash: string;
 }
-export interface ResumeArtifact {
+export interface ResumeSourceEdit {
+  anchorId: string;
+  text: string;
+  factIds: string[];
+}
+export interface ResumeSourceClaim {
+  anchorId: string;
+  text: string;
+  factIds: string[];
+}
+export interface ResumeSourcePlan {
+  version: 1;
+  format: "docx";
+  sourceHash: string;
+  representationVersion: 1;
+  profileHash: string;
+  factsHash: string;
+  settingsHash: string;
+  jobHash: string;
+  claims: ResumeSourceClaim[];
+  edits: ResumeSourceEdit[];
+  grounding: ResumeGroundingSnapshot;
+  model: string;
+}
+export interface LatexResumeArtifact {
+  format?: "latex";
   inputHash: string;
   pageCount: 1;
   compiler: "tectonic-0.17.0";
   source: { storageKey: string; sha256: string; size: number };
 }
+export interface DocxResumeArtifact {
+  format: "docx";
+  inputHash: string;
+  pageCount: 1;
+  renderer: string;
+  rendererVersion: string;
+  sourceHash: string;
+  representationVersion: 1;
+  profileHash: string;
+  factsHash: string;
+  settingsHash: string;
+  jobHash: string;
+  layoutPolicy: "docx-single-column-one-page-v1";
+  layoutValidation: { outcome: "passed"; pageWidthPt: number; pageHeightPt: number; unchangedAnchorTolerancePt: 1; pageSizeTolerancePt: 0.5; visualOutsideEditTolerance: 0.001; visualOutsideEditDifference: number; baselinePdfHash: string };
+  baseline: { storageKey: string; sha256: string; size: number; mimeType: "application/pdf" };
+  source: { storageKey: string; sha256: string; size: number; mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+}
+export type ResumeArtifact = LatexResumeArtifact | DocxResumeArtifact;
 
 export interface AutomaticEssayAuthorization {
   version: 1;
@@ -240,13 +321,14 @@ export interface PacketFile {
 }
 
 export interface ApplicationPacket {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   version: number;
   summary: string;
   resumeLines: ResumeLine[];
   resumeMode?: "original" | "tailored";
   originalResume?: ResumeSource & { filename: string };
   resumeDocument?: ResumeDocument;
+  resumeSourcePlan?: ResumeSourcePlan;
   resumeArtifact?: ResumeArtifact;
   answers: ScreeningAnswer[];
   coverLetter?: string;

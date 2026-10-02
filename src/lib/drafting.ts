@@ -9,6 +9,7 @@ import { validateResumeArtifact, withPacketFiles } from "@/lib/packet-files";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
 import { validateAiEssay } from "@/lib/answer-policy";
 import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
+import { draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
 import { answerOwner } from "@/lib/answer-responsibility";
 import type {
   ApplicationPacket,
@@ -57,15 +58,23 @@ export async function draftPacket(
   const facts = relevantFacts(profile, job);
   const originalResumeOnly = profile.automationSettings?.resumeTailoring === false;
   const originalResume = originalResumeOnly ? originalResumeManifest(profile) : undefined;
+  if (!originalResumeOnly && profile.resumeSource?.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && !profile.resumeSourceDocument)
+    throw new Error("This saved DOCX predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.");
+  if (!originalResumeOnly && profile.resumeSourceDocument && !options) throw new Error("A source-preserving DOCX draft needs the authorized application worker. Start a new draft from the public application action.");
   if (options?.knownAnswersOnly && originalResumeOnly) {
-    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResume!, version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline);
+    const original = await withPacketFiles(profile, { schemaVersion: 1, resumeMode: "original", originalResume: originalResume!, version: (previous?.version ?? 0) + 1, summary: `Application for ${job.title} at ${job.company}`, resumeLines: [], answers: await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline), createdAt: new Date().toISOString(), model: "confirmed-original-upload", profileHash: packetProfileHash(profile) }, options.deadline, options.beforeModelCall);
     return profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, original, options.beforeModelCall) : original;
   }
   if (facts.length === 0 && !originalResumeOnly)
     throw new Error(
       "Confirm at least one profile fact before preparing an application.",
     );
-  const resumeDocument = originalResumeOnly ? undefined : options?.preserveResume && previous ? previous.resumeDocument : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
+  const sourcePlan = originalResumeOnly || !profile.resumeSourceDocument ? undefined
+    : options?.preserveResume && previous ? previous.resumeSourcePlan
+      : options ? await draftResumeSourcePlan(profile, job, profile.resumeSourceDocument, options.deadline, options.beforeModelCall) : undefined;
+  const resumeDocument = originalResumeOnly || sourcePlan ? undefined
+    : options?.preserveResume && previous ? previous.resumeDocument
+      : options ? await draftResumeDocument(profile, job, options.deadline, options.beforeModelCall) : undefined;
   if (!originalResumeOnly && options?.preserveResume && previous) validatePacket(profile, previous);
   let selected = facts.slice(0, 4);
   let answers: ScreeningAnswer[] = [
@@ -76,7 +85,7 @@ export async function draftPacket(
       requiresUserInput: true,
     },
   ];
-  let model = resumeDocument?.model ?? (originalResumeOnly ? "confirmed-original-upload" : "verified-facts-template");
+  let model = sourcePlan?.model ?? resumeDocument?.model ?? (originalResumeOnly ? "confirmed-original-upload" : "verified-facts-template");
 
   if (!originalResumeOnly && !options && process.env.OPENAI_API_KEY && !previous) {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
@@ -144,14 +153,15 @@ export async function draftPacket(
   answers = options?.knownAnswersOnly ? await draftAutonomousEssays(profile, job, previous?.answers ?? [], options.beforeModelCall!, options.deadline) : await draftEssayAnswers(profile, job, answers, options?.deadline);
   if (options?.beforeModelCall) await options.beforeModelCall();
   const packet = await withPacketFiles(profile, {
-    schemaVersion: resumeDocument ? 2 : 1,
+    schemaVersion: sourcePlan ? 3 : resumeDocument ? 2 : 1,
     resumeMode: originalResumeOnly ? "original" : "tailored",
     ...(originalResume ? { originalResume } : {}),
     ...(resumeDocument ? { resumeDocument } : {}),
+    ...(sourcePlan ? { resumeSourcePlan: sourcePlan } : {}),
     ...(!originalResumeOnly && options?.preserveResume && previous?.resumeArtifact ? { resumeArtifact: previous.resumeArtifact, files: previous.files } : {}),
     version: (previous?.version ?? 0) + 1,
     summary: `Application for ${job.title} at ${job.company}`,
-    resumeLines: originalResumeOnly ? [] : resumeDocument ? resumeFields(resumeDocument).map(({ text, factIds }) => ({ text, factIds })) : previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
+    resumeLines: originalResumeOnly ? [] : sourcePlan ? sourcePlan.claims.map(({ text, factIds }) => ({ text, factIds })) : resumeDocument ? resumeFields(resumeDocument).map(({ text, factIds }) => ({ text, factIds })) : previous?.resumeLines.every((line) => facts.some((f) => line.factIds.length === 1 && f.id === line.factIds[0] && f.text === line.text)) ? previous.resumeLines : selected.map((fact) => ({
       text: fact.text,
       factIds: [fact.id],
     })),
@@ -160,7 +170,7 @@ export async function draftPacket(
     model: answers.find((answer) => answer.aiDraft)?.aiDraft?.model ?? model,
     profileHash: packetProfileHash(profile),
     ...(previousCoverValid ? { coverLetter: previous!.coverLetter, coverLetterFactIds: previous!.coverLetterFactIds, coverLetterContext: previous!.coverLetterContext } : {}),
-  }, options?.deadline);
+  }, options?.deadline, options?.beforeModelCall);
   return options?.knownAnswersOnly && profile.automationSettings?.coverLetterMode === "enabled" ? withGroundedCoverLetter(profile, job, packet, options.beforeModelCall) : packet;
 }
 
@@ -191,7 +201,7 @@ export function validatePacket(
   profile: Profile,
   packet: ApplicationPacket,
 ): void {
-  if (packet.schemaVersion !== undefined && packet.schemaVersion !== 1 && packet.schemaVersion !== 2) throw new Error("Unsupported application packet schema version. Prepare a new packet.");
+  if (packet.schemaVersion !== undefined && packet.schemaVersion !== 1 && packet.schemaVersion !== 2 && packet.schemaVersion !== 3) throw new Error("Unsupported application packet schema version. Prepare a new packet.");
   if (!Number.isInteger(packet.version) || packet.version < 1) throw new Error("Invalid application packet revision.");
   if (packet.schemaVersion !== undefined && !packet.files) throw new Error("Prepare the application files before packet review.");
   if (packet.files) {
@@ -206,14 +216,24 @@ export function validatePacket(
   if (packet.profileHash && packet.profileHash !== packetProfileHash(profile)) throw new Error("Your confirmed profile changed. Prepare and review a new packet.");
   const verified = profile.facts.filter((fact) => fact.verified);
   const verifiedIds = new Set(verified.map((fact) => fact.id));
-  if (packet.resumeMode === "original" && (!packet.originalResume || hashJson(packet.originalResume) !== hashJson(originalResumeManifest(profile)) || packet.resumeDocument || packet.resumeArtifact || packet.resumeLines.length || packet.files?.find((file) => file.kind === "resume")?.storageKey !== packet.originalResume.storageKey)) throw new Error("The confirmed original résumé changed. Prepare a new application.");
+  if (packet.resumeMode === "original" && (!packet.originalResume || hashJson(packet.originalResume) !== hashJson(originalResumeManifest(profile)) || packet.resumeDocument || packet.resumeSourcePlan || packet.resumeArtifact || packet.resumeLines.length || packet.files?.find((file) => file.kind === "resume")?.storageKey !== packet.originalResume.storageKey)) throw new Error("The confirmed original résumé changed. Prepare a new application.");
   if (packet.resumeMode !== "original" && !packet.resumeLines.length)
     throw new Error("The resume needs at least one verified fact.");
   if (packet.schemaVersion === 2) {
     validateResumeArtifact(profile, packet);
     if (hashJson(packet.resumeLines) !== hashJson(resumeFields(packet.resumeDocument!).map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The resume preview differs from the reviewed document.");
   }
-  for (const line of packet.schemaVersion === 2 ? [] : packet.resumeLines) {
+  if (packet.schemaVersion === 3) {
+    validateResumeArtifact(profile, packet);
+    const source = profile.resumeSourceDocument;
+    const plan = packet.resumeSourcePlan;
+    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    if (!source || source.support.status !== "candidate" || !plan || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
+      plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
+      plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||
+      hashJson(packet.resumeLines) !== hashJson(plan.claims.map(({ text, factIds }) => ({ text, factIds })))) throw new Error("The tailored DOCX source plan is stale or differs from the reviewed preview.");
+  }
+  for (const line of packet.schemaVersion === 2 || packet.schemaVersion === 3 ? [] : packet.resumeLines) {
     if (
       !line.factIds.length ||
       !line.factIds.every((id) => verifiedIds.has(id))

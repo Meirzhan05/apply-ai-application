@@ -139,10 +139,13 @@ async function perform(
                 text: z.string().min(1).max(500),
                 verified: z.boolean(),
                 source: z.enum(["resume", "user"]),
+                sourceAnchorId: z.string().max(160).optional(),
               }),
             )
             .max(80)
             .parse(payload.facts);
+      const currentAnchors = new Set(state.profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
+      if (facts?.some((fact) => fact.sourceAnchorId && (!currentAnchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
       saveOnboarding(state.profile, { questionnaire, facts });
       state.profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
@@ -231,11 +234,16 @@ async function perform(
               text: z.string().min(1).max(500),
               verified: z.boolean(),
               source: z.enum(["resume", "user"]),
+              sourceAnchorId: z.string().max(160).optional(),
             }),
           )
           .max(80)
           .parse(payload.facts) : undefined;
-      if (facts) profile.facts = facts;
+      if (facts) {
+        const anchors = new Set(profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
+        if (facts.some((fact) => fact.sourceAnchorId && (!anchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
+        profile.facts = facts;
+      }
       if ("sensitiveAnswers" in payload)
         profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
       const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
