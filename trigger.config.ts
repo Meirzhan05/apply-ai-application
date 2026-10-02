@@ -1,12 +1,6 @@
 import { defineConfig } from "@trigger.dev/sdk";
 import { additionalFiles, aptGet, syncEnvVars } from "@trigger.dev/build/extensions/core";
-import { readFileSync } from "node:fs";
-
-const docxRuntimeLock = JSON.parse(readFileSync(new URL("./runtime/docx-runtime.lock.json", import.meta.url), "utf8")) as {
-  sofficeRelativePath: string;
-  fontconfigRelativePath: string;
-  systemPackages: string[];
-};
+import docxRuntimeLock from "./runtime/docx-runtime.lock.json";
 
 // Keep image installation and persisted worker settings together. Existing
 // project env vars otherwise override the paths declared by the image layer.
@@ -16,7 +10,7 @@ const docxRoot = "/app/docx-runtime";
 const docxEnv = {
   SOFFICE_BIN: `${docxRoot}/${docxRuntimeLock.sofficeRelativePath}`,
   DOCX_RUNTIME_ROOT: docxRoot,
-  DOCX_RENDERER_VERSION: "26.8.0.3",
+  DOCX_RENDERER_VERSION: docxRuntimeLock.libreOfficeVersion,
   FONTCONFIG_FILE: `${docxRoot}/${docxRuntimeLock.fontconfigRelativePath}`,
 };
 const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];

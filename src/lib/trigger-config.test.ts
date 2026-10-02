@@ -1,32 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BuildContext, BuildExtension } from "@trigger.dev/core/v3/build";
+import { build } from "esbuild";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import config from "../../trigger.config";
+import docxRuntimeLock from "../../runtime/docx-runtime.lock.json";
 
 const syncExtension = config.build!.extensions!.find((extension) => extension.name === "SyncEnvVarsExtension")!;
 const originGuardExtension = config.build!.extensions!.find((extension) => extension.name === "production-origin-guard")!;
 const aptGetExtension = config.build!.extensions!.find((extension) => extension.name === "aptGet")!;
 const docxRuntimeExtension = config.build!.extensions!.find((extension) => extension.name === "pinned-docx-runtime")!;
-const docxSystemPackages = [
-  "fontconfig",
-  "libxinerama1",
-  "libx11-6",
-  "libssl3",
-  "libnss3",
-  "libdbus-1-3",
-  "libcairo2",
-  "libglib2.0-0",
-  "libxext6",
-  "libcups2",
-  "libgssapi-krb5-2",
-  "libx11-xcb1",
-];
+const docxSystemPackages = docxRuntimeLock.systemPackages;
 
-async function invokeExtension(extension: BuildExtension, environment: string, target: "deploy" | "dev" = "deploy") {
+async function invokeExtension(extension: BuildExtension, environment: string, target: "deploy" | "dev" = "deploy", configForContext = config) {
   const addLayer = vi.fn();
   const warnings: unknown[][] = [];
   const context = {
     target,
-    config,
+    config: configForContext,
     addLayer,
     logger: {
       spinner: () => ({ stop: vi.fn() }),
@@ -99,6 +93,38 @@ describe("production environment sync guard", () => {
     expect(docxLayer.deploy.env.DOCX_RUNTIME_ROOT).toBe("/app/docx-runtime");
     expect(docxLayer.deploy.env.SOFFICE_BIN).toBe("/app/docx-runtime/opt/libreoffice26.8/program/soffice");
     expect(docxLayer.deploy.env.FONTCONFIG_FILE).toBe("/app/docx-runtime/fonts.conf");
+  });
+
+  it("loads the compiled config after relocation without copying the source lock file", async () => {
+    const relocatedDirectory = await mkdtemp(path.join(os.tmpdir(), "trigger-config-relocated-"));
+    try {
+      await symlink(path.join(process.cwd(), "node_modules"), path.join(relocatedDirectory, "node_modules"), "dir");
+      const compiledConfigPath = path.join(relocatedDirectory, "trigger.config.mjs");
+      await build({
+        entryPoints: [path.join(process.cwd(), "trigger.config.ts")],
+        outfile: compiledConfigPath,
+        absWorkingDir: process.cwd(),
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        packages: "external",
+        target: "node24",
+      });
+
+      expect(existsSync(path.join(relocatedDirectory, "runtime/docx-runtime.lock.json"))).toBe(false);
+      const relocatedModule = await import(pathToFileURL(compiledConfigPath).href);
+      const relocatedConfig = relocatedModule.default;
+      const relocatedDocxExtension = relocatedConfig.build.extensions.find((extension: BuildExtension) => extension.name === "pinned-docx-runtime")!;
+      const result = await invokeExtension(relocatedDocxExtension, "production", "deploy", relocatedConfig);
+      const docxLayer = result.addLayer.mock.calls.find(([layer]) => layer.id === "docx-runtime")![0];
+
+      expect(docxLayer.image.pkgs).toEqual(docxRuntimeLock.systemPackages);
+      expect(docxLayer.deploy.env.SOFFICE_BIN).toBe(`/app/docx-runtime/${docxRuntimeLock.sofficeRelativePath}`);
+      expect(docxLayer.deploy.env.FONTCONFIG_FILE).toBe(`/app/docx-runtime/${docxRuntimeLock.fontconfigRelativePath}`);
+      expect(docxLayer.deploy.env.DOCX_RENDERER_VERSION).toBe(docxRuntimeLock.libreOfficeVersion);
+    } finally {
+      await rm(relocatedDirectory, { recursive: true, force: true });
+    }
   });
 
   it.each([
