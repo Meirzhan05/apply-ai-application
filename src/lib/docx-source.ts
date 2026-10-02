@@ -222,9 +222,9 @@ function safeTextNodeShape(paragraph: XmlDomNode): boolean {
   return textNodes.length === 1 && runChildren.every((node) => node.namespaceURI === WORD_NS && ["rPr", "t"].includes(node.localName ?? ""));
 }
 
-export async function parseDocxSource(bytes: Buffer): Promise<DocxSourceRepresentation> { return parseDocxSourceAsync(bytes); }
+export async function parseDocxSource(bytes: Buffer, trustedName?: string): Promise<DocxSourceRepresentation> { return parseDocxSourceAsync(bytes, trustedName); }
 
-export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRepresentation> {
+export async function parseDocxSourceAsync(bytes: Buffer, trustedName?: string): Promise<DocxSourceRepresentation> {
   const sourceHash = bytesHash(bytes);
   const zip = await loadDocx(bytes);
   const document = await partXml(zip, "word/document.xml");
@@ -294,7 +294,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
       currentEntryHeading = `${currentEntryHeading} · ${record.text}`;
     }
     const kind: DocxSourceAnchor["kind"] = isHeading ? "section" : isBullet ? "bullet" : "entry";
-    const candidateClaim = isSubstantiveSourceText(record.text, { isSection: semanticHeading, firstBodyParagraph: paragraphIndex === 0 });
+    const candidateClaim = isSubstantiveSourceText(record.text, { isSection: semanticHeading, firstBodyParagraph: paragraphIndex === 0, trustedName });
     const editable = kind === "bullet" && safeTextNodeShape(record.paragraph) && record.font.fontFamily !== undefined && record.font.fontSizePt !== undefined;
     if (candidateClaim && kind === "bullet" && !editable) reason ??= `Claim paragraph “${record.text.slice(0, 80)}” uses mixed or complex inline formatting. Use one uniform text style per bullet or upload another DOCX.`;
     const paragraphFingerprint = styleHash(record.paragraph);
@@ -319,7 +319,7 @@ export async function parseDocxSourceAsync(bytes: Buffer): Promise<DocxSourceRep
       const id = `docx:${sourceHash.slice(0, 12)}:${hash(`${part.partName}:${paragraphIndex}:${text}`).slice(0, 24)}`;
       const repeatedRole = /\/header[^/]*\.xml$/i.test(part.partName) ? "header" as const : /\/footer[^/]*\.xml$/i.test(part.partName) ? "footer" as const : undefined;
       anchors.push({ id, partName: part.partName, paragraphIndex, text, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
-        kind: "paragraph", candidateClaim: isSubstantiveSourceText(text, { firstBodyParagraph: paragraphIndex === 0 }), editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false },
+        kind: "paragraph", candidateClaim: isSubstantiveSourceText(text, { firstBodyParagraph: paragraphIndex === 0, trustedName }), editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false },
         ...(font.fontFamily && font.fontSizePt ? { font: { family: font.fontFamily, sizePt: font.fontSizePt, bold: font.bold, italic: font.italic, ...(font.color ? { color: font.color } : {}) } } : {}) });
       section.anchorIds.push(id);
       textLines.push(text);

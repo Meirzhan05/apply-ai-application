@@ -223,3 +223,38 @@ it("blocks a new enabled worker draft without an owner-checked original before m
   expect(application.packet).toBeUndefined();
   expect(fixture.parse).not.toHaveBeenCalled();
 });
+
+it.each([undefined, "resume"] as const)("prepares exact original bytes after tailoring is disabled even when the prior source plan is stale (%s draft)", async (draftMode) => {
+  const sourceBytes = await createPdfSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(200);
+  const confirmed = await publicAction("onboarding", { facts: fixture.state!.profile.facts.map((fact) => ({ ...fact, verified: true })) });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const firstDraft = await publicAction("draft", { applicationId: application.id });
+  expect(firstDraft.status, await firstDraft.clone().text()).toBe(200);
+  await runDraft(fixture.tasks.find((item) => item.task === "draft-application-packet")!.payload);
+  expect(application.packet?.resumeSourcePlan).toBeDefined();
+
+  const settings = await publicAction("automationSettings", { settings: { resumeTailoring: false } });
+  expect(settings.status, await settings.clone().text()).toBe(200);
+  fixture.state!.jobs[0].description = "Updated synthetic posting with changed duties.";
+  const originalDraft = await publicAction("draft", { applicationId: application.id, ...(draftMode ? { draftMode } : {}) });
+  expect(originalDraft.status, await originalDraft.clone().text()).toBe(200);
+
+  await runDraft(fixture.tasks.filter((item) => item.task === "draft-application-packet")[1].payload);
+
+  expect(application.status).toBe("draft_review");
+  expect(application.packet).toMatchObject({ resumeMode: "original", originalResume: { sha256: fixture.state!.profile.resumeSource!.sha256 } });
+  expect(application.packet?.resumeSourcePlan).toBeUndefined();
+  expect(application.packet?.resumeArtifact).toBeUndefined();
+  const preview = await applicationFile(new Request(`https://apply.example/api/applications/${application.id}/files/resume`), { params: Promise.resolve({ id: application.id, kind: "resume" }) });
+  expect(preview.status).toBe(200);
+  expect(Buffer.from(await preview.arrayBuffer())).toEqual(sourceBytes);
+});

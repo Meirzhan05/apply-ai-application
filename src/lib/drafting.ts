@@ -86,7 +86,7 @@ export async function draftPacket(
         const source = profile.resumeSourceDocument!;
         if (source.format === "docx") {
           const originalBytes = await readOriginalResume(profile.id, originalResumeManifest(profile));
-          preparedDocxBaseline = await prepareDocxResumeBaseline(originalBytes, source, options.deadline, options.beforeModelCall);
+          preparedDocxBaseline = await prepareDocxResumeBaseline(originalBytes, source, options.deadline, options.beforeModelCall, profile.name);
         }
         const baselineLayout = preparedDocxBaseline?.sourceLayout;
         return draftResumeSourcePlan(profile, job, source, options.deadline, options.beforeModelCall, baselineLayout, async (plan) => {

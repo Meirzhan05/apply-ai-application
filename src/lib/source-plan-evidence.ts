@@ -3,13 +3,13 @@ import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 const normalized = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
-export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 = 1): ResumeSourceAnchor[] {
-  const required = policyVersion === 2 ? evidenceRequiredAnchorIds(source) : undefined;
+export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 = 1, trustedName?: string): ResumeSourceAnchor[] {
+  const required = policyVersion === 2 ? evidenceRequiredAnchorIds(source, trustedName) : undefined;
   return source.anchors.filter((anchor) => policyVersion === 2 ? required!.has(anchor.id) : anchor.candidateClaim);
 }
 
-export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(source: T): T {
-  const required = evidenceRequiredAnchorIds(source);
+export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(source: T, trustedName?: string): T {
+  const required = evidenceRequiredAnchorIds(source, trustedName);
   return { ...source, anchors: source.anchors.map((anchor) => ({ ...anchor, candidateClaim: required.has(anchor.id) })) } as T;
 }
 
@@ -59,7 +59,7 @@ export function validateSourcePlanEvidence(input: {
   evidencePolicyVersion?: 1 | 2;
 }): boolean {
   if ((input.evidencePolicyVersion ?? 1) === 1) return validateLegacySourcePlan(input);
-  const anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1);
+  const anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1, input.profile.name);
   const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
   const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
   const claimById = new Map<string, ResumeSourceClaim>();

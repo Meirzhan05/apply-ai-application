@@ -4,9 +4,10 @@ import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
 
-const mocks = vi.hoisted(() => ({ state: null as AppState | null, extracted: "", user: vi.fn(), upload: vi.fn(), mutate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ state: null as AppState | null, extracted: "", user: vi.fn(), load: vi.fn(), upload: vi.fn(), mutate: vi.fn() }));
 let pdfBytes = Buffer.alloc(0);
 vi.mock("@/lib/repository", () => ({ currentUserId: mocks.user, isDemo: () => false,
+  loadState: mocks.load,
   mutateState: async (owner: string, change: (state: AppState) => unknown) => { mocks.mutate(owner); return change(mocks.state!); } }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => ({ storage: { from: () => ({ upload: mocks.upload }) } }) }));
 vi.mock("pdf-parse", () => ({ PDFParse: class { async getText() { return { text: mocks.extracted }; } async destroy() {} } }));
@@ -24,6 +25,7 @@ beforeEach(async () => {
   vi.clearAllMocks(); mocks.state = initialDemoState(); mocks.state.profile.facts = [];
   pdfBytes = await createPdfSourceFixture();
   mocks.user.mockResolvedValue("synthetic-owner"); mocks.upload.mockResolvedValue({ error: null });
+  mocks.load.mockResolvedValue(mocks.state);
   mocks.extracted = "WORK EXPERIENCE\nOrbit Labs\nML Intern June 2026 – August 2026\n• Built a recommender with explainable\nfeature-level predictions.";
 });
 describe("resume upload confirmation boundaries", () => {
@@ -68,5 +70,21 @@ describe("resume upload confirmation boundaries", () => {
     expect(mocks.state!.profile.resumeSourceDocument).toMatchObject({ version: 1, format: "docx", support: { status: "candidate" }, layout: { columns: 1 } });
     expect(mocks.state!.profile.facts).toContainEqual(expect.objectContaining({ verified: false, source: "resume", sourceAnchorId: bullet!.id, text: expect.stringContaining("Built a recommender with 92% precision.") }));
     expect(mocks.upload.mock.calls[0][1]).toEqual(bytes);
+  });
+  it("requires confirmation for qualifications that look like a name, alone or on a contact row", async () => {
+    for (const identityText of [
+      "Registered Nurse",
+      "Riley Example | Registered Nurse | Six Sigma Black Belt | riley@example.com",
+    ]) {
+      const bytes = await createDocxSourceFixture({ identityText });
+      const response = await POST(docxRequest(bytes));
+      const source = mocks.state!.profile.resumeSourceDocument!;
+      const credentials = source.anchors.find((anchor) => anchor.text.includes("Registered Nurse"))!;
+
+      expect(response.status).toBe(200);
+      expect(credentials.candidateClaim).toBe(true);
+      expect(mocks.state!.profile.facts).toContainEqual(expect.objectContaining({ verified: false, source: "resume", sourceAnchorId: credentials.id,
+        text: expect.stringContaining("Registered Nurse") }));
+    }
   });
 });

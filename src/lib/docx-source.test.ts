@@ -47,16 +47,16 @@ it("includes visible header source text as repeated, stable, non-editable furnit
   expect(credentialHeader.anchors.find((anchor) => anchor.partName === "word/header1.xml")?.candidateClaim).toBe(true);
 });
 
-it("uses the first visible body anchor for identity handling and still surfaces credentials on a contact row", async () => {
-  const blankFirstParagraph = await parseDocxSource(await fixture({ emptyFirstParagraph: true }));
+it("uses the profile identity for contact handling and still surfaces qualifications on the first visible row", async () => {
+  const blankFirstParagraph = await parseDocxSource(await fixture({ emptyFirstParagraph: true }), "Riley Example");
   const identity = blankFirstParagraph.anchors.find((anchor) => anchor.text.startsWith("Riley Example"))!;
-  const mixedContact = await parseDocxSource(await fixture({ identityText: "Riley Example | Certified Kubernetes Administrator | riley@example.com" }));
+  const mixedContact = await parseDocxSource(await fixture({ identityText: "Riley Example | Certified Kubernetes Administrator | riley@example.com" }), "Riley Example");
   const credentialRow = mixedContact.anchors.find((anchor) => anchor.text.includes("Certified Kubernetes Administrator"))!;
 
   expect(identity.paragraphIndex).toBeGreaterThan(0);
-  expect(evidenceRequiredAnchorIds(blankFirstParagraph).has(identity.id)).toBe(false);
+  expect(evidenceRequiredAnchorIds(blankFirstParagraph, "Riley Example").has(identity.id)).toBe(false);
   expect(credentialRow.candidateClaim).toBe(true);
-  expect(evidenceRequiredAnchorIds(mixedContact).has(credentialRow.id)).toBe(true);
+  expect(evidenceRequiredAnchorIds(mixedContact, "Riley Example").has(credentialRow.id)).toBe(true);
   expect(suggestDocxFacts(mixedContact)).toContainEqual(expect.objectContaining({ sourceAnchorId: credentialRow.id }));
 });
 

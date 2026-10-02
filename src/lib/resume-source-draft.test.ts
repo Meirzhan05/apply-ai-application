@@ -6,6 +6,8 @@ import { parseDocxSource } from "@/lib/docx-source";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { draftResumeSourcePlan } from "@/lib/resume-source-draft";
 import { pdfSourceLayout } from "@/lib/resume-source-layout";
+import { renderPdfSourceBytes } from "@/lib/pdf-renderer";
+import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 
 const mocks = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; } }));
@@ -25,7 +27,7 @@ async function pdfFixture() {
   const state = initialDemoState();
   state.profile.id = "pdf-writer-owner";
   const bytes = await createPdfSourceFixture();
-  const source = await parsePdfSource(bytes);
+  const source = await parsePdfSource(bytes, state.profile.name);
   state.profile.resumeSource = { sha256: source.sourceHash, size: bytes.length, mimeType: "application/pdf", storageKey: `${state.profile.id}/synthetic.pdf` };
   state.profile.resumeSourceDocument = source;
   state.profile.resumeFileName = "synthetic.pdf";
@@ -105,6 +107,23 @@ it("preserves the PDF worker's actionable embedded-font failure without exposing
   await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, pdfSourceLayout(source)!, async () => { throw new Error("font failure with private runtime path /tmp/private-key"); }))
     .rejects.toMatchObject({ message: "The résumé layout could not be checked by the pinned renderer. The last valid packet is preserved; retry after reviewing the source document.", diagnostics: { technicalFailure: "renderer" } });
 });
+
+it("shows an actionable font diagnostic for a real PDFBox missing-glyph failure", async () => {
+  await ensurePdfTestRuntime();
+  const { profile, job, source } = await pdfFixture();
+  const bytes = await createPdfSourceFixture();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never, "Built a 🪐 search index for 1,200 users."))
+    .mockImplementationOnce(async (request) => auditResponse(request as never));
+
+  const failure = await draftResumeSourcePlan(profile, job, source, Date.now() + 90_000, undefined, pdfSourceLayout(source)!, async (plan) => {
+    await renderPdfSourceBytes(bytes, source, plan, Date.now() + 90_000, undefined, profile.name);
+    return undefined;
+  }).catch((error: unknown) => error);
+
+  expect(failure).toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer" } });
+  expect(failure).toMatchObject({ message: expect.stringMatching(/embedded PDF source font cannot render/i) });
+  expect((failure as Error).message).not.toMatch(/Command failed:|PdfSourceRewrite|\/tmp\//);
+}, 120_000);
 
 it("repairs a flagged bullet once, rechecks the complete anchored claim set, and keeps all original anchors", async () => {
   const { profile, job, source } = await fixture();

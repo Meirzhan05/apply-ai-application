@@ -14,6 +14,14 @@ const execute = promisify(execFileCallback);
 const MAX_PDF_BYTES = 5 * 1024 * 1024;
 const EXPECTED_PDFBOX_VERSION = "3.0.8";
 const EXPECTED_JAVA_MAJOR = 21;
+const UNSUPPORTED_GLYPH_MESSAGE = "The embedded PDF source font cannot render one or more requested characters. Use wording supported by the font or upload an editable DOCX; no font substitution will be used.";
+
+function safePdfWorkerError(error: unknown): Error | undefined {
+  if (!error || typeof error !== "object" || !("stderr" in error) || typeof error.stderr !== "string") return undefined;
+  return /No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(error.stderr)
+    ? new Error(UNSUPPORTED_GLYPH_MESSAGE)
+    : undefined;
+}
 
 export interface RenderedPdfResume {
   pdf: Buffer;
@@ -126,10 +134,10 @@ function sourcePages(source: PdfSourceRepresentation, metrics: ReturnType<typeof
   });
 }
 
-function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
+function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan, trustedName?: string) {
   if (source.format !== "pdf" || source.support.status !== "candidate" || source.sourceHash !== bytesHash(sourceBytes) || plan.format !== "pdf" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version)
     throw new Error(source.support.reason ?? "The inspected PDF source is missing, stale, or unsupported. Upload and inspect the original again.");
-  const expectedClaims = new Set(sourceEvidenceAnchors(source, planEvidencePolicy(plan)).map((anchor) => anchor.id));
+  const expectedClaims = new Set(sourceEvidenceAnchors(source, planEvidencePolicy(plan), trustedName).map((anchor) => anchor.id));
   const actualClaims = new Set(plan.claims.map((claim) => claim.anchorId));
   if (expectedClaims.size !== actualClaims.size || [...expectedClaims].some((id) => !actualClaims.has(id))) throw new Error("The PDF plan does not preserve every original résumé claim.");
   const claimById = new Map(plan.claims.map((claim) => [claim.anchorId, claim]));
@@ -141,9 +149,9 @@ function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan
   })) throw new Error("The PDF edit plan contains a duplicate, unsupported, or ungrounded source operation.");
 }
 
-export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>): Promise<RenderedPdfResume> {
-  const source = planEvidencePolicy(plan) === 2 ? sourceWithCurrentEvidenceClaims(sourceInput) : sourceInput;
-  validatePlan(sourceBytes, source, plan);
+export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: PdfSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>, trustedName?: string): Promise<RenderedPdfResume> {
+  const source = planEvidencePolicy(plan) === 2 ? sourceWithCurrentEvidenceClaims(sourceInput, trustedName) : sourceInput;
+  validatePlan(sourceBytes, source, plan, trustedName);
   if (sourceBytes.length < 1 || sourceBytes.length > MAX_PDF_BYTES) throw new Error("The source PDF exceeds the 5 MB worker limit.");
   const directory = await mkdtemp(path.join(os.tmpdir(), "resume-pdf-")).catch(() => { throw new Error("The PDF worker could not create an isolated temporary directory."); });
   try {
@@ -162,6 +170,8 @@ export async function renderPdfSourceBytes(sourceBytes: Buffer, sourceInput: Pdf
       });
       stdout = result.stdout;
     } catch (error) {
+      const safeWorkerError = safePdfWorkerError(error);
+      if (safeWorkerError) throw safeWorkerError;
       const fit = error instanceof Error ? error.message.match(/LAYOUT_FIT anchorId=([^\s]+) page=(\d+) reason=width/) : null;
       if (fit) {
         const anchor = source.anchors.find((candidate) => candidate.id === fit[1]);
@@ -192,5 +202,5 @@ export async function renderPdfResume(profile: Profile, plan: ResumeSourcePlan, 
     throw new Error("The inspected PDF source is no longer available or has changed. Upload and inspect the original again.");
   if (plan.profileHash !== sourceProfileHash(profile)) throw new Error("The PDF edit plan is stale. Prepare a new draft after reviewing your source and facts.");
   const sourceBytes = await readOriginalResume(profile.id, { ...profile.resumeSource, filename: profile.resumeFileName ?? "source.pdf" });
-  return renderPdfSourceBytes(sourceBytes, source, plan, deadline, beforeProcess);
+  return renderPdfSourceBytes(sourceBytes, source, plan, deadline, beforeProcess, profile.name);
 }

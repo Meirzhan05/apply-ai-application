@@ -114,7 +114,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   try {
     if (!job?.active) throw new Error("The job is closed or unavailable.");
-    if (app.packet?.resumeSourcePlan && draftMode !== "resume") assertSourceJobCurrent(app, job);
+    if (state.profile.automationSettings?.resumeTailoring !== false && app.packet?.resumeSourcePlan && draftMode !== "resume") assertSourceJobCurrent(app, job);
     if (state.profile.automationSettings?.resumeTailoring !== false && (!app.packet || draftMode === "resume"))
       await assertTailoringSourceReady(state.profile);
     else if (state.profile.automationSettings?.resumeTailoring === false)
@@ -138,7 +138,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;
       const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
       if (!currentJob) throw new Error("The job is closed or unavailable.");
-      assertSourceJobCurrent(target, currentJob, packet.resumeSourcePlan?.jobHash, packet.resumeSourcePlan?.jobHashPolicyVersion ?? 1);
+      if (packet.resumeSourcePlan) assertSourceJobCurrent(target, currentJob, packet.resumeSourcePlan.jobHash, packet.resumeSourcePlan.jobHashPolicyVersion ?? 1);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "draft");
       validatePacket(current.profile, packet);
       setPacket(current, target, packet);

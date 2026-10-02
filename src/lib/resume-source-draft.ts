@@ -47,7 +47,7 @@ export function sourceProfileHash(profile: Profile) {
 }
 
 export function assertSourceInformationComplete(source: ResumeSourceDocument, profile: Profile): void {
-  source = sourceWithCurrentEvidenceClaims(source);
+  source = sourceWithCurrentEvidenceClaims(source, profile.name);
   const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && confirmedFactIdsForAnchor(profile, anchor).length === 0).map((anchor) => ({
     claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [],
     requiredInformation: `Confirm this source claim in your profile facts: “${anchor.text}”`,
@@ -66,6 +66,7 @@ function actionableRendererMessage(error: unknown): string | undefined {
   if (!(error instanceof Error)) return undefined;
   const safeMessages = [
     /^The source font for an edited résumé bullet is not embedded as a supported outline font\. Embed that font or upload an editable DOCX; no substitute font will be used\.$/,
+    /^The embedded PDF source font cannot render one or more requested characters\. Use wording supported by the font or upload an editable DOCX; no font substitution will be used\.$/,
     /^The PDF source font changed after inspection\. Re-upload the original PDF and confirm its current text before drafting\.$/,
     /^The PDF renderer changed page dimensions after editing\.$/,
     /^The PDF rewrite changed (?:the original page count|source page \d+ dimensions or mapping beyond 0\.5 pt)\..*$/,
@@ -132,7 +133,7 @@ function resumeGroundingFindings(findings: ResumeGroundingFinding[], counts: Cou
 }
 
 export async function draftResumeSourcePlan(profile: Profile, job: Job, source: ResumeSourceDocument, deadline: number, beforeModelCall?: () => Promise<void>, baselineLayout?: ResumeSourceLayoutMap, validateLayout?: LayoutValidator): Promise<ResumeSourcePlan> {
-  source = sourceWithCurrentEvidenceClaims(source);
+  source = sourceWithCurrentEvidenceClaims(source, profile.name);
   const counts: Counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
   if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This source résumé layout is unsupported.");
   if ((source.format === "docx" && source.version !== 1) || (source.format === "pdf" && source.version !== 1 && source.version !== 2) ||

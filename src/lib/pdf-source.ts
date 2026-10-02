@@ -58,7 +58,7 @@ function reasonFromError(error: unknown): string {
 
 function appendReason(current: string | undefined, next: string) { return current ?? next; }
 
-export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresentation> {
+export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promise<PdfSourceRepresentation> {
   if (bytes.length < 1 || bytes.length > MAX_SOURCE_BYTES) throw new Error("Choose a PDF résumé up to 5 MB.");
   const sourceHash = bytesHash(bytes);
   const loadingTask = getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: false, stopAtErrors: true, maxImageSize: 30_000_000 });
@@ -256,7 +256,7 @@ export async function parsePdfSource(bytes: Buffer): Promise<PdfSourceRepresenta
           currentEntryHeading = `${currentEntryHeading} · ${claimText}`;
         }
         const kind: PdfSourceAnchor["kind"] = repeatedRole ? "paragraph" : isHeading ? "section" : isBullet ? "bullet" : "entry";
-        const candidateClaim = isSubstantiveSourceText(claimText, { isSection: isHeading, firstBodyParagraph: Boolean(repeatedRole) || (page.pageNumber === 1 && readingOrder === 0) });
+        const candidateClaim = isSubstantiveSourceText(claimText, { isSection: isHeading, firstBodyParagraph: Boolean(repeatedRole) || (page.pageNumber === 1 && readingOrder === 0), trustedName });
         const editable = !repeatedRole && isBullet && !item.style.vertical && item.item.str.length <= 500 && Boolean(item.fontFamily) && item.item.height > 0 && item.item.width > 0 && item.left >= -0.5 && item.top >= -0.5 && item.right <= page.width + 0.5 && item.bottom <= page.height + 0.5;
         const styleFingerprint = { fontName: item.resolvedFontName, fontFamily: item.fontFamily, size: round(Math.hypot(item.item.transform[0], item.item.transform[1])), bounds: [round(item.left), round(item.top), round(item.right), round(item.bottom)] };
         const operatorFingerprint = hashJson({ sourceHash, pageNumber: page.pageNumber, index: item.index, text: rawText, styleFingerprint });

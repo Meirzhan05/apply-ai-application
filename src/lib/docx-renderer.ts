@@ -306,16 +306,16 @@ export interface RenderedDocxResume {
   visualOutsideEditDifference: number;
 }
 
-export async function prepareDocxResumeBaseline(originalBytes: Buffer, source: DocxSourceRepresentation, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>): Promise<PreparedDocxResumeBaseline> {
+export async function prepareDocxResumeBaseline(originalBytes: Buffer, source: DocxSourceRepresentation, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>, trustedName?: string): Promise<PreparedDocxResumeBaseline> {
   if (bytesHash(originalBytes) !== source.sourceHash || source.support.status !== "candidate") throw new Error("The inspected DOCX source is stale or unsupported. Upload and inspect the original again.");
-  const currentSource = await parseDocxSource(originalBytes);
+  const currentSource = await parseDocxSource(originalBytes, trustedName);
   if (currentSource.support.status !== "candidate") throw new Error(currentSource.support.reason ?? "The inspected DOCX source is unsupported. Upload and inspect the original again.");
   const directory = await mkdtemp(path.join(os.tmpdir(), "apply-docx-baseline-"));
   try {
     const rendererVersion = await assertPinnedRuntime(directory, deadline);
     await beforeProcess?.();
     const baselinePdf = await convertDocx(directory, originalBytes, "baseline", deadline);
-    const parsedBaseline = await parsePdfSource(baselinePdf);
+    const parsedBaseline = await parsePdfSource(baselinePdf, trustedName);
     if (parsedBaseline.support.status !== "candidate") throw new Error(parsedBaseline.support.reason ?? "The rendered baseline PDF is outside the supported page and region profile.");
     const mapped = mapDocxSourceToPdfLayout(currentSource, parsedBaseline);
     if (mapped.status !== "supported") throw new Error(mapped.reason);
@@ -325,13 +325,13 @@ export async function prepareDocxResumeBaseline(originalBytes: Buffer, source: D
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export async function renderDocxSourceBytes(originalBytes: Buffer, source: DocxSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>, preparedBaseline?: PreparedDocxResumeBaseline): Promise<RenderedDocxResume> {
+export async function renderDocxSourceBytes(originalBytes: Buffer, source: DocxSourceRepresentation, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeProcess?: () => Promise<void>, preparedBaseline?: PreparedDocxResumeBaseline, trustedName?: string): Promise<RenderedDocxResume> {
   if (bytesHash(originalBytes) !== source.sourceHash || source.support.status !== "candidate" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version) throw new Error("The inspected DOCX source and render plan do not match.");
-  if (planEvidencePolicy(plan) === 2) source = await parseDocxSource(originalBytes);
+  if (planEvidencePolicy(plan) === 2) source = await parseDocxSource(originalBytes, trustedName);
   if (!plan.sourceLayout || !plan.layoutHash || !preparedBaseline || preparedBaseline.sourceHash !== source.sourceHash || preparedBaseline.layoutHash !== plan.layoutHash ||
     hashJson(preparedBaseline.sourceLayout) !== hashJson(plan.sourceLayout)) throw new Error("The DOCX plan is not bound to its untouched, all-page rendered baseline. Rebuild the draft from the inspected source.");
   const claimIds = new Set(plan.claims.map((claim) => claim.anchorId));
-  const evidenceAnchors = sourceEvidenceAnchors(source, planEvidencePolicy(plan));
+  const evidenceAnchors = sourceEvidenceAnchors(source, planEvidencePolicy(plan), trustedName);
   if (claimIds.size !== evidenceAnchors.length || evidenceAnchors.some((anchor) => !claimIds.has(anchor.id))) throw new Error("The render plan does not cover every source claim.");
   const sourceFacts: VerifiedFact[] = plan.claims.flatMap((claim) => claim.factIds.map((id) => ({ id, text: claim.text, source: "resume", sourceAnchorId: claim.anchorId, verified: true })));
   const docx = plan.edits.length ? await applyDocxEdits(originalBytes, source, plan.edits, sourceFacts) : originalBytes;
@@ -361,6 +361,6 @@ export async function renderDocxResume(profile: Profile, plan: ResumeSourcePlan,
   if (plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) || plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error("The DOCX edit plan is stale. Prepare a new draft after reviewing your source and facts.");
   await beforeRender?.();
   const originalBytes = await readOriginalResume(profile.id, originalResumeManifest(profile));
-  const baseline = preparedBaseline ?? await prepareDocxResumeBaseline(originalBytes, source, deadline, beforeRender);
-  return renderDocxSourceBytes(originalBytes, source, plan, deadline, beforeRender, baseline);
+    const baseline = preparedBaseline ?? await prepareDocxResumeBaseline(originalBytes, source, deadline, beforeRender, profile.name);
+  return renderDocxSourceBytes(originalBytes, source, plan, deadline, beforeRender, baseline, profile.name);
 }
