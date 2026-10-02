@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { parsePdfSource } from "@/lib/pdf-source";
-import { rendererDiagnosticMessage } from "@/lib/resume-renderer-diagnostics";
 
 const mocks = vi.hoisted(() => ({ getDocument: vi.fn() }));
 vi.mock("@/lib/pdfjs-runtime", async (importOriginal) => {
@@ -26,6 +25,6 @@ it("returns font guidance from a typed support diagnostic", async () => {
 
   const source = await parsePdfSource(Buffer.from("synthetic PDF bytes"));
 
-  expect(source.support).toEqual({ status: "blocked", reason: rendererDiagnosticMessage({ code: "pdf_source_font_unidentified", text }),
+  expect(source.support).toEqual({ status: "blocked", reason: "The source font for “Avery Chen” cannot be identified. Upload an editable DOCX rather than substituting a font.",
     diagnostic: { code: "pdf_source_font_unidentified", text } });
 });
