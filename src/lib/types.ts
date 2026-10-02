@@ -416,6 +416,13 @@ export interface ScreeningAnswer {
   userProvided?: boolean;
   author?: "ai" | "human";
   confirmedAt?: string;
+  userRevision?: {
+    version: 1;
+    contentHash: string;
+    originalAnswer: string;
+    originalFactIds: string[];
+    originalDraftHash: string;
+  };
   aiDraft?: {
     mode?: "general-truthful";
     preferenceSources?: true;

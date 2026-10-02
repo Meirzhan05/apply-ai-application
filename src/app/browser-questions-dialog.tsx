@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { EssayReview } from "@/components/essay-review";
+import { answerReviewHash } from "@/lib/answer-responsibility";
 import { X, LoaderCircle } from "lucide-react";
 import { browserQuestions } from "@/lib/browser-questions";
 import type { Application, VerifiedFact } from "@/lib/types";
@@ -16,6 +18,7 @@ export function BrowserQuestionsDialog({ application, busy, error, facts, act }:
   const heading = useId();
   const questions = browserQuestions(application.form);
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(questions.map((question) => [question.id, question.value])));
+  const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Record<string, string>>({});
   const storedDrafts = application.browserQuestionDrafts;
   const drafts = storedDrafts && storedDrafts.formHash === application.form?.hash &&
@@ -23,8 +26,10 @@ export function BrowserQuestionsDialog({ application, busy, error, facts, act }:
     storedDrafts.packetHash === application.packetHash ? storedDrafts.answers : {};
   const drafting = application.browserQuestionRun?.kind === "essays";
   const blocked = Boolean(busy) || Boolean(application.browserQuestionRun);
-  const missingDraft = questions.some((question) => question.owner === "ai" && !drafts[question.id]?.aiDraft);
-  const complete = questions.every((question) => question.owner === "ai" ? drafts[question.id]?.aiDraft && confirmed[question.id] === drafts[question.id].aiDraft!.contentHash : values[question.id]?.trim());
+  const missingDraft = questions.some((question) => question.owner === "ai" && (!drafts[question.id] || !answerReviewHash(drafts[question.id])));
+  const complete = editingQuestion === null && questions.every((question) => question.owner === "ai" ? drafts[question.id] && answerReviewHash(drafts[question.id]) && confirmed[question.id] === answerReviewHash(drafts[question.id]) : values[question.id]?.trim());
+  const remainingPersonal = questions.filter((question) => question.owner === "human" && !values[question.id]?.trim()).length;
+  const remainingEssays = questions.filter((question) => question.owner === "ai" && (!drafts[question.id] || !answerReviewHash(drafts[question.id]) || confirmed[question.id] !== answerReviewHash(drafts[question.id]))).length;
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -54,11 +59,20 @@ export function BrowserQuestionsDialog({ application, busy, error, facts, act }:
           {questions.map((question, index) => <section className="browser-question" key={question.id}>
             <label htmlFor={`${heading}-${index}`} className="question-label">{question.label}</label>
             {question.owner === "ai" ? <>
-              <p className="question-hint">AI writes this answer using your confirmed facts. Review it before continuing.</p>
-              {drafts[question.id]?.aiDraft ? <>
-                <div className="question-essay" id={`${heading}-${index}`}>{drafts[question.id].answer}</div>
-                <details className="question-sources"><summary>Facts used in this answer</summary><ul>{drafts[question.id].factIds.map((id) => <li key={id}>{facts.find((fact) => fact.id === id && fact.verified)?.text || "Source changed. Regenerate this AI answer."}</li>)}</ul></details>
-                <label className="question-confirm"><input type="checkbox" disabled={blocked} checked={confirmed[question.id] === drafts[question.id].aiDraft!.contentHash} onChange={(event) => setConfirmed({ ...confirmed, [question.id]: event.target.checked ? drafts[question.id].aiDraft!.contentHash : "" })} />I reviewed and confirm this AI answer</label>
+              <p className="question-hint">Review the draft, edit wording if needed, then confirm the answer to enter.</p>
+              {drafts[question.id] && answerReviewHash(drafts[question.id]) ? <>
+                <EssayReview key={`${question.id}-${answerReviewHash(drafts[question.id])}`} answer={drafts[question.id]} facts={facts}
+                  inputId={`${heading}-${index}`} editable blocked={blocked || (editingQuestion !== null && editingQuestion !== question.id)}
+                  onEditingChange={(editing) => {
+                    setEditingQuestion(editing ? question.id : null);
+                    if (editing) setConfirmed({ ...confirmed, [question.id]: "" });
+                  }}
+                  onSave={(text) => act("reviseBrowserEssay", { applicationId: application.id, formHash: application.form!.hash,
+                    sessionId: application.browserSessionId, packetHash: application.packetHash,
+                    questionId: question.id, answerHash: answerReviewHash(drafts[question.id]), text })} />
+                <label className="question-confirm"><input type="checkbox" disabled={blocked || editingQuestion !== null}
+                  checked={confirmed[question.id] === answerReviewHash(drafts[question.id])}
+                  onChange={(event) => setConfirmed({ ...confirmed, [question.id]: event.target.checked ? answerReviewHash(drafts[question.id])! : "" })} />I reviewed and confirm this exact answer</label>
               </> : <p role="status" className="question-hint">{drafting ? "The agent is writing and checking this answer…" : "An AI draft is needed before you can confirm this answer."}</p>}
             </> : <>
               <p className="question-hint">{question.kind === "checkbox" ? "Check this only if you agree with the employer’s statement." : question.options.length ? "Choose one of the employer’s options." : "Your answer will be entered exactly as supplied."}</p>
@@ -72,6 +86,7 @@ export function BrowserQuestionsDialog({ application, busy, error, facts, act }:
         </div>
         <footer>
           <p>Continuing authorizes these answers to be filled. You’ll still review the completed form before submission.</p>
+          <p role="status">{editingQuestion !== null ? "Save or cancel your essay revision before continuing." : complete ? "All answers are ready for your approval." : `${remainingPersonal ? `Answer ${remainingPersonal} personal ${remainingPersonal === 1 ? "question" : "questions"}. ` : ""}${remainingEssays ? `Review and confirm ${remainingEssays} ${remainingEssays === 1 ? "essay" : "essays"}.` : ""}`}</p>
           {missingDraft && <button type="button" className="outline-action" disabled={blocked} onClick={() => act("draftBrowserEssays", { applicationId: application.id, formHash: application.form!.hash })}>{drafting ? "Writing AI answers…" : "Write answers with AI"}</button>}
           <button type="submit" className="dark-button" disabled={!complete || blocked}>{busy === "answerBrowserQuestions" ? <><LoaderCircle size={18} className="spin" /> Continuing…</> : "Save answers and continue"}</button>
         </footer>

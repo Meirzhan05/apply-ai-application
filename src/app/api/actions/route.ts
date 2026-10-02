@@ -7,11 +7,12 @@ import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
 import { hashJson, newId } from "@/lib/crypto";
-import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
+import { answerBrowserQuestions, reviseBrowserEssay, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
-import { applyHumanAnswerEdits, confirmAiEssay } from "@/lib/answer-policy";
+import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
+import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { checkSubmissionResult } from "@/lib/submission-verification";
@@ -373,19 +374,47 @@ async function perform(
       throw new Error("The packet changed. Review it again before confirming this essay.");
     const index = z.number().int().min(0).parse(payload.answerIndex);
     const answer = app.packet.answers[index];
-    if (!answer?.aiDraft || answer.aiDraft.contentHash !== text(payload.answerHash, 100))
+    if (!answer || !answerReviewHash(answer) || answerReviewHash(answer) !== text(payload.answerHash, 100))
       throw new Error("The essay changed. Review its latest draft.");
     validatePacket(state.profile, app.packet);
     const expected = materialReviewHash(state, app);
     const answers = [...app.packet.answers];
-    answers[index] = confirmAiEssay(state.profile, answer);
+    answers[index] = confirmReviewedEssay(state.profile, answer);
     const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
     return mutateState(userId, (current) => {
       const target = findApp(current, app.id, userId);
       assertMaterialReviewCurrent(current, target, expected);
       setPacket(current, target, packet);
-      activity(current, "Essay confirmed", "You confirmed this AI draft. Packet and final form approvals remain separate.");
+      activity(current, "Essay confirmed", "You confirmed this exact wording. Packet and final form approvals remain separate.");
     }, ownerContext);
+  }
+  if (action === "reviseEssay") {
+    const state = await loadState(userId);
+    const app = findApp(state, text(payload.applicationId, 100), userId);
+    assertSourcePlanJobCurrent(state, app);
+    if (app.status !== "draft_review" || app.queuedRun || !app.packet || app.packetHash !== text(payload.packetHash, 100))
+      throw new Error("The packet changed. Open its current review before editing.");
+    const index = z.number().int().min(0).parse(payload.answerIndex);
+    const answer = app.packet.answers[index];
+    if (!answer || !answerReviewHash(answer) || answerReviewHash(answer) !== text(payload.answerHash, 100))
+      throw new Error("The essay changed. Review its latest wording before editing.");
+    validatePacket(state.profile, app.packet);
+    const expected = materialReviewHash(state, app);
+    const answers = [...app.packet.answers];
+    answers[index] = reviseEssay(state.profile, answer, z.string().trim().min(1).max(4000).parse(payload.text));
+    const packet = await withPacketFiles(state.profile, { ...app.packet, answers, version: app.packet.version + 1, createdAt: new Date().toISOString() });
+    return mutateState(userId, (current) => {
+      const target = findApp(current, app.id, userId);
+      assertMaterialReviewCurrent(current, target, expected);
+      setPacket(current, target, packet);
+      activity(current, "Essay revised", "Applicant edited the wording. Review and confirmation are required again; source facts were not changed.");
+    }, ownerContext);
+  }
+  if (action === "reviseBrowserEssay") {
+    await reviseBrowserEssay(userId, text(payload.applicationId, 100), text(payload.formHash, 100),
+      z.string().min(1).max(5000).parse(payload.questionId), text(payload.answerHash, 100), z.string().trim().min(1).max(4000).parse(payload.text),
+      { sessionId: text(payload.sessionId, 100), packetHash: text(payload.packetHash, 100) }, ownerContext);
+    return;
   }
   if (action === "addCoverLetter") {
     const state = await loadState(userId);

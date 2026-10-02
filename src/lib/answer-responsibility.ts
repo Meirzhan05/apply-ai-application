@@ -7,5 +7,9 @@ export function answerOwner(question: string): "human" | "ai" {
 
 export function answerNeedsAction(answer: ScreeningAnswer): boolean {
   return !answer.answer.trim() || answer.requiresUserInput ||
-    (answerOwner(answer.question) === "ai" && (!answer.aiDraft || !answer.confirmedAt));
+    (answerOwner(answer.question) === "ai" && (!answerReviewHash(answer) || !answer.confirmedAt));
+}
+
+export function answerReviewHash(answer: ScreeningAnswer): string | undefined {
+  return answer.userRevision?.contentHash ?? answer.aiDraft?.contentHash;
 }

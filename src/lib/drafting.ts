@@ -7,7 +7,7 @@ import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
 import { validateResumeArtifact, withPacketFiles } from "@/lib/packet-files";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
-import { validateAiEssay } from "@/lib/answer-policy";
+import { validateAiEssay, validateUserEssay } from "@/lib/answer-policy";
 import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
 import { assertSourceInformationComplete, draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
 import { prepareDocxResumeBaseline, renderDocxResume, type PreparedDocxResumeBaseline } from "@/lib/docx-renderer";
@@ -280,6 +280,10 @@ export function validatePacket(
       );
   }
   for (const answer of packet.answers) {
+    if (answer.userRevision) {
+      validateUserEssay(answer);
+      continue;
+    }
     if (answer.aiDraft) {
       validateAiEssay(profile, answer);
       if (!answer.requiresUserInput && !answer.confirmedAt) throw new Error("Confirm the AI essay before approving it.");

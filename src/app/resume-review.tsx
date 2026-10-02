@@ -1,18 +1,19 @@
 import type { Profile, ResumeDocument, ResumeField } from "@/lib/types";
 
-export function ResumeReview({ profile, document, applicationId, pdfHash }: { profile: Profile; document: ResumeDocument; applicationId: string; pdfHash: string }) {
+export function ResumeReview({ profile, document, applicationId, pdfHash, onCorrectClaim }: { profile: Profile; document: ResumeDocument; applicationId: string; pdfHash: string; onCorrectClaim?: (factIds: string[], claim: string) => void }) {
   const base = `/api/applications/${applicationId}/files`;
   const claim = (field: ResumeField) => field.text ? <div className="resume-claim">
     <span>{field.text}</span>
     <details className="resume-sources"><summary>Source facts</summary>
       {field.factIds.map((id) => <p key={id}>{profile.facts.find((fact) => fact.id === id)?.text ?? "Source unavailable; rebuild the resume."}</p>)}
+      {onCorrectClaim && <button type="button" className="text-button" onClick={() => onCorrectClaim(field.factIds, field.text)}>Correct or unconfirm these facts</button>}
     </details>
   </div> : null;
   return <div className="structured-resume-review">
     <p className="muted">Review the rewritten claims and the one-page PDF. Approving the packet authorizes this exact resume for form filling.</p>
     <div className="resume-downloads">
       <a className="text-button" href={`${base}/resume?download=1`} target="_blank" rel="noreferrer">Download resume PDF ↗</a>
-      <a className="text-button" href={`${base}/resume-source`}>Download LaTeX source</a>
+      <details><summary>Advanced download</summary><a className="text-button" href={`${base}/resume-source`}>Download LaTeX source</a></details>
     </div>
     <iframe className="resume-pdf-preview" src={`${base}/resume?v=${pdfHash}#view=FitH`} title="Compiled one-page resume PDF" />
     <div className="resume-preview">

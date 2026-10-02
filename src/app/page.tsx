@@ -2,6 +2,7 @@
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { EssayReview } from "@/components/essay-review";
 import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
@@ -12,7 +13,7 @@ import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels }
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
-import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
+import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
 import {
@@ -62,6 +63,8 @@ export default function Dashboard() {
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [editingEssay, setEditingEssay] = useState<number | null>(null);
+  const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("Wrong role");
@@ -127,8 +130,9 @@ export default function Dashboard() {
       if (!response.ok) throw new Error(body.error || "Action failed.");
       const next = await reload();
       if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
-      if (["editPacket", "confirmEssay", "draft"].includes(action)) setAnswerDraft([]);
+      if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerDraft([]);
       if (action === "editPacket") setNotice("Your answers are saved.");
+      if (action === "reviseEssay") setNotice("Your essay revision is saved. Review and confirm the new wording.");
       if (action === "confirmEssay") setNotice("Essay confirmed. Your application has not been submitted.");
       return next;
     } catch (err) {
@@ -216,6 +220,14 @@ export default function Dashboard() {
       </div>
     );
 
+  const correctClaim = (factIds: string[], claim: string) => {
+    if (!activeApp) return;
+    setEditingEssay(null);
+    setProfileDraft(structuredClone(data.profile));
+    setFactCorrection({ applicationId: activeApp.id, factIds, claim });
+    setSection("profile");
+  };
+
   const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
@@ -246,12 +258,13 @@ export default function Dashboard() {
                               diagnostics={activeApp.resumeDraftDiagnostics}
                               latestError={activeApp.resumeDraftDiagnostics ? activeApp.error : undefined}
                               jobFingerprint={JSON.stringify(appJob)}
-                              onReviewProfile={() => setSection("profile")}
+                              onReviewProfile={() => correctClaim(activeApp.packet!.resumeLines.flatMap((line) => line.factIds), "Application resume")}
+                              onCorrectClaim={activeApp.status === "draft_review" ? correctClaim : undefined}
                               onRebuildResume={activeApp.status === "draft_review" ? () => act("draft", { applicationId: activeApp.id, draftMode: "resume" }) : undefined}
                               rebuildDisabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
                             />
                           ) : activeApp.packet.schemaVersion === 2 && activeApp.packet.resumeDocument ? (
-                            <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} />
+                            <ResumeReview profile={data.profile} document={activeApp.packet.resumeDocument} applicationId={activeApp.id} pdfHash={activeApp.packet.files?.find((file) => file.kind === "resume")?.sha256 ?? ""} onCorrectClaim={activeApp.status === "draft_review" ? correctClaim : undefined} />
                           ) : <>
                           <p className="muted">
                             Each resume line comes from a confirmed profile
@@ -270,8 +283,9 @@ export default function Dashboard() {
                               <p key={i}>
                                 • {line.text}{" "}
                                 <small>
-                                  Verified fact: {line.factIds.join(", ")}
+                                  Verified source: {line.factIds.map((id) => data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source unavailable").join("; ")}
                                 </small>
+                                {activeApp.status === "draft_review" && <button type="button" className="text-button" onClick={() => correctClaim(line.factIds, line.text)}>Correct or unconfirm source facts</button>}
                               </p>
                             ))}
                           </div>
@@ -300,57 +314,42 @@ export default function Dashboard() {
                           )}
                           <div className="answers">
                             <h4>Screening answers</h4>
-                            <p className="muted">AI writes essays; you confirm them. Personal and consent answers come from you.</p>
+                            <p className="muted">Review AI drafts, edit wording if needed, then confirm each essay. Personal and consent answers come from you.</p>
                             {activeApp.packet.answers.map((answer, i) => (
                               <div className="screening-answer" key={i}>
                                 <label htmlFor={`screening-${activeApp.id}-${i}`}>{answer.question}</label>
-                                <textarea
-                                  id={`screening-${activeApp.id}-${i}`}
-                                  disabled={activeApp.status !== "draft_review" || Boolean(activeApp.queuedRun)}
-                                  readOnly={answerOwner(answer.question) === "ai"}
-                                  value={answerOwner(answer.question) === "ai" ? answer.answer : (answerDraft[i] ?? answer).answer}
-                                  onChange={(event) => {
-                                    if (answerOwner(answer.question) === "ai") return;
-                                    const draft = [
-                                      ...(answerDraft.length
-                                        ? answerDraft
-                                        : activeApp.packet!.answers),
-                                    ];
-                                    draft[i] = {
-                                      ...draft[i],
-                                      answer: event.target.value,
-                                      userProvided: true,
-                                      requiresUserInput: false,
-                                    };
-                                    setAnswerDraft(draft);
-                                  }}
-                                />
-                                <small>
-                                  {answerOwner(answer.question) === "ai" ? (answer.aiDraft ? (answer.confirmedAt ? "AI essay · confirmed by you" : "AI essay · your confirmation needed") : "AI draft needed · use Write essays with AI below") : answer.requiresUserInput &&
-                                  !answer.userProvided
-                                    ? "Human-only · your answer needed"
-                                    : answer.userProvided
-                                      ? "Your own answer"
-                                      : "From your confirmed profile"}
-                                </small>
-                                {answerOwner(answer.question) === "ai" && answer.aiDraft && (
-                                  <details><summary>Facts used in this essay</summary><ul>{answer.factIds.map((id) => <li key={id}>{data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source fact unavailable"}</li>)}</ul></details>
-                                )}
-                                {answerOwner(answer.question) === "ai" && answer.aiDraft && !answer.confirmedAt && activeApp.status === "draft_review" && (
-                                  <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
-                                    onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answer.aiDraft!.contentHash })}>Confirm essay</button>
-                                )}
+                                {answerOwner(answer.question) === "ai" && answerReviewHash(answer) ? <>
+                                  <EssayReview key={`${activeApp.id}-${i}-${answerReviewHash(answer)}`} answer={answer} facts={data.profile.facts}
+                                    inputId={`screening-${activeApp.id}-${i}`} editable={activeApp.status === "draft_review"}
+                                    blocked={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || (editingEssay !== null && editingEssay !== i)}
+                                    onEditingChange={(editing) => setEditingEssay(editing ? i : null)}
+                                    onSave={(text) => act("reviseEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answerReviewHash(answer), text })} />
+                                  {!answer.confirmedAt && activeApp.status === "draft_review" && <button className="outline-action"
+                                    disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null}
+                                    onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answerReviewHash(answer) })}>Confirm essay</button>}
+                                </> : <>
+                                  <textarea id={`screening-${activeApp.id}-${i}`} maxLength={4000}
+                                    disabled={activeApp.status !== "draft_review" || Boolean(busy) || Boolean(activeApp.queuedRun) || editingEssay !== null}
+                                    readOnly={answerOwner(answer.question) === "ai"} value={(answerDraft[i] ?? answer).answer}
+                                    onChange={(event) => {
+                                      if (answerOwner(answer.question) === "ai") return;
+                                      const draft = [...(answerDraft.length ? answerDraft : activeApp.packet!.answers)];
+                                      draft[i] = { ...draft[i], answer: event.target.value, userProvided: true, requiresUserInput: false };
+                                      setAnswerDraft(draft);
+                                    }} />
+                                  <small>{answerOwner(answer.question) === "ai" ? "AI draft needed · use Write essays with AI below" : answer.requiresUserInput && !answer.userProvided ? "Human-only · your answer needed" : answer.userProvided ? "Your own answer" : "From your confirmed profile"}</small>
+                                </>}
                               </div>
                             ))}
                           </div>
                           {activeApp.status === "draft_review" && (
                             <>
-                            <PacketReadiness application={activeApp} dirty={answersDirty} busy={busy} notice={notice} />
+                            <PacketReadiness application={activeApp} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} />
                             <div className="action-row">
                               <button
                                 id={`save-answers-${activeApp.id}`}
                                 className="outline-action"
-                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || !answersDirty}
+                                disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || !answersDirty || editingEssay !== null}
                                 onClick={() =>
                                   act("editPacket", {
                                     applicationId: activeApp.id,
@@ -363,9 +362,9 @@ export default function Dashboard() {
                                 {busy === "editPacket" ? "Saving answers…" : "Save my answers"}
                               </button>
                               <details className="material-tools"><summary>Revise or rebuild materials</summary>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null}
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
-                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty}
+                              <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null}
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
                               </details>
                               <p className="target-url">
@@ -382,7 +381,7 @@ export default function Dashboard() {
                                 className="dark-button"
                                 disabled={
                                   Boolean(busy) || Boolean(activeApp.queuedRun) ||
-                                  answersDirty ||
+                                  answersDirty || editingEssay !== null ||
                                   activeApp.packet.answers.some(answerNeedsAction)
                                 }
                                 onClick={() =>
@@ -434,7 +433,7 @@ export default function Dashboard() {
               key={key}
               aria-label={label}
               className={`navitem ${section === key ? "active" : ""}`}
-              onClick={() => setSection(key)}
+              onClick={() => { setEditingEssay(null); setSection(key); }}
             >
               <Icon size={21} strokeWidth={1.8} />
               {label}
@@ -780,6 +779,7 @@ export default function Dashboard() {
                                   if (app) {
                                     setSelected(app.id);
                           setNotice("");
+                          setEditingEssay(null);
                                     setSection("applications");
                                   }
                                 }
@@ -1561,6 +1561,11 @@ export default function Dashboard() {
                     <pre>{profileDraft.resumeText}</pre>
                   </details>
                 )}
+                {factCorrection && <div className="fact-correction" role="status">
+                  <h4>Check the facts behind this claim</h4>
+                  <p>{factCorrection.claim}</p>
+                  <p>Correct the wording or uncheck an inaccurate fact. Changed facts need your confirmation. Save, then return to the application and rebuild its resume before approving. If the uploaded resume is wrong, upload a corrected copy.</p>
+                </div>}
                 <div className="facts-head">
                   <h4>Facts the agent may use</h4>
                   <small>Check each fact before use</small>
@@ -1582,7 +1587,9 @@ export default function Dashboard() {
                         })
                       }
                     />
-                    <span>{fact.text}</span>
+                    {factCorrection?.factIds.includes(fact.id) ? <textarea className="fact-correction-input" aria-label={`Correct source fact ${fact.id}`} maxLength={500}
+                      autoFocus={factCorrection.factIds[0] === fact.id} value={fact.text}
+                      onChange={(event) => setProfileDraft({ ...profileDraft, facts: profileDraft.facts.map((item) => item.id === fact.id ? { ...item, text: event.target.value, verified: false, source: "user", sourceAnchorId: undefined } : item) })} /> : <span>{fact.text}</span>}
                     <button
                       onClick={() =>
                         setProfileDraft({
@@ -1598,6 +1605,19 @@ export default function Dashboard() {
                     </button>
                   </div>
                 ))}
+                {factCorrection && <div className="action-row">
+                  <button className="dark-button" disabled={Boolean(busy) || profileDraft.facts.some((fact) => !fact.text.trim())}
+                    onClick={async () => {
+                      if (await act("profile", profileDraft as unknown as Record<string, unknown>)) {
+                        setSelected(factCorrection.applicationId);
+                        setAnswerDraft([]);
+                        setSection("applications");
+                        setFactCorrection(null);
+                        setNotice("Source facts saved. Rebuild the resume and review it before approving.");
+                      }
+                    }}>Save facts and return to application</button>
+                  <button className="text-button" disabled={Boolean(busy)} onClick={() => { setFactCorrection(null); setSection("applications"); }}>Cancel corrections</button>
+                </div>}
                 <div className="add-fact">
                   <input
                     placeholder="Add a specific experience or project fact"
