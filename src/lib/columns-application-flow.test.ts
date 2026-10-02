@@ -148,7 +148,7 @@ class FixtureLocator {
   async getAttribute(name: string) { return name === "accept" ? ".pdf,application/pdf" : null; }
   async setInputFiles(file: InputFile) { this.page.acceptFile(file); }
   async evaluateAll<T>(callback: (elements: unknown[]) => T) {
-    if (this.selector !== "input, textarea, select") return [] as T;
+    if (this.selector !== "input, textarea, select") return callback([]) as T;
     if (/\.join\(["']\|["']\)/.test(callback.toString())) return "INPUT:resume:resume:file" as T;
     return this.page.fields() as T;
   }
