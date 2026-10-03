@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 
-export function WorkspaceDialog({ labelledBy, onClose, children }: {
+export function WorkspaceDialog({ labelledBy, describedBy, onClose, children }: {
   labelledBy: string;
+  describedBy?: string;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -27,7 +28,7 @@ export function WorkspaceDialog({ labelledBy, onClose, children }: {
       }
     };
   }, []);
-  return <dialog ref={dialog} className="modal workspace-dialog" aria-labelledby={labelledBy}
+  return <dialog ref={dialog} className="modal workspace-dialog" aria-labelledby={labelledBy} aria-describedby={describedBy}
     onCancel={event => { event.preventDefault(); onClose(); }}
     onKeyDown={event => {
       if (event.key !== "Tab") return;

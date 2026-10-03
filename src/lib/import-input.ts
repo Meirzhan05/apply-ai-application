@@ -1,5 +1,7 @@
 // Presentation validation only. The server remains authoritative for permitted
 // addresses, provider availability, duplicate links and posting verification.
+import type { Job } from "./types";
+
 export function importInput(raw: string) {
   if (!raw.trim()) return { error: "Paste the job's HTTPS link.", manual: false };
   let url: URL;
@@ -17,4 +19,30 @@ export function importInput(raw: string) {
   const lever = host === "jobs.lever.co" && board && id && (parts.length === 2 || (parts.length === 3 && parts[2] === "apply"));
   const ashby = host === "jobs.ashbyhq.com" && board && id && (parts.length === 2 || (parts.length === 3 && parts[2] === "application"));
   return { error: "", manual: !(greenhouse || lever || ashby) };
+}
+
+// Display lookup only: identify the server-returned role, including provider
+// redirect aliases and tracking parameters. This grants no import permission.
+function postingIdentity(raw: string) {
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol === "https:" && url.hostname === "boards.greenhouse.io" && /^\/[^/]+\/jobs\/\d+\/?$/.test(url.pathname)) url.hostname = "job-boards.greenhouse.io";
+    if (["jobs.lever.co", "jobs.ashbyhq.com"].includes(url.hostname)) url.pathname = url.pathname.replace(/\/(apply|application)\/?$/, "");
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key) || ["gh_src", "lever-source"].includes(key.toLowerCase())) url.searchParams.delete(key);
+    }
+    url.searchParams.sort();
+    if (url.hash === "#app" && /(^|\.)greenhouse\.io$/i.test(url.hostname)) url.hash = "";
+    return url.toString();
+  } catch { return raw.trim(); }
+}
+
+export function importedRole(before: Job[], after: Job[], submittedUrl: string) {
+  const known = new Set(before.map(job => job.id));
+  return roleForPosting(after.filter(job => !known.has(job.id)), submittedUrl);
+}
+
+export function roleForPosting(jobs: Job[], submittedUrl: string) {
+  const identity = postingIdentity(submittedUrl);
+  return jobs.find(job => [job.importUrl, job.url].some(url => url && postingIdentity(url) === identity));
 }

@@ -17,8 +17,10 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
+import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
+import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
-import { importInput } from "@/lib/import-input";
+import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
 import { ApplicationPicker } from "@/components/application-picker";
@@ -31,6 +33,7 @@ import {
   Bookmark,
   BriefcaseBusiness,
   Check,
+  ChevronDown,
   CircleHelp,
   ClipboardList,
   FileText,
@@ -46,6 +49,7 @@ import {
 import type {
   AppState,
   Application,
+  Job,
   MatchAssessment,
   Profile,
   ScreeningAnswer,
@@ -76,6 +80,8 @@ export default function Dashboard() {
   const [collection, setCollection] = useState<MatchCollection>("all");
   const searchInput = useRef<HTMLInputElement>(null);
   const jobList = useRef<HTMLDivElement>(null);
+  const pendingRoleFocus = useRef<string | null>(null);
+  const pendingSetupFocus = useRef<string | null>(null);
   const [importTouched, setImportTouched] = useState(false);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
@@ -95,14 +101,10 @@ export default function Dashboard() {
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
-  const [dismissReason, setDismissReason] = useState("Wrong role");
-  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" } } | null>(null);
-  const [importFields, setImportFields] = useState({
-    url: "",
-    company: "",
-    title: "",
-    location: "",
-  });
+  const [dismissReason, setDismissReason] = useState("");
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
+  const [importFields, setImportFields] = useState(emptyImport);
+  const sessionOwner = useRef<string | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
@@ -116,6 +118,14 @@ export default function Dashboard() {
     reload()
       .then((body) => {
         if (live) {
+          try {
+            const saved = readMatchesSession(window.sessionStorage, body.profile.id);
+            if (saved) {
+              setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
+              setImportFields(saved.draft); setImportOpen(saved.importOpen);
+            }
+          } catch { /* Storage can be disabled by browser preferences. */ }
+          sessionOwner.current = body.profile.id;
           setData(body);
           setProfileDraft({ ...structuredClone(body.profile), timeZone: body.profile.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
         }
@@ -128,6 +138,12 @@ export default function Dashboard() {
       refresh.stop();
     };
   }, [reload, refresh]);
+  useEffect(() => {
+    const owner = data?.profile.id;
+    if (!owner || sessionOwner.current !== owner) return;
+    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen }); }
+    catch { /* Keep working when browser storage is disabled. */ }
+  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
@@ -190,7 +206,11 @@ export default function Dashboard() {
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const sharedUnknown = "Work authorization has not been confirmed.";
   const hasSharedUnknown = data?.matches.some(entry => entry.assessment.uncertainty.includes(sharedUnknown));
+  const dismissedRole = jobs.find(job => job.id === dismissJobId);
+  const unavailableSources = data?.discovery?.sources.filter(source => source.status === "unavailable").length ?? 0;
+  const sourceFreshness = discoveryStatus(data?.discovery, data?.profile.demo ?? false);
   const importCheck = importInput(importFields.url);
+  const existingImport = error === "This link is already in your catalog." ? roleForPosting(jobs, importFields.url) : undefined;
   const importReady = !importCheck.error && (!importCheck.manual || Boolean(importFields.company.trim() && importFields.title.trim()));
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
@@ -203,6 +223,7 @@ export default function Dashboard() {
   const blockers = applications.flatMap((app) => (app.blockers ?? [])
     .filter((blocker) => (blocker.progress === "blocked" || blocker.progress === "resuming" || (blocker.reviewOnly && blocker.progress === "expired")) && blocker.userId === data?.profile.id)
     .map((blocker) => ({ blocker, app })));
+  const quietActivity = needsAction.length === 0 && blockers.length === 0;
 
   useEffect(() => {
     const list = applicationList.current;
@@ -286,7 +307,23 @@ export default function Dashboard() {
     return () => document.removeEventListener("keydown", onKey);
   }, [section, displayedApplications, activeApp?.id, openApplication]);
 
-  const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
+  useEffect(() => {
+    if (!pendingRoleFocus.current) return;
+    const role = document.getElementById(`role-${pendingRoleFocus.current}`)?.closest("article") ?? document.getElementById("matches-heading");
+    if (role instanceof HTMLElement) { role.focus(); pendingRoleFocus.current = null; }
+  }, [data, feedbackNotice]);
+  useEffect(() => {
+    if (section !== "profile" || !pendingSetupFocus.current) return;
+    document.getElementById(pendingSetupFocus.current)?.focus();
+    pendingSetupFocus.current = null;
+  }, [section]);
+  const revealRole = (job: Job, message: string, dismissed = feedback.get(job.id)?.kind === "dismissed") => {
+    const previousView = { collection, filter, search, sort };
+    setImportOpen(false); setCollection(dismissed ? "dismissed" : "all"); setFilter("all"); setSearch(`${job.company} ${job.title}`);
+    pendingRoleFocus.current = job.id;
+    setFeedbackNotice({ message, returnView: previousView });
+  };
+  const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const retryWorkspace = async () => {
     setBusy("reload");
@@ -637,18 +674,17 @@ export default function Dashboard() {
           </div>
         )}
         {section === "matches" && (
-          <div className="content-grid">
+          <div className={`content-grid ${quietActivity ? "activity-quiet" : ""}`}>
             <main className="main-panel matches-panel">
               <div className="page-heading">
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} in your catalog</span> ·{" "}
-                    {data.lastRefreshAt
-                      ? `updated ${relative(data.lastRefreshAt)}`
-                      : "ready for your review"}
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{sourceFreshness}</span>
                   </p>
                 </div>
+                <div className="matches-heading-actions">
+                {quietActivity && <button className="outline-action activity-launcher" popoverTarget="matches-activity">Activity <ChevronDown size={15} /></button>}
                 <button
                   className="outline-action import-launcher"
                   aria-label="+ Import a job link"
@@ -656,8 +692,12 @@ export default function Dashboard() {
                 >
                   <span className="desktop-import-label">+ Import a job link</span><span className="compact-import-label">Import a link</span>
                 </button>
+                </div>
               </div>
-              {hasSharedUnknown && <div className="profile-context" role="note">
+              {!data.onboarding.complete ? <details className="profile-context setup-context">
+                <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
+                <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
+              </details> : hasSharedUnknown && <div className="profile-context" role="note">
                 <span>Work authorization needs confirmation.</span>
                 <button className="text-button" onClick={() => navigateSection("profile")}>Review profile</button>
               </div>}
@@ -695,7 +735,7 @@ export default function Dashboard() {
                   {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
                 </button>)}
               </div>
-              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} />{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</button>
+              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
               <div id="match-filter-options" className={`filterbar ${filterOptionsOpen ? "expanded" : "collapsed"}`}>
                 <div className="filters" role="group" aria-label="Fit within this collection">
                   {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
@@ -712,6 +752,13 @@ export default function Dashboard() {
                   const next = await act("feedback", feedbackNotice.undo);
                   if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
                 }}>Undo dismissal</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
+                {feedbackNotice.returnView && <button className="text-button" onClick={() => {
+                  const previous = feedbackNotice.returnView!;
+                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
+                  document.getElementById("matches-heading")?.focus();
+                }}>Return to previous view</button>}
+                {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
                 <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
               </div>}
               <details className="fit-guide matches-guidance">
@@ -741,15 +788,17 @@ export default function Dashboard() {
                     const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
                     const context = `${job.title} at ${job.company}`;
                     const evidence = matchEvidence(data.profile, job, match);
+                    const checkCount = rowChecks.length;
+                    const checkLabel = checkCount ? ` · ${checkCount} ${checkCount === 1 ? "thing" : "things"} to check` : "";
                     const preparing = busyJob === job.id && ["select", "startAutonomous", "preflightImportedPosting"].includes(busy);
                     return (
-                      <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id}`}>
+                      <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id} company-${job.id}`}>
                         <div className="company-block">
                           <div className="company-mark">
                             {job.company.charAt(0)}
                           </div>
                           <div>
-                            <strong>{job.company}</strong>
+                            <strong id={`company-${job.id}`}>{job.company}</strong>
                             <small>{job.location}</small>
                             <small>
                               {job.salary ? `${job.salary} · ` : "Salary not listed · "}
@@ -784,7 +833,7 @@ export default function Dashboard() {
                           {rowChecks.length > 0 && <div className="job-review-note"><span><strong>{match?.category === "excluded" ? "Search rule conflict: " : "To review: "}</strong>{rowChecks[0]}</span></div>}
                           {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
                           <details className="fit-evidence">
-                          <summary aria-label={`Review fit evidence for ${context}`}>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
+                          <summary aria-label={`Review fit evidence for ${context}${checkLabel}`}>Review fit evidence{checkLabel}</summary>
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
                             <strong>Posting terms found in confirmed facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
@@ -852,10 +901,15 @@ export default function Dashboard() {
                             <button
                               disabled={Boolean(busy)}
                               aria-label={`Dismiss ${context}`}
-                              onClick={() => {
-                                setError("");
-                                setDismissJobId(job.id);
-                                setDismissReason("Wrong role");
+                              onClick={async () => {
+                                const index = filtered.findIndex(item => item.id === job.id);
+                                const adjacent = filtered[index + 1] ?? filtered[index - 1];
+                                const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
+                                const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
+                                if (next) {
+                                  pendingRoleFocus.current = adjacent?.id ?? "__heading__";
+                                  setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                }
                               }}
                             >
                               <X size={17} />
@@ -928,7 +982,7 @@ export default function Dashboard() {
                 )}
               </div>
               <details className="search-status">
-                <summary>{data.onboarding.complete ? "Search status" : "Finish profile setup"} · {data.lastRefreshAt ? `updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
+                <summary>Search status · {data.lastRefreshAt ? `workspace updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
@@ -992,7 +1046,8 @@ export default function Dashboard() {
               )}
               </details>
             </main>
-            <aside className="activity-panel">
+            <aside id="matches-activity" popover={quietActivity ? "auto" : undefined} className={`activity-panel ${quietActivity ? "activity-popover" : ""}`}>
+              {quietActivity && <button className="modal-close" aria-label="Close agent activity" popoverTarget="matches-activity" popoverTargetAction="hide"><X size={18} /></button>}
               <h2>Agent activity</h2>
               <div className="timeline">
                 {data.activity.slice(0, 4).map((event) => (
@@ -1010,9 +1065,9 @@ export default function Dashboard() {
                 ))}
                 <div className="timeline-item future">
                   <span className="dot" />
-                  <small>Next update</small>
-                  <strong>About every 4 hours</strong>
-                  <p>Supported sources are checked for new roles.</p>
+                  <small>{data.profile.demo ? "Source checks" : "Expected check frequency"}</small>
+                  <strong>{data.profile.demo ? "Demo workspace" : "About every 4 hours"}</strong>
+                  <p>{data.profile.demo ? "Demo listings do not run live source checks." : "Supported sources are checked for new roles."}</p>
                 </div>
               </div>
               <div className="digest-card">
@@ -1026,7 +1081,7 @@ export default function Dashboard() {
                 <ShieldCheck size={22} />
                 <div>
                   <strong>You’re in control</strong>
-                  <p>We find opportunities. You decide what happens next.</p>
+                  <p>{data.automation.enabled ? "Enabled automation can prepare and submit applications using your saved settings." : "Find opportunities, then choose what to prepare."}</p>
                   <button onClick={() => navigateSection("settings")}>
                     Adjust search settings <ArrowRight size={15} />
                   </button>
@@ -1588,6 +1643,7 @@ export default function Dashboard() {
                 <label>
                   Are you authorized to work in the United States?
                   <select
+                    id="setup-workAuthorization"
                     value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
                     onChange={(event) => setProfileDraft({
                       ...profileDraft,
@@ -1608,6 +1664,7 @@ export default function Dashboard() {
                 <label>
                   Will you require sponsorship for employment?
                   <select
+                    id="setup-requiresSponsorship"
                     value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
                     onChange={(event) => setProfileDraft({
                       ...profileDraft,
@@ -1687,7 +1744,7 @@ export default function Dashboard() {
                 {!data.onboarding.complete && <p className="muted">Complete the required answers and confirm at least one resume fact before enabling automation.</p>}
               </section>}
               <div className="profile-card">
-                <h3>Resume and confirmed facts</h3>
+                <h3 id="confirmed-resume-facts" tabIndex={-1}>Resume and confirmed facts</h3>
                 <p className="muted">
                   Uploading extracts text for your review. It never confirms
                   claims automatically. Source-preserving PDF and DOCX layouts
@@ -1833,7 +1890,7 @@ export default function Dashboard() {
         )}
       </div>
       {dismissJobId && (
-        <WorkspaceDialog labelledBy="dismiss-heading" onClose={() => setDismissJobId(null)}>
+        <WorkspaceDialog labelledBy="dismiss-heading" describedBy="dismiss-role-context" onClose={() => setDismissJobId(null)}>
             <button
               className="modal-close"
               onClick={() => setDismissJobId(null)}
@@ -1841,15 +1898,16 @@ export default function Dashboard() {
             >
               <X size={20} />
             </button>
-            <p className="eyebrow">HELP REFINE YOUR SEARCH</p>
-            <h2 id="dismiss-heading">Why dismiss this role?</h2>
-            <p>Your reason will guide the order of similar future matches.</p>
+            <h2 id="dismiss-heading">Add a dismissal reason</h2>
+            <p id="dismiss-role-context" className="dismiss-role-context">{dismissedRole ? `${dismissedRole.title} at ${dismissedRole.company}` : "This role is no longer available."}</p>
+            <p>Optional. Choose a reason only if it reflects your decision. It can guide the order of similar future matches.</p>
             <label>
               Reason
               <select
                 value={dismissReason}
                 onChange={(event) => setDismissReason(event.target.value)}
               >
+                <option value="">No reason supplied</option>
                 <option>Wrong role</option>
                 <option>Location is not right</option>
                 <option>Experience level is not right</option>
@@ -1859,20 +1917,20 @@ export default function Dashboard() {
             </label>
             <button
               className="dark-button"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !dismissedRole}
               onClick={async () => {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
                   kind: "dismissed",
-                  reason: dismissReason,
+                  reason: dismissReason || undefined,
                 });
                 if (next) setDismissJobId(null);
-                if (next) setFeedbackNotice({ message: `${jobs.find(job => job.id === dismissJobId)?.title ?? "Role"} dismissed. Find it in Dismissed.`, undo: { jobId: dismissJobId, kind: feedback.get(dismissJobId)?.kind === "saved" ? "saved" : "clear" } });
+                if (next) setFeedbackNotice({ message: "Dismissal reason updated.", undo: feedbackNotice?.undo });
               }}
             >
-              {busy === "feedback" ? "Dismissing…" : "Dismiss role"}
+              {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <p role="alert">{error}</p>}
+            {error && <p role="alert">{displayError} {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}</p>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -1932,9 +1990,14 @@ export default function Dashboard() {
               if (!importReady || busy) return;
               const next = await act("import", importFields);
               if (next) {
-                setImportOpen(false); setImportTouched(false); setCollection("all"); setFilter("all"); setSearch("");
-                setFeedbackNotice({ message: "Job link added. Review its posting details and fit before applying." });
-                setImportFields({ url: "", company: "", title: "", location: "" });
+                const added = importedRole(jobs, next.jobs, importFields.url);
+                setImportOpen(false); setImportTouched(false);
+                if (added?.active) {
+                  revealRole(added, `Added ${added.title} at ${added.company}. Review the posting details and fit below.`, next.feedback.some(item => item.jobId === added.id && item.kind === "dismissed"));
+                } else {
+                  setFeedbackNotice({ message: added ? `${added.title} at ${added.company} was added, but the posting is closed. Your view is preserved.` : "Link added. Refresh your workspace to locate its posting details.", postingUrl: added?.url });
+                }
+                setImportFields(emptyImport);
               }
             }}>
               <label>Job URL (required)
@@ -1946,8 +2009,13 @@ export default function Dashboard() {
                   <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => setImportFields({ ...importFields, [key]: event.target.value })} />
                 </label>)}
               </fieldset>}
-              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add to catalog"}</button>
-              {error && <p role="alert">{displayError} Your entered details are preserved. Correct the link or try again.</p>}
+              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
+              {Object.values(importFields).some(value => value.trim()) && <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setError(""); setImportOpen(false); }}>Discard draft</button>}
+              {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
+                {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
+                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
+                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
+              </div>}
             </form>
         </WorkspaceDialog>
       )}
