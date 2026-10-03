@@ -39,6 +39,45 @@ export function confirmAiEssay(profile: Profile, answer: ScreeningAnswer): Scree
   return { ...answer, confirmedAt: new Date().toISOString(), requiresUserInput: false };
 }
 
+function revisionContentHash(answer: ScreeningAnswer): string {
+  return hashJson({ question: answer.question, answer: answer.answer,
+    originalAnswer: answer.userRevision?.originalAnswer,
+    originalFactIds: answer.userRevision?.originalFactIds,
+    originalDraftHash: answer.userRevision?.originalDraftHash });
+}
+
+export function validateUserEssay(answer: ScreeningAnswer): void {
+  const revision = answer.userRevision;
+  if (answerOwner(answer.question) !== "ai" || answer.author !== "human" || !answer.userProvided ||
+    answer.aiDraft || answer.factIds.length || !revision || revision.version !== 1 ||
+    !answer.answer.trim() || answer.answer.length > 4000 || !revision.originalAnswer.trim() ||
+    !/^[a-f0-9]{64}$/.test(revision.originalDraftHash) || revision.contentHash !== revisionContentHash(answer) ||
+    (!answer.requiresUserInput && !answer.confirmedAt))
+    throw new Error("Your edited essay changed. Save and confirm its current wording.");
+}
+
+// Applicant prose remains application-specific, never a verified source claim.
+export function reviseEssay(profile: Profile, previous: ScreeningAnswer, text: string): ScreeningAnswer {
+  if (previous.userRevision) validateUserEssay(previous);
+  else validateAiEssay(profile, previous);
+  if (!text.trim() || text.length > 4000) throw new Error("Enter an essay between 1 and 4,000 characters.");
+  const answer: ScreeningAnswer = { question: previous.question, answer: text.trim(),
+    author: "human", userProvided: true, requiresUserInput: true, factIds: [],
+    userRevision: previous.userRevision ? { ...previous.userRevision, contentHash: "" } : {
+      version: 1, contentHash: "", originalAnswer: previous.answer,
+      originalFactIds: [...previous.factIds], originalDraftHash: previous.aiDraft!.contentHash,
+    } };
+  answer.userRevision!.contentHash = revisionContentHash(answer);
+  validateUserEssay(answer);
+  return answer;
+}
+
+export function confirmReviewedEssay(profile: Profile, answer: ScreeningAnswer): ScreeningAnswer {
+  if (!answer.userRevision) return confirmAiEssay(profile, answer);
+  validateUserEssay(answer);
+  return { ...answer, confirmedAt: new Date().toISOString(), requiresUserInput: false };
+}
+
 export function applyHumanAnswerEdits(current: ScreeningAnswer[], submitted: ScreeningAnswer[]): ScreeningAnswer[] {
   if (current.length !== submitted.length) throw new Error("The screening questions changed. Reload the packet.");
   return current.map((previous, index) => {

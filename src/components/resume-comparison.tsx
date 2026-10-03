@@ -93,6 +93,7 @@ export function ResumeComparison({
   diagnostics,
   latestError,
   onReviewProfile,
+  onCorrectClaim,
   jobFingerprint,
   onRebuildResume,
   rebuildDisabled = false,
@@ -103,6 +104,7 @@ export function ResumeComparison({
   diagnostics?: ResumeDraftDiagnostics;
   latestError?: string;
   onReviewProfile?: () => void;
+  onCorrectClaim?: (factIds: string[], claim: string) => void;
   jobFingerprint?: string;
   onRebuildResume?: () => void;
   rebuildDisabled?: boolean;
@@ -154,7 +156,7 @@ export function ResumeComparison({
   const freshness = freshnessState.key === requestKey ? freshnessState.value : "checking";
   const freshnessReasons = freshnessState.key === requestKey ? freshnessState.reasons : [];
   return <ResumeComparisonView applicationId={applicationId} profile={profile} artifact={artifact} plan={plan}
-    diagnostics={diagnostics} latestError={latestError} onReviewProfile={onReviewProfile} onRebuildResume={onRebuildResume}
+    diagnostics={diagnostics} latestError={latestError} onReviewProfile={onReviewProfile} onCorrectClaim={onCorrectClaim} onRebuildResume={onRebuildResume}
     rebuildDisabled={rebuildDisabled} freshness={freshness} freshnessReasons={freshnessReasons} />;
 }
 
@@ -166,6 +168,7 @@ export function ResumeComparisonView({
   diagnostics,
   latestError,
   onReviewProfile,
+  onCorrectClaim,
   onRebuildResume,
   rebuildDisabled,
   freshness,
@@ -178,6 +181,7 @@ export function ResumeComparisonView({
   diagnostics?: ResumeDraftDiagnostics;
   latestError?: string;
   onReviewProfile?: () => void;
+  onCorrectClaim?: (factIds: string[], claim: string) => void;
   onRebuildResume?: () => void;
   rebuildDisabled?: boolean;
   freshness: Freshness;
@@ -275,6 +279,7 @@ export function ResumeComparisonView({
                 <details>
                   <summary>Confirmed profile facts ({edit.factIds.length})</summary>
                   <ul>{edit.factIds.map((factId) => <li key={factId}>{factsById.get(factId)?.text ?? "This fact is no longer in the current profile."}{factsById.get(factId)?.verified ? <small> · Confirmed profile fact</small> : <small> · No longer confirmed</small>}</li>)}</ul>
+                  {onCorrectClaim && <button type="button" className="text-button" onClick={() => onCorrectClaim(edit.factIds, edit.text)}>Correct or unconfirm these facts</button>}
                 </details>
               </li>;
             })}

@@ -44,6 +44,23 @@ describe("onboarding action boundary", () => {
     }
   });
 
+  it("saves, dismisses, and clears feedback only for the authenticated owner", async () => {
+    const post = (kind: string) => new Request("http://localhost/api/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "feedback", payload: { jobId: "demo-engineering-intern", kind, userId: "owner-b" } }),
+    });
+    for (const kind of ["saved", "dismissed"] as const) {
+      expect((await POST(post(kind))).status).toBe(200);
+      expect(mocks.memory.get("owner-a")!.feedback[0].kind).toBe(kind);
+    }
+    expect((await POST(post("clear"))).status).toBe(200);
+    expect(mocks.memory.get("owner-a")!.feedback).toEqual([]);
+    expect(mocks.memory.get("owner-b")!.feedback).toEqual([]);
+    expect(mocks.memory.get("owner-a")!.activity[0].label).toBe("Role restored");
+    expect(JSON.parse(mocks.transport.at(-1)!.context)).toEqual({ actor: { kind: "owner", userId: "owner-a" }, action: "feedback" });
+  });
+
   it("persists onboarding, activation, settings, and pause for one owner", async () => {
     const facts = initialDemoState().profile.facts;
     const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {

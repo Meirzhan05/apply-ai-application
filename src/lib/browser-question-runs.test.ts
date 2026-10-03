@@ -3,14 +3,16 @@ import { initialDemoState } from "@/lib/demo-data";
 import { approveFill, selectApplication, setFormSnapshot, setPacket } from "@/lib/workflow";
 import { browserQuestions } from "@/lib/browser-questions";
 import { withPacketFiles } from "@/lib/packet-files";
-import type { AppState } from "@/lib/types";
+import type { AppState, ScreeningAnswer } from "@/lib/types";
+import { essayContentHash, essayEvidenceHash } from "@/lib/answer-policy";
+import { approveBrowserAnswers } from "@/lib/browser-question-approval";
 
 const mocks = vi.hoisted(() => ({ state: null as AppState | null, fill: vi.fn(), draft: vi.fn(), reserve: vi.fn() }));
 vi.mock("@/lib/repository", () => ({ loadState: async () => structuredClone(mocks.state), mutateState: async (_owner: string, change: (state: AppState) => unknown) => change(mocks.state!) }));
 vi.mock("@/lib/browser-runner", () => ({ fillApprovedBrowserAnswers: mocks.fill }));
 vi.mock("@/lib/essay-drafting", () => ({ draftEssayAnswers: mocks.draft }));
 vi.mock("@/lib/budget", () => ({ reserveServiceBudget: mocks.reserve }));
-import { answerBrowserQuestions, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
+import { answerBrowserQuestions, reviseBrowserEssay, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 
 beforeEach(() => { vi.clearAllMocks(); mocks.state = initialDemoState(); mocks.reserve.mockResolvedValue(true); });
 async function fixture() {
@@ -57,4 +59,34 @@ it("bounds AI spending and clears its lock while preserving the user's form", as
   await expect(writeBrowserQuestionEssays(state.profile.id, app.id, app.form!.hash)).rejects.toThrow(/spending limit/);
   expect(mocks.draft).not.toHaveBeenCalled(); expect(app.browserQuestionRun).toBeUndefined();
   expect(app.status).toBe("needs_user_action"); expect(app.browserSessionId).toBe("saved-session");
+});
+
+it("scopes essay revisions to the saved browser draft and rejects stale, cross-owner and replayed edits", async () => {
+  const { state, app } = await fixture();
+  app.form!.fields = [{ identifier: "why", label: "Why are you excited to join us?", kind: "textarea", required: true, value: "" }];
+  const question = browserQuestions(app.form)[0];
+  const fact = state.profile.facts[0];
+  const answer: ScreeningAnswer = { question: question.label, answer: fact.text, author: "ai", factIds: [fact.id], requiresUserInput: true,
+    aiDraft: { version: 1, model: "fixture", contentHash: "", evidenceHash: essayEvidenceHash(state.profile, [fact.id]), sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }] } };
+  answer.aiDraft!.contentHash = essayContentHash(answer);
+  app.browserQuestionDrafts = { formHash: app.form!.hash, sessionId: app.browserSessionId!, packetHash: app.packetHash!, answers: { [question.id]: answer } };
+  const bindings = { sessionId: app.browserSessionId!, packetHash: app.packetHash! };
+  const before = structuredClone(app.packet);
+  const facts = structuredClone(state.profile.facts);
+  await expect(reviseBrowserEssay(state.profile.id, app.id, "stale", question.id, answer.aiDraft!.contentHash, "My revision", bindings)).rejects.toThrow(/changed/);
+  await expect(reviseBrowserEssay("another-owner", app.id, app.form!.hash, question.id, answer.aiDraft!.contentHash, "My revision", bindings)).rejects.toThrow(/not found/);
+  await expect(reviseBrowserEssay(state.profile.id, app.id, app.form!.hash, question.id, answer.aiDraft!.contentHash, "My revision", { ...bindings, sessionId: "stale-session" })).rejects.toThrow(/changed/);
+  await reviseBrowserEssay(state.profile.id, app.id, app.form!.hash, question.id, answer.aiDraft!.contentHash, "I want to bring my survey experience to this team.", bindings);
+  const revised = app.browserQuestionDrafts.answers[question.id];
+  expect(revised).toMatchObject({ author: "human", userProvided: true, requiresUserInput: true, factIds: [] });
+  expect(revised.confirmedAt).toBeUndefined();
+  await expect(reviseBrowserEssay(state.profile.id, app.id, app.form!.hash, question.id, answer.aiDraft!.contentHash, "Replay", bindings)).rejects.toThrow(/changed/);
+  expect(() => approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, confirmEssay: true, answerHash: answer.aiDraft!.contentHash }])).toThrow(/current AI essay/);
+  const approved = approveBrowserAnswers(app, state.profile, app.form!.hash, [{ questionId: question.id, confirmEssay: true, answerHash: revised.userRevision!.contentHash }]);
+  expect(approved[0].answer.answer).toBe(revised.answer);
+  expect(approved[0].answer.confirmedAt).toBeTruthy();
+  expect(app.packet).toEqual(before);
+  expect(state.profile.facts).toEqual(facts);
+  expect(mocks.fill).not.toHaveBeenCalled();
+  expect(app.approvals.map((approval) => approval.kind)).toEqual(["fill"]);
 });

@@ -22,14 +22,30 @@ beforeEach(() => {
 function payload(name: string) {
   const app = fixture.state!.applications[0];
   if (name === "addCoverLetter") { app.status = "needs_user_action"; app.needsCoverLetter = true; }
-  return { applicationId: app.id, packetHash: app.packetHash, answerIndex: 0, answerHash: app.packet!.answers[0].aiDraft!.contentHash, answers: app.packet!.answers };
+  return { applicationId: app.id, packetHash: app.packetHash, answerIndex: 0, answerHash: app.packet!.answers[0].aiDraft!.contentHash, answers: app.packet!.answers, text: "I want to bring my survey analysis experience to this role." };
 }
-it.each(["editPacket", "confirmEssay", "addCoverLetter"])("archives legacy %s material outside atomic state updates", async (name) => {
+it.each(["editPacket", "confirmEssay", "reviseEssay", "addCoverLetter"])("archives legacy %s material outside atomic state updates", async (name) => {
   const response = await action(name, payload(name));
   expect(response.status).toBe(200); expect(fixture.savedOutside.length).toBeGreaterThan(0); expect(fixture.savedOutside.every(Boolean)).toBe(true);
   const app = fixture.state!.applications[0]; expect(app.status).toBe("draft_review"); expect(app.packet?.version).toBe(2); expect(app.approvals).toEqual([]); expect(app.packet?.files?.every((file) => file.storageKey)).toBe(true);
 });
-it.each(["editPacket", "confirmEssay", "addCoverLetter"])("does not overwrite a changed profile while archiving %s", async (name) => {
+it.each(["editPacket", "confirmEssay", "reviseEssay", "addCoverLetter"])("does not overwrite a changed profile while archiving %s", async (name) => {
   const input = payload(name); const before = structuredClone(fixture.state!.applications[0]); fixture.race = true;
   expect((await action(name, input)).status).toBe(400); expect(fixture.state!.applications[0]).toEqual(before);
+});
+
+it("rejects stale essay saves and confirmations and stores revised wording without promoting it to source facts", async () => {
+  const input = payload("reviseEssay");
+  const facts = structuredClone(fixture.state!.profile.facts);
+  expect((await action("reviseEssay", { ...input, answerHash: "stale" })).status).toBe(400);
+  expect((await action("reviseEssay", input)).status).toBe(200);
+  const app = fixture.state!.applications[0];
+  const answer = app.packet!.answers[0];
+  expect(answer).toMatchObject({ author: "human", userProvided: true, factIds: [], requiresUserInput: true });
+  expect(answer.confirmedAt).toBeUndefined();
+  expect((await action("confirmEssay", input)).status).toBe(400);
+  expect((await action("confirmEssay", { ...input, packetHash: app.packetHash, answerHash: answer.userRevision!.contentHash })).status).toBe(200);
+  expect(app.packet!.answers[0].confirmedAt).toBeTruthy();
+  expect(app.approvals).toEqual([]);
+  expect(fixture.state!.profile.facts).toEqual(facts);
 });
