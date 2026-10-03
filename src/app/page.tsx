@@ -983,7 +983,7 @@ export default function Dashboard() {
                   </button>)}
                 </div>
                 <div className="sort-options"><label className="sort-control">Sort <select disabled={Boolean(batchProgress)} aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
-                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20" : batchCandidates.length} unsaved roles in this view</button></div>}
+                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" aria-describedby={needsWorkspaceCheck ? "batch-save-check" : undefined} disabled={Boolean(busy) || needsWorkspaceCheck} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20" : batchCandidates.length} unsaved roles in this view</button>{needsWorkspaceCheck && <p id="batch-save-check" className="field-help">Refresh workspace to enable saving.</p>}</div>}
               </div>
               <div className="matches-subbar">
               <p className={`result-summary ${collection === "all" && filter === "all" && !search.trim() ? "sr-only" : ""}`} role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
@@ -1068,7 +1068,7 @@ export default function Dashboard() {
                               Source: {job.sourceLabel}
                             </span>
                             {job.postedAt && (
-                              <span className="source-badge">
+                            <span className="source-badge posting-age">
                                 Posted {relative(job.postedAt)}
                               </span>
                             )}
@@ -2230,7 +2230,7 @@ export default function Dashboard() {
               <X size={20} />
             </button>
             <h2 id="import-heading">Import a job link</h2>
-              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Return here afterward to continue."}</p>
+              {activeError && <div className="import-recovery" role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Return here afterward to continue."}</p>
                 <div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}
                 {needsWorkspaceCheck && <button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
