@@ -1,7 +1,7 @@
 "use client";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createWorkspaceRefresh } from "@/lib/workspace-refresh";
+import { createWorkspaceRefresh, type WorkspaceConnection } from "@/lib/workspace-refresh";
 import Image from "next/image";
 import { ApplicationProgress } from "@/components/application-progress";
 import { EssayReview } from "@/components/essay-review";
@@ -74,6 +74,7 @@ type Filter = MatchFilter;
 export default function Dashboard() {
   const router = useRouter();
   const [data, setData] = useState<ViewState | null>(null);
+  const [connection, setConnection] = useState<WorkspaceConnection>("current");
   const [section, setSection] = useState<Section>("matches");
   const [applicationSearch, setApplicationSearch] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -117,7 +118,7 @@ export default function Dashboard() {
 
   useEffect(() => { if (confirmDiscardImport) keepImportEditing.current?.focus(); }, [confirmDiscardImport]);
 
-  const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData), []);
+  const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData, setConnection), []);
   const reload = useCallback(() => refresh.reload(), [refresh]);
   useEffect(() => {
     let live = true;
@@ -692,7 +693,6 @@ export default function Dashboard() {
           <a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a>
           {!data.profile.demo && <div className="responsive-account">
             <p>Workspace: {data.profile.name || "Your profile"}</p>
-            <button onClick={() => { document.getElementById("more-pages")?.hidePopover(); navigateSection("settings"); }}>Account settings</button>
             <button disabled={Boolean(busy)} onClick={signOut}>{busy === "signout" ? "Signing out…" : "Sign out"}</button>
           </div>}
         </div>
@@ -756,6 +756,10 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+        {connection !== "current" && <div className="workspace-connection" role="status">
+          <p>{connection === "auth-required" ? "Sign in to resume workspace updates. Showing the last received list." : "Workspace updates are paused. Showing the last received list; we’ll keep trying."}</p>
+          {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
+        </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
         {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
@@ -2078,7 +2082,7 @@ export default function Dashboard() {
             </button>
             <h2 id="import-heading">Import a job link</h2>
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
-            <form onSubmit={async event => {
+            <form className="job-import-form" onSubmit={async event => {
               event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
               if (!importReady || busy) return;
               const next = await act("import", importFields);

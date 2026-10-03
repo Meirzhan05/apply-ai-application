@@ -1,7 +1,15 @@
 // Each dashboard has one serial refresh loop. Validators belong to that
 // dashboard only; private workspace responses never enter a shared cache.
-export function createWorkspaceRefresh<T>(onState: (state: T) => void) {
+export type WorkspaceConnection = "current" | "stale" | "auth-required";
+
+export function createWorkspaceRefresh<T>(onState: (state: T) => void, onConnection?: (status: WorkspaceConnection) => void) {
   let running = false;
+  let failures = 0;
+  let connection: WorkspaceConnection = "current";
+  const connected = () => { failures = 0; publishConnection("current"); };
+  const publishConnection = (next: WorkspaceConnection) => {
+    if (running && next !== connection) { connection = next; onConnection?.(next); }
+  };
   let etag: string | undefined;
   let state: T | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -22,10 +30,11 @@ export function createWorkspaceRefresh<T>(onState: (state: T) => void) {
         signal: abort.signal,
         headers: conditional && etag ? { "If-None-Match": etag } : {},
       });
-      if (response.status === 304 && state !== undefined) return state;
+      if (response.status === 304 && state !== undefined) { if (running && !abort.signal.aborted) connected(); return state; }
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "Could not load workspace.");
       if (running && !abort.signal.aborted) {
+        connected();
         etag = response.headers.get("etag") || undefined;
         state = body as T;
         onState(state);
@@ -41,7 +50,13 @@ export function createWorkspaceRefresh<T>(onState: (state: T) => void) {
   async function poll() {
     if (!running || document.hidden) return;
     try { await (pending || read(true)); }
-    catch { /* A transient failure is retried on the next visible poll. */ }
+    catch (error) {
+      if (running) {
+        failures++;
+        if (error instanceof Error && error.message === "AUTH_REQUIRED") publishConnection("auth-required");
+        else if (failures >= 3 && connection !== "auth-required") publishConnection("stale");
+      }
+    }
     finally { schedule(); }
   }
   const visibilityChanged = () => {
