@@ -118,7 +118,8 @@ export default function Dashboard() {
   const [lastFactCorrection, setLastFactCorrection] = useState<{ owner: string; applicationId: string; before: VerifiedFact[]; after: VerifiedFact[] } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
-  const [dismissReason, setDismissReason] = useState("");
+  const [dismissDraft, setDismissDraft] = useState<{ owner: string; jobId: string; reason: string } | null>(null);
+  const dismissReason = dismissDraft?.owner === data?.profile.id && dismissDraft?.jobId === dismissJobId ? dismissDraft.reason : "";
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; savedGroup?: boolean; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
@@ -965,7 +966,7 @@ export default function Dashboard() {
                   setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
-                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); if (dismissDraft?.owner !== data.profile.id || dismissDraft.jobId !== feedbackNotice.reasonFor) setDismissDraft(null); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
                   <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
                   <div className="feedback-details">
@@ -2110,7 +2111,8 @@ export default function Dashboard() {
               Reason
               <select
                 value={dismissReason}
-                onChange={(event) => setDismissReason(event.target.value)}
+                disabled={busy === "feedback"}
+                onChange={(event) => setDismissDraft({ owner: data.profile.id, jobId: dismissJobId, reason: event.target.value })}
               >
                 <option value="">No reason supplied</option>
                 <option>Wrong role</option>
@@ -2129,13 +2131,13 @@ export default function Dashboard() {
                   kind: "dismissed",
                   reason: dismissReason || undefined,
                 });
-                if (next) setDismissJobId(null);
+                if (next) { setDismissJobId(null); setDismissDraft(null); }
                 if (next) { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice({ message: dismissedRole ? `Dismissal reason updated for ${dismissedRole.title} at ${dismissedRole.company}.` : "Dismissal reason updated.", undo: feedbackNotice?.undo }); }
               }}
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <p role="alert">{displayError} {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}</p>}
+            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p>{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2207,12 +2209,12 @@ export default function Dashboard() {
               }
             }}>
               <label>Job URL (required)
-                <input id="import-job-url" type="url" required maxLength={2048} autoComplete="url" value={importFields.url} aria-describedby="import-url-help" aria-invalid={importTouched && Boolean(importCheck.error)} onBlur={() => setImportTouched(true)} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, url: event.target.value }); }} placeholder="https://company.com/careers/role" />
+                <input id="import-job-url" type="url" required disabled={busy === "import"} maxLength={2048} autoComplete="url" value={importFields.url} aria-describedby="import-url-help" aria-invalid={importTouched && Boolean(importCheck.error)} onBlur={() => setImportTouched(true)} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, url: event.target.value }); }} placeholder="https://company.com/careers/role" />
               </label>
               <p id="import-url-help" className="field-help" role="status">{importTouched && importCheck.error ? importCheck.error : importFields.url && !importCheck.error ? importCheck.manual ? "This link needs the company and job title entered below. Availability will need verification." : "We’ll check the provider for the job's details and availability." : "Use a complete HTTPS link to a public job posting."}</p>
               {!importCheck.error && importCheck.manual && <fieldset className="manual-import"><legend>Posting details</legend>
                 {(["company", "title", "location"] as const).map(key => <label key={key}>{key === "company" ? "Company (required)" : key === "title" ? "Job title (required)" : "Location (optional)"}
-                  <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
+                  <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
               {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
@@ -2223,6 +2225,7 @@ export default function Dashboard() {
               </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
               {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
                 {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
+                <button className="text-button" type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}

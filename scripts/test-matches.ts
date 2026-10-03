@@ -168,6 +168,14 @@ async function main() {
       await dismissDialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
       assert.equal(await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
       assert.doesNotMatch(await dismissDialog.getByRole("alert").innerText(), /AUTH_REQUIRED/);
+      await page.screenshot({ path: `.data/matches-reason-recovery-${label}.png`, fullPage: true });
+      await dismissDialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dismissDialog.getByRole("alert").waitFor({ state: "hidden" });
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "Location is not right", "In-dialog refresh preserves the reason draft");
+      await page.keyboard.press("Escape");
+      await dismissDialog.waitFor({ state: "hidden" });
+      await reasonLauncher.click();
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "Location is not right", "Reopening the same role preserves the reason draft");
       await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
       await dismissDialog.waitFor({ state: "hidden" });
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Location is not right");
@@ -301,6 +309,12 @@ async function main() {
       await dialog.getByRole("alert").getByText(/Posting unavailable/).waitFor();
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "Failed import preserves the entered link");
       assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
+      await page.screenshot({ path: `.data/matches-import-recovery-${label}.png`, fullPage: true });
+      await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dialog.getByRole("alert").waitFor({ state: "hidden" });
+      assert.equal(await url.inputValue(), "https://company.example/careers/role", "In-dialog refresh preserves the import link");
+      assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
+      assert.equal(await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).inputValue(), "Analyst");
       await page.keyboard.press("Escape");
       await jobButton("Save").click();
       await page.getByRole("button", { name: "Saved 1", exact: true }).click();
@@ -319,6 +333,8 @@ async function main() {
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();
       await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).waitFor();
       assert.equal(await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).isDisabled(), true);
+      assert.equal(await url.isDisabled(), true, "An in-flight import locks its submitted link");
+      for (const field of ["Company (required)", "Job title (required)", "Location (optional)"]) assert.equal(await dialog.getByRole("textbox", { name: field, exact: true }).isDisabled(), true, "An in-flight import must not erase new edits on completion");
       await dialog.waitFor({ state: "hidden" });
       const imported = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Analyst", exact: true }) });
       await imported.waitFor();
