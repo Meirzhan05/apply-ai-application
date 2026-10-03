@@ -2,6 +2,7 @@ import { z } from "zod";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { hashJson } from "@/lib/crypto";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import { meterModelResponse } from "@/lib/model-usage";
 import { ResumeDraftError } from "@/lib/resume-document";
 import type { ResumeLayoutFeedback } from "@/lib/resume-layout-feedback";
@@ -166,12 +167,12 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
     await verifyCurrentRun();
     try {
       const isRepair = repair !== "initial";
-      const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, isRepair ? "resume-repair" : "resume-generation", "gpt-6-sol", async () => {
+      const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, isRepair ? "resume-repair" : "resume-generation", DEFAULT_AI_MODEL, async () => {
         await verifyCurrentRun();
         if (isRepair) counts.repairAttempts++;
         counts.writerAttempts++;
         return client.responses.parse({
-        model: "gpt-6-sol", service_tier: "default", store: false,
+        model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
         input: [
           { role: "system", content: repair === "grounding" ? `${writerPrompt} This is a factual grounding repair. Use the exact findings to correct only the flagged bullet wording. Keep every source anchor, experience entry, section association, and non-flagged claim unchanged. For each sourceActivityPreservationChecks item, keep the same activity under the same source entry while correcting only unsupported qualifiers. Never substitute a different activity because the same broad confirmed fact can cite both.`
             : repair === "layout" ? `${writerPrompt} This is a layout fit repair, not a factual finding. Shorten only the single bullet identified by layoutFeedback so its existing wording fits its original page and region. Preserve the same work activity, object, result, and exact confirmed fact IDs. Keep every other source claim byte-for-byte unchanged. Do not move, delete, reorder, resize, reformat, or accuse any claim of being unsupported.` : writerPrompt },
@@ -204,11 +205,11 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       const auditClaims = inputClaims.map((claim) => ({ claimId: claim.anchorId, affectedText: claim.text, factIds: claim.factIds,
         sectionHeading: source.anchors.find((item) => item.id === claim.anchorId)?.sectionHeading,
         entryHeading: source.anchors.find((item) => item.id === claim.anchorId)?.entryHeading }));
-      const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", "gpt-6-luna", async () => {
+      const result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, async () => {
         await verifyCurrentRun();
         counts.checkerAttempts++;
         return client.responses.parse({
-        model: "gpt-6-luna", service_tier: "default", store: false,
+        model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
         input: [{ role: "system", content: auditPrompt }, { role: "user", content: JSON.stringify({ ...context, claims: auditClaims, sourceActivityPreservationChecks: preservationChecks }) }],
         text: { format: zodTextFormat(AuditSchema, "anchored_resume_grounding_audit") },
         }, { timeout: remaining() });
@@ -245,7 +246,7 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       ...(sourceLayout && layoutHash ? { sourceLayout, layoutHash } : {}),
       claims: claims.map(({ anchor, text, factIds }) => ({ anchorId: anchor.id, text, factIds })),
       edits: planEdits(claims),
-      grounding: { version: 1, writerAttempts: counts.writerAttempts, checkerAttempts: counts.checkerAttempts, repairAttempts: counts.repairAttempts, findings }, model: "gpt-6-sol",
+      grounding: { version: 1, writerAttempts: counts.writerAttempts, checkerAttempts: counts.checkerAttempts, repairAttempts: counts.repairAttempts, findings }, model: DEFAULT_AI_MODEL,
     };
     if (validateLayout) {
       let feedback: ResumeLayoutFeedback | undefined;

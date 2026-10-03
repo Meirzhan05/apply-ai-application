@@ -56,6 +56,8 @@ describe("structured resume grounding", () => {
     const drafted = await draftResumeDocument(profile, job, Date.now() + 60_000);
     expect(() => validateResumeDocument(profile, drafted)).not.toThrow();
     expect(mocks.parse).toHaveBeenCalledTimes(2);
+    expect(mocks.parse.mock.calls.map(([request]) => request.model)).toEqual(["gpt-6-luna", "gpt-6-luna"]);
+    expect(drafted.model).toBe("gpt-6-luna");
     expect(mocks.parse.mock.calls[0][0].input[0].content).toContain("untrusted data");
     expect(mocks.parse.mock.calls[1][0].model).toBe("gpt-6-luna");
     expect(mocks.parse.mock.calls[1][0].input[0].content).toContain("Uncertain support fails closed");

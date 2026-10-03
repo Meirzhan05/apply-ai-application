@@ -73,6 +73,8 @@ it("gives the writer full source context and saves an anchored, grounded edit pl
   const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000);
   const writerInput = JSON.parse(mocks.parse.mock.calls[0][0].input[1].content);
 
+  expect(mocks.parse.mock.calls.map(([request]) => request.model)).toEqual(["gpt-6-luna", "gpt-6-luna"]);
+  expect(plan.model).toBe("gpt-6-luna");
   expect(writerInput.sourceDocument.text).toBe(source.text);
   expect(writerInput.sourceDocument.anchors).toHaveLength(source.anchors.length);
   expect(writerInput.confirmedFacts.every((fact: { id: string }) => profile.facts.some((item) => item.id === fact.id && item.verified))).toBe(true);

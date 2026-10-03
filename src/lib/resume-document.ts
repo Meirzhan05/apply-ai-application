@@ -1,4 +1,5 @@
 import { meterModelResponse } from "@/lib/model-usage";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import OpenAI from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -138,7 +139,7 @@ function prepareWriterOutput(profile: Profile, parsed: unknown): ResumeDocument 
   value.experience.sort((a, b) => resumeDateRank(b.dates.text) - resumeDateRank(a.dates.text));
   [...value.education, ...value.experience, ...value.projects].forEach((entry) => entry.bullets.sort((a, b) => b.relevance - a.relevance));
   value.projects.sort((a, b) => Math.max(0, ...b.bullets.map((bullet) => bullet.relevance)) - Math.max(0, ...a.bullets.map((bullet) => bullet.relevance)));
-  let doc: ResumeDocument = { ...value, version: 1, templateVersion: "classic-1", layout: "standard", model: "gpt-6-sol", omitted: [], contentHash: "", evidenceHash: "" };
+  let doc: ResumeDocument = { ...value, version: 1, templateVersion: "classic-1", layout: "standard", model: DEFAULT_AI_MODEL, omitted: [], contentHash: "", evidenceHash: "" };
   const used = new Set(resumeFactIds(doc));
   doc.omitted = profile.facts.filter((fact) => fact.verified && !used.has(fact.id)).map((fact) => ({ text: fact.text, factIds: [fact.id], reason: "relevance" }));
   doc = sealResume(profile, doc);
@@ -279,10 +280,10 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     const timeout = remaining();
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
-      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, repair ? "resume-repair" : "resume-generation", "gpt-6-sol", async () => {
+      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, repair ? "resume-repair" : "resume-generation", DEFAULT_AI_MODEL, async () => {
         if (repair) counts.repairAttempts++;
         counts.writerAttempts++;
-        return client.responses.parse({ model: "gpt-6-sol", service_tier: "default", store: false,
+        return client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
           input: [{ role: "system", content: repair ? `${writerPrompt} This is a repair of the supplied currentDraft. Use the exact findings to correct, simplify, or remove only the unsupported wording they identify. Do not invent facts, turn original resume text into evidence, change unrelated supported claims, or delete existing employment experience. Keep the same employer associations and preserve facts and qualifiers. For each sourceActivityPreservationChecks item, keep the same work activity, object and result under the same experience entry while correcting only the unsupported qualifier. Do not replace it with another task just because the same broad confirmed fact cites both. If the activity cannot be corrected without inventing details, do not substitute a different activity.` : writerPrompt }, { role: "user", content: JSON.stringify(request) }],
           text: { format: zodTextFormat(ResumeDraftSchema, "structured_resume") } }, { timeout });
       });
@@ -301,9 +302,9 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     const claims = claimManifest(doc);
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
-      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", "gpt-6-luna", async () => {
+      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, async () => {
         counts.checkerAttempts++;
-        return client.responses.parse({ model: "gpt-6-luna", service_tier: "default", store: false,
+        return client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
           input: [{ role: "system", content: auditPrompt }, { role: "user", content: JSON.stringify({ ...context, claims,
             sourceActivityPreservationChecks: preservationChecks.map(({ sourceClaimId, experienceEntryId, originalClaimText, requiredInformation }) => ({ sourceClaimId, experienceEntryId, originalClaimText, requiredInformation })) }) }],
           text: { format: zodTextFormat(Check, "resume_grounding_audit") } }, { timeout });
