@@ -231,9 +231,9 @@ export default function Dashboard() {
   filtered.sort((a, b) => sort === "newest"
     ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
     : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
-  const matchesApplicationView = (app: Application) => {
+  const matchesApplicationView = (app: Application, query = applicationSearch, onlyReview = attentionOnly) => {
     const job = jobs.find(item => item.id === app.jobId);
-    return (!attentionOnly || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(applicationSearch.trim().toLowerCase());
+    return (!onlyReview || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(query.trim().toLowerCase());
   };
   const retainedApplication = applications.find(app => app.id === selected && !matchesApplicationView(app));
   const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id).sort((a, b) => applicationStages.indexOf(applicationStage(a.status)) - applicationStages.indexOf(applicationStage(b.status)));
@@ -1259,16 +1259,16 @@ export default function Dashboard() {
             </p>
             <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
-              <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { setSelected(null); setApplicationOutcome(null); setApplicationSearch(event.target.value); }} /></label>
+              <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { const query = event.target.value; setSelected(activeApp && matchesApplicationView(activeApp, query) ? activeApp.id : null); setApplicationOutcome(null); setApplicationSearch(query); }} /></label>
               <div className="application-filters" role="group" aria-label="Application collection">
-                <button type="button" aria-pressed={!attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(false)}>All applications ({applications.length})</button>
-                <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(null); setApplicationOutcome(null); setAttentionOnly(true); }}>Needs your review ({needsAction.length})</button>
+                <button type="button" aria-pressed={!attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(activeApp?.id ?? null); setApplicationOutcome(null); setAttentionOnly(false); }}>All applications ({applications.length})</button>
+                <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(activeApp && matchesApplicationView(activeApp, applicationSearch, true) ? activeApp.id : null); setApplicationOutcome(null); setAttentionOnly(true); }}>Needs your review ({needsAction.length})</button>
               </div>
               <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
             </div></details>}</div>
             {(applicationSearch.trim() || attentionOnly) && <div className="application-active-view" role="status">
               <span>{attentionOnly ? "Needs your review" : "All stages"}{applicationSearch.trim() && ` · Search: “${applicationSearch.trim()}”`} · {displayedApplications.length} of {applications.length} applications{retainedApplication && " · Current application kept in view until you choose another"}</span>
-              <button type="button" className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setApplicationSearch(""); setAttentionOnly(false); }}>Clear application filters</button>
+              <button type="button" className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(activeApp?.id ?? null); setApplicationOutcome(null); setApplicationSearch(""); setAttentionOnly(false); }}>Clear application filters</button>
             </div>}
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">

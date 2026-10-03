@@ -50,6 +50,13 @@ async function main() {
       assert.equal(await page.locator(".application-collection option").count(), 6);
       await page.getByText("Find or filter applications", { exact: true }).click();
       assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
+      await appSearch.fill("Employer 2");
+      await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
+      await appSearch.fill("");
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "Clearing search should preserve a still-matching selection");
+      await page.getByRole("button", { name: "Needs your review (2)", exact: true }).click();
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "A filter should preserve the current application when it still matches");
+      await page.getByRole("button", { name: "All applications (6)", exact: true }).click();
       await appSearch.fill("No such employer");
       await page.getByRole("heading", { name: "No applications match this view", exact: true }).waitFor();
       await page.getByRole("button", { name: "Show all applications", exact: true }).click();
