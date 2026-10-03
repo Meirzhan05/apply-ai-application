@@ -7,8 +7,10 @@ import { cancelBrowser } from "@/lib/browser-runner";
 import { dispatchUserQueue } from "@/lib/application-queue";
 import { resolveResourceHold, recordApplicationBlocker } from "@/lib/application-blockers";
 import { browserBudgetReservationId, releaseServiceBudget } from "@/lib/budget";
+import { withAccountOperation } from "@/lib/account-lifecycle";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_TASK_SECRET;
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Unauthorized", { status: 401 });
@@ -16,13 +18,15 @@ export async function POST(request: Request) {
   try { data = isDemo() ? [{ user_id: "demo-user" }] : await readAllAppStateOwners("user_id"); }
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Reconcile owner scan failed." }, { status: 500 }); }
   let marked = 0;
+  const errors: string[] = [];
   for (const row of data ?? []) {
+    try {
+    marked += await withAccountOperation(row.user_id, "maintenance", async () => {
     const closed = await mutateState(row.user_id, (current) => {
       const recovered = recoverStaleRuns(current);
       for (const app of recovered) current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Run needs review", detail: current.applications.find((item) => item.id === app.id)!.error! });
       return recovered;
     });
-    marked += closed.length;
     for (const app of closed) {
       try {
         await cancelBrowser({ ...app, browserSessionId: app.browserSessionId ?? app.browserReleasePending?.sessionId }, { strict: true });
@@ -97,6 +101,11 @@ export async function POST(request: Request) {
       if (!latest.applications.some((item) => item.browserReleasePending)) await dispatchUserQueue(row.user_id);
     }
     if (pendingReleases.length && !(await loadState(row.user_id)).applications.some((item) => item.browserReleasePending)) await dispatchUserQueue(row.user_id);
+    return closed.length;
+    }, "internal/reconcile");
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "Account reconciliation failed.");
+    }
   }
-  return Response.json({ marked });
+  return Response.json({ marked, errors }, { status: errors.length ? 207 : 200 });
 }

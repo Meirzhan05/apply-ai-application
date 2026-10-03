@@ -8,6 +8,7 @@ import { EssayReview } from "@/components/essay-review";
 import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
+import { AccountDeletionPanel } from "@/components/account-deletion";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
@@ -87,6 +88,8 @@ export default function Dashboard() {
   const feedbackReturnFocus = useRef<string | null>(null);
   const pendingSetupFocus = useRef<string | null>(null);
   const [importTouched, setImportTouched] = useState(false);
+  const [confirmDiscardImport, setConfirmDiscardImport] = useState(false);
+  const keepImportEditing = useRef<HTMLButtonElement>(null);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
   const [filterOptionsOpen, setFilterOptionsOpen] = useState(false);
@@ -115,6 +118,8 @@ export default function Dashboard() {
   const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
+
+  useEffect(() => { if (confirmDiscardImport) keepImportEditing.current?.focus(); }, [confirmDiscardImport]);
 
   const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData), []);
   const reload = useCallback(() => refresh.reload(), [refresh]);
@@ -305,7 +310,7 @@ export default function Dashboard() {
     if (busy) return;
     if (section === "applications" && (answersDirty || editingEssay !== null)) setPendingNavigation({ run });
     else run();
-  }, [busy, section, answersDirty, editingEssay]);
+  }, [busy, section, answersDirty, editingEssay, setPendingNavigation]);
   const navigateSection = (next: Section) => {
     if (next !== section) requestNavigation(() => setSection(next));
   };
@@ -318,7 +323,7 @@ export default function Dashboard() {
     setNotice("");
     setError("");
     setSection("applications");
-  }), [requestNavigation]);
+  }), [requestNavigation, setApplicationSearch, setAttentionOnly, setSelected, setAnswerEdits, setEditingEssay, setEssayDraft, setNotice, setError, setSection]);
   const switchApplication = (id: string) => { if (id !== activeApp?.id) openApplication(id, false); };
   useEffect(() => {
     if (section !== "applications") return;
@@ -631,6 +636,19 @@ export default function Dashboard() {
               </div>
   </>;
 
+  const signOut = async () => {
+    setBusy("signout");
+    try {
+      const { error: signOutError } = await browserSupabase().auth.signOut();
+      if (signOutError) throw signOutError;
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      setError("Could not sign out. Check your connection and try again.");
+      setBusy("");
+    }
+  };
+
   const nav: {
     key: Section;
     label: string;
@@ -679,7 +697,16 @@ export default function Dashboard() {
         </nav>
         <div className="sidebar-tools"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
         <button className="sidebar-more" popoverTarget="more-pages" aria-label="More pages"><Menu size={20} /><span>More</span></button>
-        <div id="more-pages" popover="auto" className="more-pages">{section === "matches" && <button popoverTarget="matches-activity">Agent activity</button>}<a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
+        <div id="more-pages" popover="auto" className="more-pages">
+          {section === "matches" && <button popoverTarget="matches-activity">Agent activity</button>}
+          <a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a>
+          {!data.profile.demo && <div className="responsive-account">
+            <p>Workspace: {data.profile.name || "Your profile"}</p>
+            <button onClick={() => { document.getElementById("more-pages")?.hidePopover(); navigateSection("settings"); }}>Account settings</button>
+            <button disabled={Boolean(busy)} onClick={signOut}>{busy === "signout" ? "Signing out…" : "Sign out"}</button>
+          </div>}
+        </div>
+        {!data.profile.demo && <button className="tablet-signout" disabled={Boolean(busy)} onClick={signOut} title={`Workspace: ${data.profile.name || "Your profile"}`}>{busy === "signout" ? "Signing out…" : "Sign out"}</button>}
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -690,12 +717,10 @@ export default function Dashboard() {
             {!data.profile.demo && (
               <button
                 className="signout"
-                onClick={async () => {
-                  await browserSupabase().auth.signOut();
-                  router.replace("/login");
-                }}
+                disabled={Boolean(busy)}
+                onClick={signOut}
               >
-                Sign out
+                {busy === "signout" ? "Signing out…" : "Sign out"}
               </button>
             )}
           </div>
@@ -859,7 +884,7 @@ export default function Dashboard() {
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
-                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /></summary>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
                   <div className="feedback-details">
                     {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
                     {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
@@ -1974,6 +1999,7 @@ export default function Dashboard() {
               </tbody></table>
               <p className="muted">Reserved costs are projections. Actual provider charges must be reconciled before beta expansion.</p>
             </section>}
+            {section === "settings" && <AccountDeletionPanel demo={data.profile.demo} />}
           </main>
         )}
       </div>
@@ -2064,10 +2090,10 @@ export default function Dashboard() {
         </WorkspaceDialog>
       )}
       {importOpen && (
-        <WorkspaceDialog labelledBy="import-heading" onClose={() => setImportOpen(false)}>
+        <WorkspaceDialog labelledBy="import-heading" onClose={() => { setConfirmDiscardImport(false); setImportOpen(false); }}>
             <button
               className="modal-close"
-              onClick={() => setImportOpen(false)}
+              onClick={() => { setConfirmDiscardImport(false); setImportOpen(false); }}
               aria-label="Close"
             >
               <X size={20} />
@@ -2075,7 +2101,7 @@ export default function Dashboard() {
             <h2 id="import-heading">Import a job link</h2>
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
             <form onSubmit={async event => {
-              event.preventDefault(); setImportTouched(true);
+              event.preventDefault(); setConfirmDiscardImport(false); setImportTouched(true);
               if (!importReady || busy) return;
               const next = await act("import", importFields);
               if (next) {
@@ -2090,16 +2116,20 @@ export default function Dashboard() {
               }
             }}>
               <label>Job URL (required)
-                <input type="url" required maxLength={2048} autoComplete="url" value={importFields.url} aria-describedby="import-url-help" aria-invalid={importTouched && Boolean(importCheck.error)} onBlur={() => setImportTouched(true)} onChange={event => setImportFields({ ...importFields, url: event.target.value })} placeholder="https://company.com/careers/role" />
+                <input id="import-job-url" type="url" required maxLength={2048} autoComplete="url" value={importFields.url} aria-describedby="import-url-help" aria-invalid={importTouched && Boolean(importCheck.error)} onBlur={() => setImportTouched(true)} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, url: event.target.value }); }} placeholder="https://company.com/careers/role" />
               </label>
               <p id="import-url-help" className="field-help" role="status">{importTouched && importCheck.error ? importCheck.error : importFields.url && !importCheck.error ? importCheck.manual ? "This link needs the company and job title entered below. Availability will need verification." : "We’ll check the provider for the job's details and availability." : "Use a complete HTTPS link to a public job posting."}</p>
               {!importCheck.error && importCheck.manual && <fieldset className="manual-import"><legend>Posting details</legend>
                 {(["company", "title", "location"] as const).map(key => <label key={key}>{key === "company" ? "Company (required)" : key === "title" ? "Job title (required)" : "Location (optional)"}
-                  <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => setImportFields({ ...importFields, [key]: event.target.value })} />
+                  <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
               <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
-              {Object.values(importFields).some(value => value.trim()) && <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setError(""); setImportOpen(false); }}>Discard draft</button>}
+              {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
+                <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
+                <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>
+                <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setConfirmDiscardImport(false); setError(""); setImportOpen(false); }}>Confirm discard</button>
+              </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
               {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
                 {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}

@@ -226,8 +226,21 @@ function canonicalBrowserGroups(records: BrowserUsageRecord[]): Array<{ records:
   for (const record of records) groups.set(browserSessionKey(record), [...(groups.get(browserSessionKey(record)) ?? []), record]);
   return [...groups.values()].map((group) => ({ records: group, period: browserCanonicalPeriod(group) }));
 }
+function excludeResolvedAllocationMarkers(records: BrowserUsageRecord[]): BrowserUsageRecord[] {
+  const runKey = (record: BrowserUsageRecord) => `${record.provider}:${record.runId}`;
+  const resolved = new Set(records.filter((record) =>
+    Boolean(record.sessionId) && (record.event === "created" || record.event === "stopped")
+      || record.event === "failed" && record.failure === "allocation_failed",
+  ).map(runKey));
+  return records.filter((record) => {
+    if (!resolved.has(runKey(record))) return true;
+    return record.event !== "allocation_started" && !(record.event === "failed" && record.failure === "allocation_failed");
+  });
+}
 async function ownerIdsForService(models: ModelUsageRecord[], browsers: BrowserUsageRecord[], lines: ServiceCostRecord[]): Promise<string[]> {
-  const ids = new Set([...models.map((record) => record.userId), ...browsers.map((record) => record.userId), ...lines.flatMap((line) => line.allocations.map((allocation) => allocation.userId))]);
+  // Erased account allocations remain as an accounting-only sentinel so
+  // service invoice totals stay intact. It is not an app_states owner UUID.
+  const ids = new Set([...models.map((record) => record.userId), ...browsers.map((record) => record.userId), ...lines.flatMap((line) => line.allocations.map((allocation) => allocation.userId).filter((ownerId) => ownerId !== "__deleted_account__"))]);
   if (isDemo()) ids.add("demo-user");
   else {
     for (let offset = 0; ; offset += 500) {
@@ -245,7 +258,7 @@ export async function costReport(ownerId: string, options: { service?: boolean; 
   const [lines, modelRecords, browserRecords] = await Promise.all([readServiceCosts(options.period), service ? readAllModelUsage() : readModelUsage(ownerId).then((report) => report.records), service ? readAllBrowserUsage() : readBrowserUsage(ownerId).then((report) => report.records)]);
   const period = options.period;
   const scopedModels = uniqueModelRecords(modelRecords).filter((record) => periodMatches(record.startedAt, period));
-  const canonicalBrowsers = canonicalBrowserGroups(browserRecords);
+  const canonicalBrowsers = canonicalBrowserGroups(excludeResolvedAllocationMarkers(browserRecords));
   const scopedBrowsers = canonicalBrowsers.filter((group) => periodMatches(group.period, period)).flatMap((group) => group.records);
   const ownerIds = service ? await ownerIdsForService(scopedModels, scopedBrowsers, lines) : [ownerId];
   const states = await Promise.all(ownerIds.map(async (id) => [id, await loadState(id)] as const));

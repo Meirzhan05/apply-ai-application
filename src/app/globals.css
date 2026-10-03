@@ -62,7 +62,10 @@ input, textarea { caret-color: var(--forest); }
 }
 .sidebar-tools { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 16px 24px; color: var(--forest); text-underline-offset: 4px; }
 .sidebar-tools a { display: flex; align-items: center; min-height: 44px; }
-.sidebar-more { display: none; }
+.sidebar-more, .tablet-signout { display: none; }
+.responsive-account { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; max-width: 240px; overflow-wrap: anywhere; }
+.responsive-account p { margin: 4px 0; font-size: 12px; }
+.discard-confirmation { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .more-pages { border: 1px solid var(--line); border-radius: 8px; background: var(--paper); padding: 8px 16px; color: var(--forest); box-shadow: 0 8px 24px #123d3220; }
 .more-pages a, .more-pages button { display: flex; min-height: 44px; align-items: center; text-underline-offset: 4px; }
 .more-pages button { border: 0; background: transparent; padding: 0; font: inherit; color: inherit; }
@@ -511,7 +514,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .feedback-notice { display: flex; align-items: center; gap: 8px; padding: 6px 12px; margin: 12px 0; background: var(--tint); color: var(--forest); line-height: 1.5; font-size: 13px; }
 .feedback-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .feedback-notice > button, .feedback-options { flex: none; }
-.feedback-options summary { min-width: 44px; min-height: 44px; display: grid; place-items: center; cursor: pointer; list-style: none; }
+.feedback-options summary { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; list-style: none; }
 .feedback-options summary::-webkit-details-marker { display: none; }
 .feedback-details { position: absolute; top: calc(100% + 4px); right: 0; width: min(300px, calc(100vw - 32px)); padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); max-height: 40vh; overflow-y: auto; overflow-wrap: anywhere; }
 .feedback-details p { margin: 0 0 8px; }
@@ -1477,6 +1480,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   }
 }
 @media (max-width: 900px) {
+  .tablet-signout { display: block; min-height: 44px; margin: 12px 7px; padding: 8px 4px; border: 0; background: transparent; color: var(--forest); font-size: 12px; }
   .sidebar-tools { padding: 8px; gap: 8px; font-size: 11px; overflow-wrap: anywhere; }
   .sidebar {
     width: 100px;
@@ -1533,6 +1537,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   }
 }
 @media (max-width: 650px) {
+  .tablet-signout { display: none; }
   .verification-note,
   .verification-note button,
   .verification-note a {

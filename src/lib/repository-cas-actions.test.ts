@@ -13,6 +13,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const db = {
+  async rpc(name: string, args: Record<string, unknown>) {
+    if (name === "acquire_account_operation" || name === "release_account_operation") return { data: true, error: null };
+    if (name !== "save_account_state") throw new Error(`Unexpected RPC ${name}`);
+    if (mocks.conflicts > 0) { mocks.conflicts -= 1; return { data: null, error: null }; }
+    if (args.p_expected_revision !== mocks.revision) return { data: null, error: null };
+    mocks.revision += 1;
+    mocks.state = structuredClone(args.p_data as ReturnType<typeof initialDemoState>);
+    mocks.writes.push({ revision: mocks.revision, data: JSON.stringify(mocks.state) });
+    return { data: mocks.revision, error: null };
+  },
   from(table: string) {
     if (table !== "app_states") throw new Error(`Unexpected table ${table}`);
     return {
