@@ -23,7 +23,7 @@ async function main() {
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3127");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
       if (prepared) {
-        await page.getByText("Find or filter applications", { exact: true }).click();
+        await page.getByText("Find applications", { exact: true }).click();
         await page.getByRole("button", { name: "Needs your review (1)", exact: true }).click();
       }
       const cancel = page.getByRole("button", { name: "Cancel this application", exact: true });

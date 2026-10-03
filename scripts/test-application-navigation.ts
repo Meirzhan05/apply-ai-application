@@ -39,7 +39,7 @@ async function main() {
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
       assert.equal(await page.getByText("Review your materials before the agent fills a form. Review the filled form before submission.", { exact: true }).isVisible(), true, "Phone entry must retain the two-stage approval explanation");
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      await page.getByText("Find applications", { exact: true }).click();
       const appSearch = page.getByRole("searchbox", { name: "Search applications", exact: true });
       await appSearch.fill("Employer 2");
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
@@ -50,7 +50,7 @@ async function main() {
       assert.match(await page.locator(".application-active-view").innerText(), /Search: “Employer 2” · 1 of 6 applications/);
       await page.getByRole("button", { name: "Clear application filters", exact: true }).click();
       assert.equal(await page.locator(".application-collection option").count(), 6);
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      await page.getByText("Find applications", { exact: true }).click();
       assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
       const order = page.getByRole("combobox", { name: "Order within stages", exact: true });
       assert.ok((await order.boundingBox())!.height >= 44, "Application ordering needs a usable touch target");
@@ -58,7 +58,7 @@ async function main() {
       assert.equal(await page.locator("#application-choice option").first().getAttribute("value"), other.id, "Recent activity orders applications within their stage");
       assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "Changing order must retain the selected employer");
       await page.reload();
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      await page.getByText("Find applications", { exact: true }).click();
       assert.equal(await order.inputValue(), "recent", "Application order survives reload");
       await order.selectOption("stage");
       await appSearch.fill("Employer 2");

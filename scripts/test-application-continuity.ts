@@ -28,7 +28,7 @@ async function main() {
       });
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      await page.getByText("Find applications", { exact: true }).click();
       await page.getByRole("button", { name: "Needs your review (2)", exact: true }).click();
       const approve = page.getByRole("button", { name: "Approve materials for form filling", exact: true });
       await approve.focus(); await approve.press("Enter");

@@ -1863,7 +1863,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .applications-workspace .topbar { display: none; }
   .applications-panel { padding-top: 18px; }
   .applications-panel > .subheading { font-size: 14px; line-height: 1.6; }
-  .applications-panel .app-layout { margin-top: 16px; gap: 20px; }
+  .applications-panel .app-layout { margin-top: 16px; gap: 16px; }
   .applications-panel .application-utilities { gap: 0 16px; }
   .applications-panel .application-progress { margin: 12px 0; }
   .applications-panel .detail-head h2 { font-size: 24px; }

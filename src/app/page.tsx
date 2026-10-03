@@ -1290,7 +1290,7 @@ export default function Dashboard() {
               {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review your materials before the agent fills a form. Review the filled form before submission."}
             </p>
             <div className="application-utilities"><ApplicationHelp />
-            {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
+            {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find applications</summary><div className="application-tools">
               <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { const query = event.target.value; setSelected(activeApp && matchesApplicationView(activeApp, query) ? activeApp.id : null); setApplicationOutcome(null); setApplicationSearch(query); }} /></label>
               <label htmlFor="application-order">Order within stages<select id="application-order" value={applicationOrder} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { setSelected(activeApp?.id ?? null); setApplicationOrder(event.target.value === "recent" ? "recent" : "stage"); }}><option value="stage">Original order</option><option value="recent">Recent activity</option></select></label>
               <div className="application-filters" role="group" aria-label="Application collection">
