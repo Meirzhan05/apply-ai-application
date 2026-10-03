@@ -201,6 +201,7 @@ async function main() {
       await page.getByRole("button", { name: "Show any fit in this collection", exact: true }).click();
       await jobButton("Unsave").click();
       await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
+      assert.equal(await page.locator("#matches-heading").evaluate(element => element === document.activeElement), true, "Unsave of the last Saved role hands focus to the heading");
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
       await jobButton("Save").click();
       await jobButton("Unsave").waitFor();
@@ -218,6 +219,7 @@ async function main() {
       assert.equal(await page.getByRole("article").count(), 1);
       await jobButton("Restore role").click();
       await page.getByRole("heading", { name: "No dismissed roles", exact: true }).waitFor();
+      assert.equal(await page.locator("#matches-heading").evaluate(element => element === document.activeElement), true, "Restore of the last Dismissed role hands focus to the heading");
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
       assert.equal(await page.getByRole("article").count(), 3);
       await page.getByRole("button", { name: "Close feedback message", exact: true }).click();
@@ -307,6 +309,39 @@ async function main() {
       await page.getByRole("button", { name: /^Any fit / }).click();
       await query.fill("");
       await page.getByRole("combobox", { name: "Sort roles" }).selectOption("relevant");
+      await page.evaluate(owner => sessionStorage.removeItem(`apply-ai:matches:${owner}`), fixture.profile.id);
+      for (const kind of ["saved", "dismissed"] as const) {
+        fixture = publicState(structuredClone(demoState));
+        fixture.jobs.forEach(job => updateJobFeedback(fixture, { jobId: job.id, kind }));
+        await page.reload();
+        await page.getByRole("button", { name: kind === "saved" ? "Saved 3" : "Dismissed 3", exact: true }).click();
+        const nextTitle = await page.getByRole("article").nth(2).getByRole("heading").innerText();
+        await page.getByRole("article").nth(1).getByRole("button", { name: kind === "saved" ? /^Unsave / : /^Restore role / }).click();
+        await page.waitForFunction(() => document.querySelectorAll(".job-row").length === 2);
+        assert.equal(await page.getByRole("article").filter({ has: page.getByRole("heading", { name: nextTitle, exact: true }) }).evaluate(element => element === document.activeElement), true, `${kind} middle-row removal hands focus to the next role`);
+        for (const remaining of [1, 0]) {
+          await page.getByRole("article").first().getByRole("button", { name: kind === "saved" ? /^Unsave / : /^Restore role / }).click();
+          await page.waitForFunction(count => document.querySelectorAll(".job-row").length === count, remaining);
+        }
+        assert.equal(await page.locator("#matches-heading").evaluate(element => element === document.activeElement), true);
+        await page.evaluate(owner => sessionStorage.removeItem(`apply-ai:matches:${owner}`), fixture.profile.id);
+      }
+      fixture = publicState(structuredClone(demoState));
+      const assessment = fixture.matches.find(item => item.jobId === intern.id)!.assessment;
+      fixture.jobs = Array.from({ length: 12 }, (_, index) => ({ ...intern, id: `feedback-qa-${index}`, company: `QA Company ${index}`, title: `QA Role ${index}` }));
+      fixture.matches = fixture.jobs.map(job => ({ jobId: job.id, assessment }));
+      fixture.feedback = [];
+      await page.reload();
+      await page.getByRole("article").last().getByRole("button", { name: /^Dismiss / }).click();
+      await page.waitForFunction(() => document.querySelectorAll(".job-row").length === 11);
+      const undoBox = await page.getByRole("button", { name: "Undo dismissal", exact: true }).boundingBox();
+      assert.ok(undoBox && undoBox.y >= (label === "mobile" ? 78 : 0) && undoBox.y + undoBox.height <= height, "Lower-list Undo remains visible without scrolling back");
+      await page.screenshot({ path: `.data/matches-feedback-${label}.png` });
+      await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+      await page.waitForFunction(() => document.querySelectorAll(".job-row").length === 12);
+      assert.equal(await page.getByRole("article").last().evaluate(element => element === document.activeElement), true, "Undo returns focus to the restored role");
+      await page.getByRole("button", { name: "Close feedback message", exact: true }).click();
+      assert.equal(await page.getByRole("article").last().evaluate(element => element === document.activeElement), true, "Closing feedback retains role context");
       await page.evaluate(owner => sessionStorage.removeItem(`apply-ai:matches:${owner}`), fixture.profile.id);
       fixture = publicState(structuredClone(demoState));
       await page.reload();
