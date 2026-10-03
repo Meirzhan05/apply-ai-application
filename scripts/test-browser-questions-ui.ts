@@ -85,6 +85,8 @@ async function main() {
       await dialog.screenshot({ path: `.data/questions/error-${name}.png` });
       await send.click(); await dialog.waitFor({ state: "hidden" });
       await page.getByRole("heading", { name: "Final form review" }).waitFor();
+      await page.getByRole("button", { name: "Approve for submission", exact: true }).waitFor();
+      await page.getByText('Approving authorizes this exact form for submission. It does not submit yet; next, you choose “Submit application once.”', { exact: true }).waitFor();
       assert.equal(app.browserSessionId, "synthetic-questions-session"); assert.equal(app.status, "final_review");
       assert.equal(app.approvals.some(approval => approval.kind === "submit"), false);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

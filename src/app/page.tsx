@@ -1316,6 +1316,7 @@ export default function Dashboard() {
                           </p>
                           {activeApp.status === "final_review" && (
                             <>
+                            <p className="approval-explanation">Approving authorizes this exact form for submission. It does not submit yet; next, you choose “Submit application once.”</p>
                             {activeApp.form.readyToSubmit === false && <div className="packet-readiness" role="status">
                               <h4>Complete the employer form before approving</h4>
                               <ul>{(activeApp.form.blockers?.length ? activeApp.form.blockers : ["Some employer fields still need attention. Check the browser, then refresh the form state."]).map((blocker, index) => <li key={index}>{blocker}</li>)}</ul>
@@ -1341,7 +1342,7 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                Approve this form
+                                Approve for submission
                               </button>
                             </div>
                             </>
@@ -1349,8 +1350,7 @@ export default function Dashboard() {
                           {activeApp.status === "approved_to_submit" && (
                             <div className="action-row">
                               <p>
-                                Final approval recorded. This will click submit
-                                once.
+                                Final approval recorded. The button below submits this application to {appJob?.company ?? "the employer"} once.
                               </p>
                               <button
                                 className="dark-button"
