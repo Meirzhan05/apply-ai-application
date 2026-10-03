@@ -80,7 +80,7 @@ async function main() {
       const help = page.locator("#applications-help");
       const helpSearch = help.getByRole("searchbox", { name: "Find help for a task", exact: true });
       assert.equal(await help.locator(".help-task-group").count(), 3);
-      for (const query of ["sources", "source facts", "submission"]) {
+      for (const query of ["sources", "source facts", "submission", "shortcuts", "keyboard", "keys"]) {
         await helpSearch.fill(query);
         assert.equal(await help.getByText("No matching topic.", { exact: false }).count(), 0, `Suggested query ${query} must find guidance`);
         assert.ok(await help.locator(".help-task-group details").count() > 0);
