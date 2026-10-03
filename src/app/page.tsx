@@ -1285,7 +1285,7 @@ export default function Dashboard() {
           <main className="wide-panel applications-panel">
             <h1>Your applications</h1>
             <p className="subheading">
-              {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
+              {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review your materials before the agent fills a form. Review the filled form before submission."}
             </p>
             <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">

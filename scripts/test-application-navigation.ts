@@ -37,6 +37,7 @@ async function main() {
       });
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
+      assert.equal(await page.getByText("Review your materials before the agent fills a form. Review the filled form before submission.", { exact: true }).isVisible(), true, "Phone entry must retain the two-stage approval explanation");
       await page.getByText("Find or filter applications", { exact: true }).click();
       const appSearch = page.getByRole("searchbox", { name: "Search applications", exact: true });
       await appSearch.fill("Employer 2");
