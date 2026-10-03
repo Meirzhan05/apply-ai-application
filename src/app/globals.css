@@ -1669,6 +1669,14 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .resume-view-controls button[aria-pressed="true"] { background: var(--forest); color: white; border-color: var(--forest); }
 .structured-resume-review [hidden] { display: none; }
 .individual-claims { margin: 16px 0 0; }
+.correction-claim { font-weight: 600; color: var(--forest); }
+.correction-facts .fact-row { flex-direction: column; align-items: stretch; gap: 8px; }
+.correction-facts .fact-correction-input { width: 100%; min-height: 96px; }
+.correction-facts .checkline { display: flex; align-items: center; min-height: 44px; }
+.workspace-dialog .text-button { display: inline-flex; align-items: center; min-height: 44px; }
+.materials-update { padding: 20px 0; margin-bottom: 24px; border-bottom: 1px solid var(--line); scroll-margin-top: 100px; }
+.materials-update h3 { margin: 0 0 8px; }
+.materials-update p { max-width: 65ch; line-height: 1.6; }
 
 /* Reviewed documents support the current application task. */
 .packet-reference { border-top: 1px solid var(--line); margin: 24px 0; padding-top: 16px; }

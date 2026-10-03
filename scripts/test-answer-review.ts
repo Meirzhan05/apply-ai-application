@@ -129,12 +129,25 @@ async function main() {
       assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
 
       await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
+      const corrections = page.getByRole("dialog", { name: "Correct the source facts", exact: true });
       const factInput = page.getByLabel(`Correct source fact ${fact.id}`, { exact: true });
+      assert.equal(await corrections.locator("textarea").count(), 1, "A narrow correction must show only the selected source fact");
+      assert.equal(await page.getByRole("heading", { name: "Your profile", exact: true }).count(), 0);
+      const unrelatedFacts = structuredClone(state.profile.facts.filter(item => item.id !== fact.id));
+      await factInput.fill("Discarded fact correction");
+      await corrections.getByRole("button", { name: "Cancel corrections", exact: true }).click();
+      assert.equal(state.profile.facts.find(item => item.id === fact.id)?.text, fact.text);
+      await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
+      assert.equal(await factInput.inputValue(), fact.text);
       await factInput.fill("Analyzed survey data in my Python coursework project");
       assert.equal(await page.locator(".fact-row").filter({ has: factInput }).getByRole("checkbox").isChecked(), false);
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
-      await page.getByText("Source facts saved. Rebuild the resume and review it before approving.", { exact: true }).waitFor();
+      await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
+      assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
+      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).waitFor();
+      assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
       assert.equal(app.approvals.length, 0);
       assert.deepEqual(failures, []);
       console.log(`PASS ${label}: editable essay with preserved original, fresh confirmation, contextual fact correction, separate approval, prerequisite guidance`);
