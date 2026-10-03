@@ -22,7 +22,7 @@ import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView }
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
-import { discoveryStatus } from "@/lib/discovery-status";
+import { checkAge, discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
@@ -314,6 +314,11 @@ export default function Dashboard() {
     const timer = window.setTimeout(() => updateBrowserClock(value => value + 1), Math.min(expires - Date.now() + 20, 2_147_483_647));
     return () => window.clearTimeout(timer);
   }, [activeApp?.browserSessionId, activeApp?.browserSessionExpiresAt]);
+  useEffect(() => {
+    if (section !== "matches" || data?.profile.demo || !data?.personalSearch?.completedAt) return;
+    const timer = window.setInterval(() => updateBrowserClock(value => value + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, [section, data?.profile.demo, data?.personalSearch?.completedAt]);
   useEffect(() => {
     if (!answersDirty && editingEssay === null) return;
     const protectDraft = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -806,7 +811,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${relative(data.personalSearch.completedAt)}` : "Personal search"}</span>
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${checkAge(data.personalSearch.completedAt)}` : "Personal search"}</span>
                   </p>
                 </div>
                 <div className="matches-heading-actions">
@@ -1149,6 +1154,7 @@ export default function Dashboard() {
               </div>
               <details className="search-status">
                 <summary>Search status · {data.lastRefreshAt ? `workspace updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
+              {!data.profile.demo && data.personalSearch?.completedAt && Number.isFinite(Date.parse(data.personalSearch.completedAt)) && <p>Personal search completed <time dateTime={data.personalSearch.completedAt}>{new Date(data.personalSearch.completedAt).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}</time>.</p>}
               {!data.profile.demo && data.personalSearch?.status === "complete" && !emptyPersonalView && personalStatus}
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
