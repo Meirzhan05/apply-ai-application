@@ -29,6 +29,7 @@ async function main() {
     for (const [label, width, height] of [["desktop", 1440, 1000], ["mobile", 390, 844]] as const) {
       await page.setViewportSize({ width, height });
       await page.goto(origin);
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
       await page.locator(".fit-evidence summary").click();
       const reasons = page.locator(".match-reasons");
       await reasons.getByText(gap, { exact: true }).waitFor();
