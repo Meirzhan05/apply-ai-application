@@ -150,8 +150,7 @@ async function main() {
       await dismissLauncher.click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, undefined, "Quick dismissal must not invent a reason");
-      await page.locator(".feedback-options summary").click();
-      const reasonLauncher = page.getByRole("button", { name: "Add a reason (optional)", exact: true });
+      const reasonLauncher = page.getByRole("button", { name: "Add reason", exact: true });
       await reasonLauncher.click();
       const dismissDialog = page.getByRole("dialog", { name: "Add a dismissal reason" });
       await dismissDialog.waitFor();

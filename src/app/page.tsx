@@ -965,11 +965,11 @@ export default function Dashboard() {
                   setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
-                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>{feedbackNotice.reasonFor ? "Add reason" : "Details"}</span></summary>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
                   <div className="feedback-details">
                     {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
-                    {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
                     {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
                     {!feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
                   </div>
