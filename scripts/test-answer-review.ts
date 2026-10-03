@@ -118,7 +118,12 @@ async function main() {
       assert.equal(confirmations, 1);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), false);
       assert.equal(app.approvals.length, 0);
-      await page.getByRole("button", { name: "Edit wording", exact: true }).click();
+      const editWording = page.getByRole("button", { name: "Edit wording", exact: true });
+      await editWording.focus(); await editWording.press("Enter");
+      assert.equal(await essayInput.evaluate(element => element === document.activeElement), true, "Keyboard editing must enter the textarea");
+      await page.getByRole("button", { name: "Cancel editing", exact: true }).click();
+      assert.equal(await editWording.evaluate(element => element === document.activeElement), true, "Cancellation must restore the editing launcher");
+      await editWording.press("Enter");
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await essayInput.fill("Discard this essay before correcting a fact.");

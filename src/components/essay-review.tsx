@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ScreeningAnswer, VerifiedFact } from "@/lib/types";
 
 export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange, editing: controlledEditing, error }: {
@@ -14,10 +14,18 @@ export function EssayReview({ answer, facts, inputId, editable, blocked, onSave,
   const editing = controlledEditing ?? localEditing;
   const setEditing = (value: boolean) => { setLocalEditing(value); onEditingChange?.(value); };
   const [text, setText] = useState(answer.answer);
+  const editor = useRef<HTMLTextAreaElement>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(editing);
+  useEffect(() => {
+    if (editing) editor.current?.focus();
+    else if (wasEditing.current) editButton.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
   const revision = answer.userRevision;
   const sourceIds = revision?.originalFactIds ?? answer.factIds;
   return <div className="essay-review">
-    <textarea id={inputId} readOnly={!editing} disabled={blocked} value={editing ? text : answer.answer}
+    <textarea ref={editor} id={inputId} readOnly={!editing} disabled={blocked} value={editing ? text : answer.answer}
       maxLength={4000} rows={5} onChange={(event) => { setText(event.target.value); onDraftChange?.(event.target.value); }} />
     <p className="essay-attribution">{revision ? "Edited by you · " : "AI essay · "}{answer.confirmedAt ? "confirmed by you" : "your confirmation needed"}</p>
     {editing ? <>
@@ -27,7 +35,7 @@ export function EssayReview({ answer, facts, inputId, editable, blocked, onSave,
           onClick={async () => { if (await onSave(text)) setEditing(false); }}>Save essay revision</button>
         <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(false); }}>Cancel editing</button>
       </div>
-    </> : editable && <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(true); }}>Edit wording</button>}
+    </> : editable && <button ref={editButton} type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(true); }}>Edit wording</button>}
     {error && <p className="application-save-error" role="alert">{error} Your wording is preserved. Try saving again or cancel editing.</p>}
     <details className="essay-evidence">
       <summary aria-label={`${revision ? "Original draft and source facts" : "Source facts"} for: ${answer.question}`}>{revision ? "Original AI draft and source facts" : "Facts used in this essay"}</summary>
