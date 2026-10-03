@@ -71,6 +71,7 @@ async function main() {
       await page.keyboard.press("k");
       await page.getByRole("heading", { name: "Application role 1", exact: true }).waitFor();
       await page.keyboard.press("/");
+      await page.waitForFunction(() => document.activeElement?.id === "application-search");
       assert.equal(await appSearch.evaluate(element => element === document.activeElement), true);
       await appSearch.fill("j");
       assert.equal(await appSearch.inputValue(), "j", "Shortcuts must pause while typing");

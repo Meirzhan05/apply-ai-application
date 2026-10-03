@@ -257,8 +257,11 @@ export default function Dashboard() {
     const outcome = applicationOutcome?.id === activeApp?.id ? document.getElementById(`application-outcome-${activeApp?.id}`) : null;
     const heading = pendingApplicationFocus.current === activeApp?.id ? document.getElementById(`application-heading-${activeApp?.id}`) : null;
     if (!outcome && !heading) return;
-    pendingApplicationFocus.current = null;
-    const frame = requestAnimationFrame(() => (outcome ?? heading)?.focus());
+    const frame = requestAnimationFrame(() => {
+      if (!outcome && pendingApplicationFocus.current !== activeApp?.id) return;
+      pendingApplicationFocus.current = null;
+      (outcome ?? heading)?.focus();
+    });
     return () => cancelAnimationFrame(frame);
   }, [busy, section, activeApp?.id, applicationOutcome]);
   useEffect(() => {
@@ -318,7 +321,7 @@ export default function Dashboard() {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
-      if (event.key === "/") { event.preventDefault(); searchInput.current?.focus(); }
+      if (event.key === "/") { event.preventDefault(); pendingApplicationFocus.current = null; searchInput.current?.focus(); }
       if (event.key === "?") {
         event.preventDefault();
         const help = document.getElementById("matches-keyboard-help") as HTMLDetailsElement | null;
@@ -380,8 +383,8 @@ export default function Dashboard() {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
-      if (event.key === "/") { event.preventDefault(); const tools = document.getElementById("application-collection-tools") as HTMLDetailsElement | null; if (tools) tools.open = true; applicationSearchInput.current?.focus(); }
-      if (event.key === "?") { event.preventDefault(); const help = document.getElementById("applications-help") as HTMLDetailsElement | null; if (help) { help.open = true; help.querySelector<HTMLInputElement>("input")?.focus(); } }
+      if (event.key === "/") { event.preventDefault(); pendingApplicationFocus.current = null; const tools = document.getElementById("application-collection-tools") as HTMLDetailsElement | null; if (tools) tools.open = true; applicationSearchInput.current?.focus(); }
+      if (event.key === "?") { event.preventDefault(); pendingApplicationFocus.current = null; const help = document.getElementById("applications-help") as HTMLDetailsElement | null; if (help) { help.open = true; help.querySelector<HTMLInputElement>("input")?.focus(); } }
       if (event.key === "j" || event.key === "k") {
         const current = displayedApplications.findIndex(app => app.id === activeApp?.id);
         const next = current + (event.key === "j" ? 1 : -1);
