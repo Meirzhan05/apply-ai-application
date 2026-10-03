@@ -19,6 +19,7 @@ import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput } from "@/lib/import-input";
+import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
@@ -79,6 +80,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
+  const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -164,6 +166,7 @@ export default function Dashboard() {
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
+  const hasCurrentBrowser = browserSessionAvailable(activeApp);
   const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
   const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
@@ -220,6 +223,13 @@ export default function Dashboard() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [section]);
+  useEffect(() => {
+    const expires = Date.parse(activeApp?.browserSessionExpiresAt ?? "");
+    if (!activeApp?.browserSessionId || !Number.isFinite(expires) || expires <= Date.now()) return;
+    const timer = window.setTimeout(() => updateBrowserClock(value => value + 1), Math.min(expires - Date.now() + 20, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [activeApp?.browserSessionId, activeApp?.browserSessionExpiresAt]);
+
   const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const retryWorkspace = async () => {
@@ -1130,15 +1140,15 @@ export default function Dashboard() {
                         <CircleHelp size={20} />
                         <div>
                           <strong>Finish employer verification</strong>
-                          <p>The employer opened a CAPTCHA after your approved Submit click. Complete it in the browser below, then check the result. Do not click Submit again.</p>
+                          <p>{hasCurrentBrowser ? "The employer opened a CAPTCHA after your approved Submit click. Complete it in the browser below, then check the result. Do not click Submit again." : "The verification browser session ended. Check the employer confirmation or your email, then check the saved result. Do not start another submission while this attempt is unconfirmed."}</p>
                           <div className="action-row">
                             <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("checkSubmissionResult", { applicationId: activeApp.id })}>
                               {busy === "checkSubmissionResult" ? "Checking confirmation…" : "I’m done · check result"}
                             </button>
-                            {activeApp.browserLiveUrl && <a className="text-button" href={activeApp.browserLiveUrl} target="_blank" rel="noreferrer">Open verification browser ↗</a>}
+                            {hasCurrentBrowser && activeApp.browserLiveUrl && <a className="text-button" href={activeApp.browserLiveUrl} target="_blank" rel="noreferrer">Open verification browser ↗</a>}
                             <button className="text-button" disabled={Boolean(busy)} onClick={() => act("stopSubmissionVerification", { applicationId: activeApp.id })}>Stop verification</button>
                           </div>
-                          <p className="muted">Checking reads the existing attempt; it never submits again.{activeApp.browserSessionExpiresAt && ` Browser available until ${new Date(activeApp.browserSessionExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}</p>
+                          <p className="muted">Checking reads the existing attempt; it never submits again.{hasCurrentBrowser && activeApp.browserSessionExpiresAt && ` Browser available until ${new Date(activeApp.browserSessionExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}</p>
                           {activeApp.confirmation && !activeApp.confirmation.includes("opened a CAPTCHA") && <p>{activeApp.confirmation}</p>}
                         </div>
                       </div>
@@ -1151,18 +1161,18 @@ export default function Dashboard() {
                     )}
                     {!activeAppIsAutomatic && activeApp.status === "needs_user_action" && (
                       <>
-                      {activeApp.browserSessionId && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
+                      {hasCurrentBrowser && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
                         <p>The employer’s question headings need to be read again before you answer. Your browser and packet are saved.</p>
                         <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.browserQuestionRun)} onClick={() => act("resumeBrowser", { applicationId: activeApp.id })}>Refresh questions</button>
-                      </div> : activeApp.browserSessionId && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
+                      </div> : hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
                       <div className="step-card">
-                        <h3>{!activeApp.browserSessionId ? "Start a fresh browser session" : browserTakeoverReasons(activeApp.form).length ? "Browser help needed" : "Your browser is saved"}</h3>
-                        {browserTakeoverReasons(activeApp.form).map((blocker) => <p key={blocker}>{blocker}</p>)}
+                        <h3>{!hasCurrentBrowser ? activeApp.browserSessionId ? "Your browser session ended" : "Start a fresh browser session" : browserTakeoverReasons(activeApp.form).length ? "Browser help needed" : "Your browser is saved"}</h3>
+                        {hasCurrentBrowser && browserTakeoverReasons(activeApp.form).map((blocker) => <p key={blocker}>{blocker}</p>)}
                         <p>
-                          {!activeApp.browserSessionId ? "Your packet is saved. Review it and approve a fresh browser session to continue." : browserTakeoverReasons(activeApp.form).length ? "Complete the browser steps above, then refresh the form for review." : hasUnreadableQuestionLabels(activeApp.form) ? "Refresh the questions above to continue in this browser." : "You can inspect the browser at any time. Use the questions above to let the agent continue filling."}
+                          {!hasCurrentBrowser ? "Your application materials are saved. Review them, then approve a new browser session to continue. Nothing will be submitted by restarting." : browserTakeoverReasons(activeApp.form).length ? "Complete the browser steps above, then refresh the form for review." : hasUnreadableQuestionLabels(activeApp.form) ? "Refresh the questions above to continue in this browser." : "You can inspect the browser at any time. Use the questions above to let the agent continue filling."}
                         </p>
-                        {activeApp.browserLiveUrl && (
+                        {hasCurrentBrowser && activeApp.browserLiveUrl && (
                           <a
                             className="dark-button inline"
                             href={activeApp.browserLiveUrl}
@@ -1184,8 +1194,9 @@ export default function Dashboard() {
                             Generate cover letter for review
                           </button>
                         )}
-                        {activeApp.browserSessionId && <button
+                        {hasCurrentBrowser && <button
                           className="outline-action"
+                          disabled={Boolean(busy)}
                           onClick={() =>
                             act("resumeBrowser", {
                               applicationId: activeApp.id,
@@ -1194,7 +1205,7 @@ export default function Dashboard() {
                         >
                           Refresh form state
                         </button>}
-                        <button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review packet for a new browser session</button>
+                        {hasCurrentBrowser ? <details className="browser-restart-tools"><summary>Restart this browser instead</summary><p className="muted">This closes the current session. You will review your saved materials and approve another form fill before continuing.</p><button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review materials for a new session</button></details> : <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>{busy === "restartBrowser" ? "Opening saved materials…" : "Review packet for a new browser session"}</button>}
                       </div>
                       </>
                     )}
@@ -1360,14 +1371,14 @@ export default function Dashboard() {
                         </div>
                       </div>
                     )}
-                    <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />
+                    {hasCurrentBrowser && <LiveBrowser key={`${activeApp.id}-${activeApp.browserSessionId || "pending"}`} application={activeApp} />}
                     {activeApp.status !== "draft_review" && applicationMaterials && (
                       <details className="packet-reference" key={`materials-${activeApp.id}-${activeApp.status}`}>
                         <summary>Saved application materials · version {activeApp.packet?.version}</summary>
                         {applicationMaterials}
                       </details>
                     )}
-                    {activeApp.error && activeApp.status !== "uncertain" && !activeAppIsAutomatic && (
+                    {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
                     {![

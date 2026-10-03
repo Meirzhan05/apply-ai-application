@@ -92,6 +92,16 @@ async function main() {
       await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
       assert.equal(await page.getByRole("dialog").count(), 0);
       await page.getByRole("heading", { name: "Browser help needed" }).waitFor();
+      app.browserSessionExpiresAt = new Date(Date.now() - 1).toISOString();
+      app.error = "The browser session ended. Restart it to continue.";
+      await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.getByRole("heading", { name: "Your browser session ended", exact: true }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "Refresh form state", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("dialog").count(), 0);
+      assert.equal(await page.getByText("Complete the browser steps above, then refresh the form for review.", { exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "Review packet for a new browser session", exact: true }).isVisible(), true);
+      await page.screenshot({ path: `.data/questions/expired-${name}.png` });
+      app.browserSessionExpiresAt = undefined; app.error = undefined;
       setFormSnapshot(app, { ...app.form!, readyToSubmit: false, blockers: [], fields: [
         ...app.form!.fields.map(field => ({ ...field, value: "", valid: false })),
         ...Array.from({ length: 12 }, (_, index) => ({ identifier: `detail-${index}`, label: `Applicant detail ${index + 1}`, kind: "text", required: true, value: "", valid: false })),
