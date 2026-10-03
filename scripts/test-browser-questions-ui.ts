@@ -14,7 +14,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   await mkdir(".data/questions", { recursive: true });
   try {
-    for (const [name, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
+    for (const [name, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844], ["narrow", 320, 740]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
       const state = initialDemoState(); const app = selectApplication(state, state.jobs[0].id, state.profile.id);
       const packet = await draftPacket(state.profile, state.jobs[0]); packet.answers = [];
       setPacket(state, app, packet); approveFill(app, state.profile.id, app.packetHash!, state.jobs[0].applyUrl);
@@ -29,6 +29,11 @@ async function main() {
       app.browserQuestionDrafts = { formHash: app.form!.hash, sessionId: app.browserSessionId, packetHash: app.packetHash!, answers: { [ai.id]: essay } };
       const page = await browser.newPage({ viewport: { width, height } }); const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
+      const enterApplications = async () => {
+        const navigation = page.getByRole("button", { name: "Applications", exact: true });
+        await navigation.waitFor();
+        if (await navigation.getAttribute("aria-current") !== "page") await navigation.click();
+      };
       await page.route("**/api/state", route => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
       let attempts = 0;
@@ -54,7 +59,7 @@ async function main() {
         return route.fulfill({ json: { ok: true } });
       });
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3101");
-      await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await enterApplications();
       const dialog = page.getByRole("dialog", { name: "Help the agent keep going" }); await dialog.waitFor();
       const send = dialog.getByRole("button", { name: "Save answers and continue" });
       assert.equal(await send.isDisabled(), true);
@@ -91,17 +96,20 @@ async function main() {
       assert.equal(app.approvals.some(approval => approval.kind === "submit"), false);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       app.status = "needs_user_action"; app.form = { ...app.form!, readyToSubmit: false, blockers: ["CAPTCHA requires your takeover."] };
-      await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.reload(); await enterApplications();
       assert.equal(await page.getByRole("dialog").count(), 0);
       await page.getByRole("heading", { name: "Browser help needed" }).waitFor();
       app.browserSessionExpiresAt = new Date(Date.now() - 1).toISOString();
       app.error = "The browser session ended. Restart it to continue.";
-      await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.reload(); await enterApplications();
       await page.getByRole("heading", { name: "Your browser session ended", exact: true }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Refresh form state", exact: true }).count(), 0);
       assert.equal(await page.getByRole("dialog").count(), 0);
       assert.equal(await page.getByText("Complete the browser steps above, then refresh the form for review.", { exact: true }).count(), 0);
       assert.equal(await page.getByRole("button", { name: "Review materials for a new browser session", exact: true }).isVisible(), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Ended-session recovery must fit the narrow viewport");
+      const recovery = await page.getByRole("button", { name: "Review materials for a new browser session", exact: true }).boundingBox();
+      assert.ok(recovery && recovery.x >= 0 && recovery.x + recovery.width <= width && recovery.height >= 44);
       await page.screenshot({ path: `.data/questions/expired-${name}.png` });
       app.browserSessionExpiresAt = undefined; app.error = undefined;
       setFormSnapshot(app, { ...app.form!, readyToSubmit: false, blockers: [], fields: [
@@ -109,7 +117,7 @@ async function main() {
         ...Array.from({ length: 12 }, (_, index) => ({ identifier: `detail-${index}`, label: `Applicant detail ${index + 1}`, kind: "text", required: true, value: "", valid: false })),
       ] });
       app.browserQuestionDrafts = { formHash: app.form!.hash, sessionId: app.browserSessionId!, packetHash: app.packetHash!, answers: { [ai.id]: essay } };
-      await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.reload(); await enterApplications();
       await dialog.waitFor();
       assert.equal(await dialog.evaluate(element => element.scrollHeight > element.clientHeight), true);
       await dialog.evaluate(element => { element.scrollTop = 0; });
@@ -119,7 +127,7 @@ async function main() {
       assert.equal(await send.isVisible(), true);
       await dialog.screenshot({ path: `.data/questions/long-bottom-${name}.png` });
       setFormSnapshot(app, { ...app.form!, readyToSubmit: false, blockers: [], fields: [{ identifier: "consent", label: "Accept application terms", kind: "checkbox", required: true, value: "on", checked: false, valid: false }] });
-      await page.reload(); await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.reload(); await enterApplications();
       await dialog.waitFor();
       assert.equal(await dialog.getByRole("combobox").count(), 0);
       assert.equal(await send.isDisabled(), true);

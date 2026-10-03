@@ -24,7 +24,7 @@ The first visual direction is [dashboard-mockup.png](docs/dashboard-mockup.png).
 ## What is implemented
 
 - Next.js dashboard with matches, evidence, gaps, feedback, imported links, application status, profile intake, resume text extraction, and fact confirmation.
-- Public Greenhouse, Lever, and Ashby catalog adapters, duplicate removal, closed listing detection, and a Trigger.dev schedule every four hours. Configure actual board slugs in `JOB_BOARDS`; `example` entries are ignored.
+- Automatic per-student AI web search after profile facts and search preferences are confirmed. Search uses the student’s preferences and redacted confirmed experience, then verifies selected Greenhouse, Lever, and Ashby postings through provider APIs. Results live in owner-private state; fresh accounts have no matches. Trigger.dev refreshes each eligible student every four hours. `JOB_BOARDS` is used only by the demo/legacy catalog tooling.
 - Deterministic hard-rule checks and immediate local match scoring. Queued OpenAI Responses assessments are cached per profile version and use verified facts. Jev is a separate shadow evaluator and cannot control production ranking.
 - Conservative required-location checks recognize supported aliases and leave ambiguous geography or missing required remote status uncertain. Live hard rules override stale cached matches. Match runs serialize per owner, and changed postings receive separate cost reservations.
 - Selection with unlimited daily applications for now, packet drafting and editing, exact packet approval, browser fill, takeover, exact form approval, one submit attempt, confirmation or uncertain outcome, cancellation, and an audit trail of transitions.

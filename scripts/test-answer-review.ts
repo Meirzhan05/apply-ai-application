@@ -1,3 +1,4 @@
+import { applyFactCorrection } from "../src/lib/fact-corrections";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
@@ -29,7 +30,7 @@ async function main() {
       page.on("pageerror", (error) => failures.push(error.message));
       await page.route("**/api/state", (route) => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", (route) => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
-      let confirmations = 0;
+      let confirmations = 0; let failFactSave = true;
       let edits = 0;
       await page.route("**/api/actions", async (route) => {
         const { action, payload } = route.request().postDataJSON();
@@ -49,7 +50,8 @@ async function main() {
           answers[0] = reviseEssay(state.profile, answers[0], payload.text);
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, answers }));
         } else if (action === "profile") {
-          state.profile = { ...state.profile, ...payload };
+          if (failFactSave) { failFactSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
+          state.profile.facts = applyFactCorrection(state.profile.facts, payload.factPatch);
         } else if (action === "editPacket") {
           const answers = applyHumanAnswerEdits(app.packet!.answers, payload.answers);
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, profileHash: packetProfileHash(state.profile), answers }));
@@ -103,6 +105,7 @@ async function main() {
       assert.equal(await essayInput.inputValue(), essay.answer);
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
+      await page.waitForFunction(id => document.activeElement?.id === `readiness-${id}`, app.id);
       assert.equal(confirmations, 1);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), false);
       assert.equal(app.approvals.length, 0);
@@ -153,12 +156,24 @@ async function main() {
       await factInput.fill("Analyzed survey data in my Python coursework project");
       assert.equal(await factInput.locator("..").getByRole("checkbox").isChecked(), false);
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
+      await corrections.getByRole("alert").waitFor();
+      assert.equal(await factInput.inputValue(), "Analyzed survey data in my Python coursework project");
+      assert.equal(state.profile.facts.find(item => item.id === fact.id)?.text, fact.text);
+      const checkboxWidth = await corrections.getByRole("checkbox").evaluate(element => element.getBoundingClientRect().width);
+      assert.ok(checkboxWidth >= 16 && checkboxWidth <= 24, "Source confirmation must stay beside its label");
+      await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).waitFor();
+      assert.equal(await page.locator(".packet-orientation a").count(), 1, "Only the available rebuild task should be linked while materials are stale");
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
+      await page.getByRole("button", { name: "Undo source fact changes", exact: true }).click();
+      await page.getByText("Source fact correction undone. Review your materials before approving.", { exact: true }).waitFor();
+      assert.deepEqual(state.profile.facts.find(item => item.id === fact.id), fact);
+      assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
+      assert.equal(await page.getByRole("button", { name: "Undo source fact changes", exact: true }).count(), 0);
       assert.equal(app.approvals.length, 0);
       assert.deepEqual(failures, []);
       console.log(`PASS ${label}: editable essay with preserved original, fresh confirmation, contextual fact correction, separate approval, prerequisite guidance`);

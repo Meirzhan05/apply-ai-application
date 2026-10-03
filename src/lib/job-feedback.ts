@@ -12,6 +12,7 @@ export function updateJobFeedback(state: AppState, change: {
   if (change.kind !== "clear") state.feedback.push({
     jobId: job.id, kind: change.kind, reason: change.reason,
     updatedAt: new Date().toISOString(),
+    posting: structuredClone(job),
     jobSnapshot: { title: job.title, requirements: [...job.requirements], location: job.location },
   });
   return {

@@ -12,6 +12,7 @@ const OWNER_TASKS = [
   "fill-application-form",
   "submit-application-form",
   "assess-user-matches",
+  "discover-user-jobs",
   "refresh-user-imported-jobs",
 ] as const;
 const ACTIVE_RUN_STATUSES = ["QUEUED", "EXECUTING", "WAITING", "DELAYED", "DEQUEUED", "PENDING_VERSION"] as const;

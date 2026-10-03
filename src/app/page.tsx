@@ -20,12 +20,15 @@ import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
+import { PersonalSearchStatus } from "@/components/personal-search-status";
+import { personalSearchReadiness } from "@/lib/personal-search-policy";
 import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
 import { ApplicationPicker } from "@/components/application-picker";
+import { canReturnToMaterials } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
@@ -55,6 +58,7 @@ import type {
   MatchAssessment,
   Profile,
   ScreeningAnswer,
+  VerifiedFact,
 } from "@/lib/types";
 
 type ViewState = Omit<AppState, "applications"> & {
@@ -104,13 +108,15 @@ export default function Dashboard() {
   const [cancellationId, setCancellationId] = useState<string | null>(null);
   const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
-  const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
+  const [factCorrection, setFactCorrection] = useState<{ applicationId: string; facts: VerifiedFact[]; claim: string } | null>(null);
+  const [lastFactCorrection, setLastFactCorrection] = useState<{ owner: string; applicationId: string; before: VerifiedFact[]; after: VerifiedFact[] } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
+  const actionFocus = useRef<HTMLElement | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
@@ -158,6 +164,8 @@ export default function Dashboard() {
     catch { /* Keep working when browser storage is disabled. */ }
   }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
+    const launcher = document.activeElement;
+    actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
     setError("");
@@ -209,6 +217,17 @@ export default function Dashboard() {
   });
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
+  useEffect(() => {
+    if (busy || !actionFocus.current) return;
+    const launcher = actionFocus.current;
+    actionFocus.current = null;
+    const frame = requestAnimationFrame(() => {
+      if (launcher.isConnected || document.activeElement !== document.body) return;
+      const target = document.getElementById(`readiness-${activeApp?.id}`) ?? document.querySelector<HTMLElement>(".app-detail .status-pill");
+      target?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [busy, activeApp?.id]);
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
@@ -410,7 +429,7 @@ export default function Dashboard() {
     requestNavigation(() => {
       setEditingEssay(null);
       setError("");
-      setFactCorrection({ applicationId: activeApp.id, factIds, claim });
+      setFactCorrection({ applicationId: activeApp.id, facts: structuredClone(data.profile.facts.filter(fact => factIds.includes(fact.id))), claim });
     });
   };
 
@@ -782,7 +801,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{sourceFreshness}</span>
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${relative(data.personalSearch.completedAt)}` : "Personal search"}</span>
                   </p>
                 </div>
                 <div className="matches-heading-actions">
@@ -796,6 +815,7 @@ export default function Dashboard() {
                 </button>
                 </div>
               </div>
+              {!data.profile.demo && <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => navigateSection("profile")} />}
               {!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
                 <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
@@ -815,7 +835,7 @@ export default function Dashboard() {
                       {needsAction.length > 1 ? "s" : ""} need your decision
                     </strong>
                     <p>
-                      Review a packet, complete a form, or check an uncertain
+                      Review materials, complete a form, or check an uncertain
                       result.
                     </p>
                   </div>
@@ -1111,8 +1131,8 @@ export default function Dashboard() {
                 ) : (
                   <div className="empty">
                     <Search size={28} />
-                    <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
-                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
+                    <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Your personal search starts here" : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Finding opportunities for you" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Confirm your experience and save your search preferences. Your agent will start automatically." : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Your agent is searching employer job boards using your profile and preferences. Results appear after the postings are verified." : !data.profile.demo && data.personalSearch?.status === "complete" ? "Your last search found no verified openings in this view. Your agent will search again every four hours. You can update your preferences or import a specific job link." : "Try another filter or import a job link."}</p>
                     {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
                     {filter !== "all" && <button className="outline-action" onClick={() => setFilter("all")}>Show any fit in this collection</button>}
                     {!search.trim() && (collection === "saved" || collection === "dismissed") && <button className="outline-action" onClick={() => { setCollection("all"); setFilter("all"); }}>Browse matches</button>}
@@ -1128,14 +1148,14 @@ export default function Dashboard() {
                 </div>
                 <button className="text-button" onClick={() => navigateSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
-              {data.discovery && (
+              {data.discovery && (data.profile.demo || data.personalSearch?.status === "complete") && (
                 <section className="discovery-pulse" aria-label="Discovery freshness">
                   <div className="discovery-pulse-head">
                     <div>
-                      <strong>Public opportunity monitor</strong>
-                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for the first public catalog check."}</p>
+                      <strong>{data.profile.demo ? "Public opportunity monitor" : "Your personal search"}</strong>
+                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for your first personal search."}</p>
                     </div>
-                    <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>
+                    {data.profile.demo && <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>}
                   </div>
                   <div className="discovery-sources">
                     {data.discovery.sources.map((source) => (
@@ -1206,6 +1226,10 @@ export default function Dashboard() {
               </div>
               <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
             </div></details>}</div>
+            {(applicationSearch.trim() || attentionOnly) && <div className="application-active-view" role="status">
+              <span>{attentionOnly ? "Needs your review" : "All stages"}{applicationSearch.trim() && ` · Search: “${applicationSearch.trim()}”`} · {displayedApplications.length} of {applications.length} applications</span>
+              <button type="button" className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setApplicationSearch(""); setAttentionOnly(false); }}>Clear application filters</button>
+            </div>}
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">
                 <div className="next-icon"><CircleHelp size={20} /></div>
@@ -1245,7 +1269,7 @@ export default function Dashboard() {
               <div className="application-collection" hidden={!applications.length}>
                 <h2 className="application-count" role="status">{displayedApplications.length} of {applications.length} applications</h2>
                 {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
-                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
+                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.title ?? "Application"} · ${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
               <div className="app-list" ref={applicationList} hidden={!displayedApplications.length} aria-label="Your application list">
                 {displayedApplications.length ? (
                   displayedApplications.map((app) => {
@@ -1296,7 +1320,7 @@ export default function Dashboard() {
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
                       </div>
-                    <span className="status-pill" role="status" aria-live="polite">
+                    <span className="status-pill" role="status" aria-live="polite" tabIndex={-1}>
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
@@ -1332,10 +1356,10 @@ export default function Dashboard() {
                         <p>{activeApp.queuedRun.reason === "budget" ? "The service spending limit is full. Your request is saved and will start when budget is available." : activeApp.queuedRun.reason === "active_run" ? "Finish or cancel your active browser session. This saved request will start afterward." : "Your saved request is waiting for a worker."}</p>
                       </div>
                     )}
-                    {activeApp.status === "drafting" && <p role="status">Preparing your packet from confirmed facts…</p>}
+                    {activeApp.status === "drafting" && <p role="status">Preparing your materials from confirmed facts…</p>}
                     {!activeAppIsAutomatic && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
-                        <h3>Prepare your application packet</h3>
+                        <h3>Prepare your application materials</h3>
                         <p>
                           The agent will use confirmed facts to build a tailored
                           resume and write essays for your confirmation. You
@@ -1354,10 +1378,22 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
-                    {activeApp.status === "draft_review" && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
+                    {lastFactCorrection?.owner === data.profile.id && lastFactCorrection.applicationId === activeApp.id && <section className="fact-change-history" aria-label="Last source fact change">
+                      <strong>Source facts saved</strong>
+                      <p>You can undo this correction while these facts still match your saved changes. Other profile edits stay intact.</p>
+                      <details><summary>Review your last source fact changes</summary>
+                        {lastFactCorrection.before.map((fact, index) => <div key={fact.id}><p><strong>Before:</strong> {fact.text} · {fact.verified ? "confirmed" : "unconfirmed"}</p><p><strong>Saved:</strong> {lastFactCorrection.after[index]?.text} · {lastFactCorrection.after[index]?.verified ? "confirmed" : "unconfirmed"}</p></div>)}
+                      </details>
+                      <button className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={async () => {
+                        if (await act("profile", { factPatch: { expected: lastFactCorrection.after, updated: lastFactCorrection.before } })) {
+                          setLastFactCorrection(null); setNotice("Source fact correction undone. Review your materials before approving.");
+                        }
+                      }}>Undo source fact changes</button>
+                    </section>}
+                    {!activeAppIsAutomatic && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
                       <h3>Your profile changed</h3>
                       <p>The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
-                      <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button>
+                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
                       {notice && <p>{notice}</p>}
                     </section>}
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
@@ -1365,13 +1401,13 @@ export default function Dashboard() {
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
                         <p>
-                          This opens an isolated browser and enters only the
-                          packet you approved. You will review the filled form
+                          This opens a separate browser session and enters only the
+                          materials you approved. You will review the filled form
                           before submission.
                         </p>
                         <button
                           className="dark-button"
-                          disabled={Boolean(busy)}
+                          disabled={Boolean(busy) || Boolean(activeApp.materialsStale)}
                           onClick={() =>
                             act("startBrowser", { applicationId: activeApp.id })
                           }
@@ -1408,9 +1444,9 @@ export default function Dashboard() {
                       <>
                       {hasCurrentBrowser && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
-                        <p>The employer’s question headings need to be read again before you answer. Your browser and packet are saved.</p>
+                        <p>The employer’s question headings need to be read again before you answer. Your browser session and materials are saved.</p>
                         <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.browserQuestionRun)} onClick={() => act("resumeBrowser", { applicationId: activeApp.id })}>Refresh questions</button>
-                      </div> : hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
+                      </div> : !activeApp.materialsStale && hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
                       <div className="step-card">
                         <h3>{!hasCurrentBrowser ? activeApp.browserSessionId ? "Your browser session ended" : "Start a fresh browser session" : browserTakeoverReasons(activeApp.form).length ? "Browser help needed" : "Your browser is saved"}</h3>
                         {hasCurrentBrowser && browserTakeoverReasons(activeApp.form).map((blocker) => <p key={blocker}>{blocker}</p>)}
@@ -1543,7 +1579,7 @@ export default function Dashboard() {
                               </button>
                               <button
                                 className="dark-button"
-                                disabled={Boolean(busy) || activeApp.form?.readyToSubmit === false}
+                                disabled={Boolean(busy) || Boolean(activeApp.materialsStale) || activeApp.form?.readyToSubmit === false}
                                 onClick={() =>
                                   act("approveSubmit", {
                                     applicationId: activeApp.id,
@@ -1563,7 +1599,7 @@ export default function Dashboard() {
                               </p>
                               <button
                                 className="dark-button"
-                                disabled={Boolean(busy)}
+                                disabled={Boolean(busy) || Boolean(activeApp.materialsStale)}
                                 onClick={() =>
                                   act("submit", { applicationId: activeApp.id })
                                 }
@@ -1590,12 +1626,12 @@ export default function Dashboard() {
                           </p>}
                           {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View submission screenshot ↗</a>}
                           {employerBlock && <p>
-                            Review the employer’s instructions in your own browser. Your saved packet and confirmed essays are available below.{" "}
+                            Review the employer’s instructions in your own browser. Your saved materials and confirmed essays are available below.{" "}
                             <a href={appJob.applyUrl} target="_blank" rel="noreferrer">Open employer application ↗</a>
                           </p>}
                           {activeApp.manualSubmissionReport && !activeApp.manualSubmissionReport.resolution && !activeApp.submissionAttemptedAt && <p>
                             The previous browser run has stopped. No new form fill has started.
-                            Your saved packet and confirmed essays are available for review.
+                            Your saved materials and confirmed essays are available for review.
                           </p>}
                           {!activeApp.autonomousAuthorization && canReopenManualAttempt(activeApp) && <>
                             <p>Check the employer page or confirmation email first. Missing email alone does not confirm that an application failed.</p>
@@ -1604,9 +1640,9 @@ export default function Dashboard() {
                               I confirmed this attempt did not submit an application.
                             </label>
                             <button className="outline-action" disabled={Boolean(busy) || confirmedUnacceptedId !== activeApp.id} onClick={() => act("reviewManualFailure", { applicationId: activeApp.id, confirmedNotAccepted: true })}>
-                              Return to packet review
+                              Return to materials review
                             </button>
-                            <p className="muted">This closes the old browser. A new fill run requires your packet approval.</p>
+                            <p className="muted">This closes the old browser. Filling a new form requires your approval of its materials.</p>
                           </>}
                           {activeApp.form && <details>
                             <summary>View previous browser snapshot</summary>
@@ -1745,6 +1781,7 @@ export default function Dashboard() {
                   Show only remote roles
                 </label>
                 <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
+                <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
                 {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
@@ -2050,11 +2087,12 @@ export default function Dashboard() {
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
-        facts={data.profile.facts.filter(fact => factCorrection.factIds.includes(fact.id))} busy={Boolean(busy)} error={displayError}
+        facts={factCorrection.facts} busy={Boolean(busy)} error={displayError}
         onCancel={() => { setFactCorrection(null); setError(""); }}
         onSave={async facts => {
-          const updated = data.profile.facts.map(fact => facts.find(item => item.id === fact.id) ?? fact);
-          if (await act("profile", { ...data.profile, facts: updated })) {
+          const next = await act("profile", { factPatch: { expected: factCorrection.facts, updated: facts } });
+          if (next) {
+            setLastFactCorrection({ owner: data.profile.id, applicationId: factCorrection.applicationId, before: factCorrection.facts, after: next.profile.facts.filter(fact => facts.some(item => item.id === fact.id)) });
             setFactCorrection(null);
             setNotice("Source facts saved. Rebuild the materials and review them before approving.");
           }
@@ -2073,7 +2111,7 @@ export default function Dashboard() {
       {pendingNavigation && activeApp?.packet && (
         <WorkspaceDialog labelledBy="unsaved-heading" onClose={() => { if (!busy) setPendingNavigation(null); }}>
           <h2 id="unsaved-heading">Keep your changes?</h2>
-          <p>Your {editingEssay !== null ? "essay edit" : "personal answers"} for {appJob?.company ?? "this application"} have not been saved. Save them before leaving, or discard only these changes.</p>
+          <p>Your {editingEssay !== null ? "essay edit" : "personal answers"} for {appJob?.company ?? "this application"} {editingEssay !== null ? "has" : "have"} not been saved. Save before leaving, or discard only these changes.</p>
           <div className="action-row">
             <button className="dark-button" disabled={Boolean(busy) || (editingEssay !== null && !essayDraft?.text.trim())}
               onClick={async () => {

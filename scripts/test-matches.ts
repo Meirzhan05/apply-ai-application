@@ -412,7 +412,8 @@ async function main() {
       fixture.discovery = undefined;
       fixture.profile.demo = false;
       await page.reload();
-      await page.locator(".source-freshness").getByText("Source check status is unavailable", { exact: true }).waitFor();
+      await page.locator(".source-freshness").getByText("Personal search", { exact: true }).waitFor();
+      await page.getByRole("status", { name: "Personal search status", exact: true }).waitFor();
       fixture = publicState(structuredClone(demoState));
       fixture.automation.enabled = true;
       await page.reload();

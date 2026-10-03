@@ -44,8 +44,12 @@ async function main() {
       await page.reload();
       await page.getByRole("heading", { name: "Your applications", exact: true }).waitFor();
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
+      assert.equal(await page.locator(".application-active-view").isVisible(), true, "Restored constraints must remain visible outside the closed tools");
+      assert.match(await page.locator(".application-active-view").innerText(), /Search: “Employer 2” · 1 of 6 applications/);
+      await page.getByRole("button", { name: "Clear application filters", exact: true }).click();
+      assert.equal(await page.locator(".application-collection option").count(), 6);
       await page.getByText("Find or filter applications", { exact: true }).click();
-      assert.equal(await appSearch.inputValue(), "Employer 2", "Refresh must restore the application and collection search");
+      assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
       await appSearch.fill("No such employer");
       await page.getByRole("heading", { name: "No applications match this view", exact: true }).waitFor();
       await page.getByRole("button", { name: "Show all applications", exact: true }).click();
@@ -67,6 +71,12 @@ async function main() {
       await page.keyboard.press("?");
       const help = page.locator("#applications-help");
       const helpSearch = help.getByRole("searchbox", { name: "Find help for a task", exact: true });
+      assert.equal(await help.locator(".help-task-group").count(), 3);
+      for (const query of ["sources", "source facts", "submission"]) {
+        await helpSearch.fill(query);
+        assert.equal(await help.getByText("No matching topic.", { exact: false }).count(), 0, `Suggested query ${query} must find guidance`);
+        assert.ok(await help.locator(".help-task-group details").count() > 0);
+      }
       await helpSearch.fill("consent");
       assert.equal(await help.getByText("1 topic", { exact: true }).isVisible(), true);
       await help.getByText("Answer personal or consent questions", { exact: true }).click();
@@ -75,6 +85,7 @@ async function main() {
       await help.getByRole("button", { name: "Show all help", exact: true }).click();
       await help.locator(":scope > summary").click();
       const picker = page.getByRole("combobox", { name: "Choose application", exact: true });
+      assert.match((await page.locator("#application-choice option").first().textContent()) ?? "", /Application role 1 · Employer 1 · Review materials/);
       if (width <= 900) {
         assert.equal(await page.getByText("Application 1 of 6", { exact: true }).isVisible(), true);
         assert.equal(await page.getByRole("button", { name: "Previous application", exact: true }).isDisabled(), true);

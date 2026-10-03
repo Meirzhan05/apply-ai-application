@@ -148,6 +148,10 @@ vi.mock("@/lib/budget", () => ({
   markQueuedBudgetTerminal: async () => true,
   releaseQueuedBudget: async () => true,
 }));
+vi.mock("@/lib/personal-search-provider", () => ({ discoverPersonalJobs: async (_profile: unknown, guard: () => Promise<void>) => {
+  await guard();
+  return Array.from({ length: 4 }, (_, index) => ({ ...initialDemoState().jobs[0], id: `personal-${index}`, source: "greenhouse", sourceId: String(index), company: "Controlled", title: `Product Analyst ${index + 1}`, url: `https://jobs.example/product-${index}`, applyUrl: `https://jobs.example/product-${index}`, requirements: ["Python", "SQL"], description: "Product Analyst: Python and SQL", remote: false, location: "New York, NY", discoveredAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString(), importCheck: { status: "verified", checkedAt: new Date().toISOString() } }));
+} }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-synthetic"), source: "synthetic-resume" }) }));
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("openai", () => ({ default: class { responses = { parse: async (input: { text?: { format?: { name?: string } }; input?: Array<{ content: string }> }) => {
@@ -162,16 +166,13 @@ vi.mock("openai", () => ({ default: class { responses = { parse: async (input: {
 } }; } }));
 
 import { POST } from "@/app/api/internal/refresh/route";
+import { runPersonalSearch } from "@/lib/personal-search";
 import { assessUserMatches } from "../../trigger/matches";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 
 const runMatchesTask = (assessUserMatches as unknown as { run: (payload: { userId: string }, options: { ctx: { run: { id: string } } }) => Promise<Record<string, unknown>> }).run;
 const runMatches = (payload: { userId: string }) => runMatchesTask(payload, { ctx: { run: { id: "synthetic-match-run" } } });
-
-function greenhousePayload(count: number) {
-  return { jobs: Array.from({ length: count }, (_, index) => ({ id: String(index + 1), title: `Product Analyst ${index + 1}`, absolute_url: `https://jobs.example/product-${index + 1}`, location: { name: "New York, NY" }, content: "<h3>Requirements</h3><ul><li>Python</li><li>SQL</li></ul>" })) };
-}
 
 async function runPipeline(hoursAfterRefresh: number) {
   const state = initialDemoState();
@@ -208,9 +209,12 @@ async function runPipeline(hoursAfterRefresh: number) {
   vi.stubEnv("TRIGGER_SECRET_KEY", "synthetic");
   vi.stubEnv("OPENAI_API_KEY", "synthetic");
   vi.stubEnv("JOB_BOARDS", "greenhouse:controlled");
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => greenhousePayload(4) }));
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Shared feed must not be read")));
   const response = await POST(new Request("https://example.com/api/internal/refresh", { method: "POST", headers: { authorization: "Bearer synthetic" } }));
   expect(response.status, await response.clone().text()).toBe(200);
+  const searchRequest = fixture.calls.find((call) => call.task === "discover-user-jobs");
+  expect(searchRequest).toBeTruthy();
+  await runPersonalSearch("owner-1", searchRequest!.payload.requestId as string);
   vi.advanceTimersByTime(hoursAfterRefresh * 60 * 60 * 1000);
   const matchRequest = fixture.calls.find((call) => call.task === "assess-user-matches");
   expect(matchRequest).toBeTruthy();
@@ -234,9 +238,11 @@ describe("supported discovery pipeline boundaries", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-01T08:00:00.000Z")); });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
-  it("refreshes a provider feed, matches unattended roles, and hands more than three runs to ordinary workers", async () => {
+  it("discovers personal roles, matches unattended roles, and hands more than three runs to ordinary workers", async () => {
     const { result, persisted, response } = await runPipeline(4);
-    expect(response.arrivals).toHaveLength(4);
+    expect(response.owners).toBe(1);
+    expect(persisted.personalSearch?.jobs).toHaveLength(4);
+    expect(fixture.jobs).toEqual([]);
     expect(result).toMatchObject({ assessed: 4 });
     expect(persisted.applications).toHaveLength(4);
     expect(persisted.applications.every((application) => application.status === "submitted" && application.submissionReceipt?.text === "Synthetic application receipt")).toBe(true);

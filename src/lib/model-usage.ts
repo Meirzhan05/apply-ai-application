@@ -38,6 +38,8 @@ export interface ModelUsageRecord extends ModelUsageContext {
   providerStatus: string | null;
   serviceTier: string | null;
   tokens: { input: number | null; cachedInput: number | null; cacheWrite: number | null; output: number | null; reasoningOutput: number | null };
+  webSearchCalls?: number;
+  webSearchUsd?: number;
   rate: ModelRate | null;
   estimatedUsd: number | null;
   reconciledUsd: number | null;
@@ -159,6 +161,7 @@ export async function readAllModelUsage(): Promise<ModelUsageRecord[]> {
 }
 
 interface ProviderResponse {
+  output?: Array<{ type: string }>;
   id?: string;
   _request_id?: string | null;
   model?: string;
@@ -177,7 +180,7 @@ function price(record: ModelUsageRecord): void {
   record.rate = { version: "openai-standard-2026-10-01", source: "https://developers.openai.com/api/docs/pricing", checkedAt: "2026-10-01", unit: "USD per million tokens", context: long ? "long" : "short",
     input: values[0] * (long ? 2 : 1), cachedInput: values[1] * (long ? 2 : 1), cacheWrite: values[2] * (long ? 2 : 1), output: values[3] * (long ? 1.5 : 1) };
   if (cachedInput === null || cacheWrite === null || output === null || cachedInput + cacheWrite > input) return;
-  record.estimatedUsd = ((input - cachedInput - cacheWrite) * record.rate.input + cachedInput * record.rate.cachedInput + cacheWrite * record.rate.cacheWrite + output * record.rate.output) / 1_000_000;
+  record.estimatedUsd = ((input - cachedInput - cacheWrite) * record.rate.input + cachedInput * record.rate.cachedInput + cacheWrite * record.rate.cacheWrite + output * record.rate.output) / 1_000_000 + (record.webSearchUsd ?? 0);
 }
 
 export async function meterModelResponse<T extends ProviderResponse>(fallback: Omit<ModelUsageContext, "runId"> & { runId?: string }, operation: string, model: string, call: () => Promise<T>): Promise<T> {
@@ -207,6 +210,8 @@ export async function meterModelResponse<T extends ProviderResponse>(fallback: O
   record.providerStatus = response.status ?? null;
   record.serviceTier = response.service_tier ?? null;
   record.tokens = { input: count(response.usage?.input_tokens), cachedInput: count(response.usage?.input_tokens_details?.cached_tokens), cacheWrite: count(response.usage?.input_tokens_details?.cache_write_tokens), output: count(response.usage?.output_tokens), reasoningOutput: count(response.usage?.output_tokens_details?.reasoning_tokens) };
+  record.webSearchCalls = response.output?.filter((item) => item.type === "web_search_call").length ?? 0;
+  record.webSearchUsd = record.webSearchCalls * 0.01;
   // output_tokens already includes reasoning. Adding the detail again would double bill it.
   price(record);
   await recordModelUsage(record);

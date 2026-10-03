@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { enrollPilot } from "@/lib/pilot";
 import { selectApplication } from "@/lib/workflow";
@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   conflicts: 0,
   writes: [] as Array<{ revision: number; data: string }>,
   user: vi.fn(),
+  search: vi.fn(),
+  match: vi.fn(),
   catalog: vi.fn(),
 }));
 
@@ -55,6 +57,8 @@ const db = {
 };
 
 vi.mock("@/lib/demo-mode", () => ({ isDemo: () => false }));
+vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: mocks.match }));
+vi.mock("@/lib/personal-search", () => ({ queuePersonalSearch: mocks.search }));
 vi.mock("@/lib/catalog", () => ({ readActiveCatalogRows: mocks.catalog }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => db }));
 vi.mock("@/lib/supabase", () => ({ serverSupabase: async () => ({ auth: { async getUser() { return { data: { user: { id: "owner-a", email: "owner@example.com" } }, error: null }; } } }) }));
@@ -68,6 +72,8 @@ function post(action: string, payload: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "false");
   mocks.catalog.mockResolvedValue([]);
+  mocks.search.mockReset().mockResolvedValue(false);
+  mocks.match.mockReset().mockResolvedValue(undefined);
   mocks.revision = 1;
   mocks.conflicts = 0;
   mocks.writes.length = 0;
@@ -98,4 +104,55 @@ it("does not persist a permanent CAS loser or create a phantom owner event", asy
   expect(mocks.writes).toHaveLength(0);
   expect(mocks.state?.profile.headline).not.toBe("Should not save");
   expect(mocks.state?.applications[0].pilotAttempt?.events.some((event) => event.kind === "owner-action" && event.detail === "profile")).toBe(false);
+});
+
+it("applies a narrow fact correction and undo without replacing unrelated facts", async () => {
+  const original = structuredClone(mocks.state!.profile.facts[0]);
+  const updated = { ...original, text: "Applicant corrected this fact", verified: false, source: "user" as const, sourceAnchorId: undefined };
+  const unrelated = structuredClone(mocks.state!.profile.facts.slice(1));
+  expect((await POST(post("profile", { factPatch: { expected: [original], updated: [updated] } }))).status).toBe(200);
+  expect(mocks.state!.profile.facts).toEqual([updated, ...unrelated]);
+  expect((await POST(post("profile", { factPatch: { expected: [original], updated: [updated] } }))).status).toBe(400);
+  expect(mocks.writes).toHaveLength(1);
+  expect((await POST(post("profile", { factPatch: { expected: [updated], updated: [original] } }))).status).toBe(200);
+  expect(mocks.state!.profile.facts).toEqual([original, ...unrelated]);
+});
+
+it("returns an idle approved attempt to materials review and rejects a started submission", async () => {
+  const app = mocks.state!.applications[0]; app.status = "approved_to_submit";
+  expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(200);
+  expect(mocks.state!.applications[0].status).toBe("draft_review");
+  mocks.state!.applications[0].status = "final_review";
+  mocks.state!.applications[0].submissionAttemptedAt = new Date().toISOString();
+  expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(400);
+  expect(mocks.state!.applications[0].status).toBe("final_review");
+});
+
+it("automatically dispatches the authenticated student's search after saving explicit preferences", async () => {
+  const response = await POST(post("profile", { preferredTitles: [], preferredLocations: [], remoteOnly: false, userId: "other-student", searchPreferencesConfirmedAt: "untrusted" }));
+  expect(response.status).toBe(200);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toMatch(/^\d{4}-/);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).not.toBe("untrusted");
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
+});
+
+it("rechecks personal search readiness when the student confirms experience or updates search settings", async () => {
+  expect((await POST(post("onboarding", { facts: initialDemoState().profile.facts }))).status).toBe(200);
+  expect((await POST(post("automationSettings", { preferredTitles: ["Analyst"] }))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledTimes(2);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toBeTruthy();
+});
+
+
+afterEach(() => vi.unstubAllEnvs());
+it("reassesses privately retained roles when profile edits reuse the existing personal search", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture");
+  expect((await POST(post("profile", { headline: "Updated career focus" }))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
+  expect(mocks.match).toHaveBeenCalledExactlyOnceWith("owner-a");
+});
+it("does not queue a duplicate assessment while a new personal search is being dispatched", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture"); mocks.search.mockResolvedValue(true);
+  expect((await POST(post("profile", { preferredTitles: ["Data intern"] }))).status).toBe(200);
+  expect(mocks.match).not.toHaveBeenCalled();
 });

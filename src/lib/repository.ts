@@ -3,7 +3,8 @@ import { readState, updateState } from "@/lib/store";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import type { AppState, Job } from "@/lib/types";
-import { readActiveCatalogRows } from "@/lib/catalog";
+import { personalSearchReadiness } from "@/lib/personal-search-policy";
+import { personalSearchKey } from "@/lib/personal-search-input";
 import { dedupeJobs } from "@/lib/sources";
 import { preparePilotMutation, type PilotMutationContext } from "@/lib/pilot";
 import { AccountDeletionInProgressError } from "@/lib/account-lifecycle";
@@ -19,24 +20,26 @@ export async function currentUserId(): Promise<string> {
   return data.user.id;
 }
 
-async function catalog(): Promise<Job[]> {
-  const rows = await readActiveCatalogRows({ cache: true });
-  return rows.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at) || a.id.localeCompare(b.id)).map((row) => row.data);
+// Only retrieve legacy postings that this owner explicitly saved or dismissed.
+// An empty account never reads the shared catalog.
+async function legacyPostings(stored: Partial<AppState> | undefined): Promise<Job[]> {
+  const ids = (stored?.feedback ?? []).filter((item) => !item.posting).map((item) => item.jobId);
+  if (!ids.length) return [];
+  const jobs: Job[] = [];
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const { data, error } = await adminSupabase().from("jobs").select("data").in("id", ids.slice(offset, offset + 100));
+    if (error) throw error;
+    jobs.push(...(data ?? []).map((row) => row.data as Job));
+  }
+  return jobs;
 }
 
 export async function loadState(userId: string): Promise<AppState> {
   if (isDemo()) return readState();
-  const client = adminSupabase();
-  const [{ data, error }, jobs] = await Promise.all([
-    client
-      .from("app_states")
-      .select("data")
-      .eq("user_id", userId)
-      .maybeSingle(),
-    catalog(),
-  ]);
+  const { data, error } = await adminSupabase().from("app_states").select("data").eq("user_id", userId).maybeSingle();
   if (error) throw error;
-  return composeState(userId, data?.data as Partial<AppState> | undefined, jobs);
+  const stored = data?.data as Partial<AppState> | undefined;
+  return composeState(userId, stored, await legacyPostings(stored));
 }
 
 function composeState(userId: string, stored: Partial<AppState> | undefined, jobs: Job[]): AppState {
@@ -57,14 +60,18 @@ function composeState(userId: string, stored: Partial<AppState> | undefined, job
     preferredLocations: [],
     demo: false,
   };
-  defaults.jobs = jobs;
-  defaults.lastRefreshAt = jobs.map((job) => job.lastCheckedAt || job.discoveredAt).sort().at(-1);
+  defaults.jobs = [];
+  defaults.lastRefreshAt = undefined;
   defaults.activity = [];
-  const combined = [...(stored?.importedJobs ?? []), ...jobs];
+  const profile = stored?.profile ?? defaults.profile;
+  const personal = stored?.personalSearch;
+  const discovered = personalSearchReadiness(profile).ready && personal?.resultsKey === personalSearchKey(profile) ? personal.jobs : [];
+  const retained = (stored?.feedback ?? []).flatMap((item) => item.posting ? [item.posting] : []);
+  const combined = [...(stored?.importedJobs ?? []), ...discovered, ...retained, ...jobs];
   const ids = new Set(combined.map((job) => job.id));
   for (const app of stored?.applications ?? [])
     if (app.jobSnapshot && !ids.has(app.jobSnapshot.id)) {
-      combined.push({ ...app.jobSnapshot, active: false });
+      combined.push({ ...app.jobSnapshot });
       ids.add(app.jobSnapshot.id);
     }
   // Keep an application's original posting identity available even if a
@@ -92,12 +99,15 @@ export async function mutateState<T>(
       .eq("user_id", userId)
       .maybeSingle();
     if (readError) throw readError;
-    const state = composeState(userId, current?.data as Partial<AppState> | undefined, await catalog());
+    const stored = current?.data as Partial<AppState> | undefined;
+    const state = composeState(userId, stored, await legacyPostings(stored));
     const previous = structuredClone(state);
     const result = await change(state);
     preparePilotMutation(previous, state, context);
     const saved: Partial<AppState> = { ...state };
     delete saved.jobs;
+    // Migrate only owner-selected legacy records, never the rest of the catalog.
+    saved.feedback = state.feedback.map((item) => ({ ...item, posting: item.posting ?? state.jobs.find((job) => job.id === item.jobId) }));
     const { data: revision, error } = await client.rpc("save_account_state", {
       p_owner_id: userId,
       p_expected_revision: current?.revision ?? null,

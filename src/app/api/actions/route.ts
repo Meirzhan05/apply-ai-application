@@ -3,6 +3,7 @@ import { tasks } from "@trigger.dev/sdk";
 import type {
   submitApplicationForm,
 } from "../../../../trigger/browser";
+import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
@@ -13,6 +14,8 @@ import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue"
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
+import { returnToMaterials } from "@/lib/material-review-recovery";
+import { applyFactCorrection } from "@/lib/fact-corrections";
 import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
@@ -185,6 +188,7 @@ async function perform(
         })
         .parse(payload.settings ?? payload);
       updateAutomationSettings(state.profile, settings);
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in settings)) state.profile.searchPreferencesConfirmedAt = new Date().toISOString();
       state.profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(state, "Automation settings updated", "Your saved filters and material preferences were updated.");
@@ -210,7 +214,8 @@ async function perform(
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
       });
-      profile.email = verifiedEmail || text(payload.email, 254);
+      if (verifiedEmail) profile.email = verifiedEmail;
+      else if ("email" in payload) profile.email = text(payload.email, 254);
       for (const key of [
         "skills",
         "preferredTitles",
@@ -232,7 +237,7 @@ async function perform(
         new Intl.DateTimeFormat("en-US", { timeZone });
         profile.timeZone = timeZone;
       }
-      const facts = "facts" in payload ? z
+      const facts = "factPatch" in payload ? applyFactCorrection(profile.facts, payload.factPatch) : "facts" in payload ? z
           .array(
             z.object({
               id: z.string(),
@@ -266,6 +271,7 @@ async function perform(
       if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
       if (settings) updateAutomationSettings(profile, settings);
       if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
@@ -625,11 +631,7 @@ async function perform(
     const app = findApp(state, appId, userId);
     await mutateState(userId, (current) => {
       const target = findApp(current, appId, userId);
-      transition(target, ["needs_user_action", "final_review"], "draft_review");
-      target.approvals = [];
-      target.form = undefined;
-      target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
-      target.error = undefined;
+      returnToMaterials(target);
       activity(current, "Browser closed", "Review and approve the packet again to start a new session.");
     }, ownerContext);
     await cancelBrowser(app);
@@ -649,11 +651,20 @@ export async function POST(request: Request) {
     return await withAccountOperation(userId, "request", async () => {
     const { action, payload } = Input.parse(await request.json());
     await perform(userId, action, payload);
+    if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action)) {
+      const searching = await queuePersonalSearch(userId);
+      // Unchanged search inputs reuse the private discovery results, but profile
+      // edits still invalidate fit assessments (for example new fact IDs).
+      if (!searching && process.env.OPENAI_API_KEY && process.env.TRIGGER_SECRET_KEY &&
+        (await loadState(userId)).jobs.some((job) => job.active)) {
+        await queueMatchAssessment(userId).catch(() => undefined);
+      }
+    }
     if (
       !isDemo() &&
       process.env.OPENAI_API_KEY &&
       process.env.TRIGGER_SECRET_KEY &&
-      ["profile", "import"].includes(action)
+      ["import"].includes(action)
     ) {
       await queueMatchAssessment(userId).catch(() => undefined);
     }
