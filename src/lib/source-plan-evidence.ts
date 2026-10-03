@@ -1,7 +1,8 @@
 import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim } from "@/lib/types";
-import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
+import { canonicalPdfSourceFactText, evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 const normalized = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+const normalizedContextComponent = (value: string) => value.normalize("NFKC").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
 export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 = 1, trustedName?: string): ResumeSourceAnchor[] {
   const required = policyVersion === 2 ? evidenceRequiredAnchorIds(source, trustedName) : undefined;
@@ -13,11 +14,35 @@ export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(
   return { ...source, anchors: source.anchors.map((anchor) => ({ ...anchor, candidateClaim: required.has(anchor.id) })) } as T;
 }
 
-export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSourceAnchor): string[] {
+export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSourceAnchor, source?: ResumeSourceDocument): string[] {
   const sourceText = normalized(anchor.text);
-  return profile.facts.filter((fact) => fact.verified && (
+  const directlyConfirmed = profile.facts.filter((fact) => fact.verified && (
     fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText))
   )).map((fact) => fact.id);
+  if (directlyConfirmed.length || source?.format !== "pdf" || anchor.kind !== "entry") return directlyConfirmed;
+
+  const anchorsById = new Map(source.anchors.map((candidate) => [candidate.id, candidate]));
+  const targetComponent = normalizedContextComponent(anchor.text);
+  if (!targetComponent) return [];
+  return profile.facts.filter((fact) => {
+    if (!fact.verified || fact.source !== "resume" || !fact.sourceAnchorId) return false;
+    const evidenceAnchor = anchorsById.get(fact.sourceAnchorId);
+    if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId || fact.text !== canonicalPdfSourceFactText(evidenceAnchor)) return false;
+    return evidenceAnchor.entryHeading.split(/[·|]/u).some((component) => normalizedContextComponent(component) === targetComponent);
+  }).map((fact) => fact.id);
+}
+
+/** Suggestions that still need an explicit profile confirmation for this PDF. */
+export function unconfirmedPdfFactSuggestions(profile: Profile, source: ResumeSourceDocument): Array<{ text: string; sourceAnchorId: string }> {
+  if (source.format !== "pdf") return [];
+  const current = sourceWithCurrentEvidenceClaims(source, profile.name);
+  return current.anchors.filter((anchor) => anchor.candidateClaim && !confirmedFactIdsForAnchor(profile, anchor, current).length)
+    .flatMap((anchor) => {
+      const text = canonicalPdfSourceFactText(anchor);
+      if (!text || text.length > 500 || profile.facts.some((fact) =>
+        fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text) === normalized(text)))) return [];
+      return [{ text, sourceAnchorId: anchor.id }];
+    });
 }
 
 function validateLegacySourcePlan(input: {
@@ -67,7 +92,7 @@ export function validateSourcePlanEvidence(input: {
   if (input.claims.length !== anchors.length || input.claims.some((claim) => {
     const anchor = anchorById.get(claim.anchorId);
     if (!anchor || claimById.has(anchor.id) || !claim.factIds.length || new Set(claim.factIds).size !== claim.factIds.length || claim.factIds.some((id) => !verified.has(id))) return true;
-    const eligibleFactIds = confirmedFactIdsForAnchor(input.profile, anchor);
+    const eligibleFactIds = confirmedFactIdsForAnchor(input.profile, anchor, input.source);
     if (!eligibleFactIds.some((id) => claim.factIds.includes(id))) return true;
     if (anchor.kind !== "bullet" && claim.text !== anchor.text) return true;
     if (claim.text !== anchor.text) {

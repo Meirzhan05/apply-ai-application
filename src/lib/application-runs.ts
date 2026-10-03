@@ -18,6 +18,7 @@ import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { parsePdfSource } from "@/lib/pdf-source";
+import { unconfirmedPdfFactSuggestions, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { AppState, Application, Profile } from "@/lib/types";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
@@ -41,15 +42,19 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
   const profile = state.profile;
   const previous = profile.resumeSourceDocument;
   const resumeSource = profile.resumeSource;
-  if (!resumeSource || !previous || previous.format !== "pdf" || previous.version >= 3 || previous.sourceHash !== resumeSource.sha256) return state;
+  if (!resumeSource || !previous || previous.format !== "pdf" || previous.sourceHash !== resumeSource.sha256) return state;
 
-  const original = originalResumeManifest(profile);
-  const bytes = await readOriginalResume(userId, original);
-  const inspected = await parsePdfSource(bytes, profile.name);
-  if (inspected.version !== 3 || inspected.sourceHash !== resumeSource.sha256)
-    throw new Error("The saved PDF could not be re-inspected against its original bytes. Re-upload and confirm the current source before tailoring.");
+  let inspected = previous;
+  if (previous.version < 3) {
+    const original = originalResumeManifest(profile);
+    const bytes = await readOriginalResume(userId, original);
+    inspected = await parsePdfSource(bytes, profile.name);
+    if (inspected.version !== 3 || inspected.sourceHash !== resumeSource.sha256)
+      throw new Error("The saved PDF could not be re-inspected against its original bytes. Re-upload and confirm the current source before tailoring.");
+  }
+  inspected = sourceWithCurrentEvidenceClaims(inspected, profile.name);
   const inspectedAnchorIds = new Set(inspected.anchors.map((anchor) => anchor.id));
-  if (profile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
+  if (previous.version < 3 && profile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
     throw new Error("A confirmed résumé fact no longer matches the same source text after PDF re-inspection. Re-upload and reconfirm that fact before tailoring.");
 
   await mutateState(userId, (current) => {
@@ -59,12 +64,18 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
     if (!currentSource || currentSource.storageKey !== resumeSource.storageKey || currentSource.sha256 !== resumeSource.sha256 ||
         currentSource.size !== resumeSource.size || currentSource.mimeType !== resumeSource.mimeType ||
         currentProfile.resumeFileName !== profile.resumeFileName || currentDocument?.format !== "pdf" ||
-        currentDocument.version !== previous.version || currentDocument.sourceHash !== previous.sourceHash)
+        currentDocument.version !== previous.version || currentDocument.sourceHash !== previous.sourceHash ||
+        hashJson(currentDocument) !== hashJson(previous))
       throw new Error("The saved PDF source changed while it was being re-inspected. Retry using the current source; no facts were remapped.");
-    if (currentProfile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
+    if (previous.version < 3 && currentProfile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
       throw new Error("A confirmed résumé fact changed while the PDF was being re-inspected. Retry after reviewing the current source facts.");
     currentProfile.resumeSourceDocument = inspected;
     currentProfile.resumeText = inspected.text;
+    const suggestions = unconfirmedPdfFactSuggestions(currentProfile, inspected);
+    for (const suggestion of suggestions) {
+      if (currentProfile.facts.length >= 80) break;
+      currentProfile.facts.push({ id: newId(), text: suggestion.text, verified: false, source: "resume", sourceAnchorId: suggestion.sourceAnchorId });
+    }
   });
   return loadState(userId);
 }

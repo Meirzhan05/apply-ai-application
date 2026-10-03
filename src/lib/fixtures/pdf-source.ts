@@ -3,7 +3,7 @@ import path from "node:path";
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFOperator, PDFOperatorNames, lineTo, moveTo, rgb, setFontAndSize, setLineWidth, setTextMatrix, stroke } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
-export async function createPdfSourceFixture(options: { pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
+export async function createPdfSourceFixture(options: { pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; fragmentedSkillCategories?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
   const pdf = await PDFDocument.create({ updateMetadata: false });
   pdf.registerFontkit(fontkit);
   const regular = await pdf.embedFont(await readFile(path.join(process.cwd(), "src/assets/fonts/NotoSans-Regular.ttf")), { subset: true });
@@ -64,6 +64,18 @@ export async function createPdfSourceFixture(options: { pages?: number; pageSize
   if (options.languages) {
     page.drawText("Languages", { x: 72, y: 512, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
     page.drawText("English and Spanish", { x: 72, y: 490, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  }
+  if (options.fragmentedSkillCategories) {
+    page.drawText("Technical Skills", { x: 72, y: 474, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
+    const categories = [["Languages", ": Python, Java, SQL"], ["Frameworks", ": React, FastAPI"], ["Tools", ": Git, Docker"], ["Libraries", ": NumPy, pandas"]] as const;
+    categories.forEach(([label, value], index) => {
+      const y = 452 - index * 16;
+      page.drawText(label, { x: 72, y, size: 9, font: bold, color: rgb(0.2, 0.2, 0.2) });
+      page.drawText(value, { x: 72 + bold.widthOfTextAtSize(label, 9) + 3, y, size: 9, font: regular, color: rgb(0.2, 0.2, 0.2) });
+    });
+    page.drawText("|", { x: 84, y: 336, size: 9, font: regular, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("Projects", { x: 72, y: 382, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
+    page.drawText("Tools", { x: 72, y: 360, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   }
   if (options.duplicateBullet) page.drawText("• Built a search index for 1,200 users.", { x: 320, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   if (options.columns) {

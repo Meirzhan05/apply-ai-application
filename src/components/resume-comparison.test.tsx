@@ -5,7 +5,7 @@ import { initialDemoState } from "@/lib/demo-data";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import type { ApplicationPacket, DocxResumeArtifact, Profile, ResumeDraftDiagnostics, ResumeSourcePlan } from "@/lib/types";
-import { ResumeComparison, ResumeComparisonView, ResumeSourceSupportNotice } from "@/components/resume-comparison";
+import { ResumeComparison, ResumeComparisonView, ResumeSourceFactsNotice, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 
 async function fixture() {
   const state = initialDemoState();
@@ -104,6 +104,41 @@ describe("ResumeComparison", () => {
     expect(markup).toContain("Conflicts with confirmed facts");
     expect(markup).toContain("Confirm whether the project reached production.");
     expect(markup).toContain("Review profile facts");
+  });
+
+  it("keeps source-fact preflight concise and sends the user to confirm the pending facts", async () => {
+    const { profile, packet, changedAnchor } = await fixture();
+    const diagnostics: ResumeDraftDiagnostics = {
+      version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0,
+      requiredInformation: ["Confirm the date context.", "Confirm the project name."],
+      findings: [
+        { claimId: changedAnchor.id, affectedText: "2025", outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [], requiredInformation: "Confirm this source claim in your profile facts." },
+        { claimId: "pending-project", affectedText: "Northwind project", outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [], requiredInformation: "Confirm this source claim in your profile facts." },
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(ResumeComparison, { applicationId: "application-123", profile, packet, diagnostics, onReviewProfile: () => {} }));
+
+    expect(markup).toContain("2 source claims need your review");
+    expect(markup).toContain("Nothing is used until you confirm it in profile facts.");
+    expect(markup).toContain("Review source facts in profile");
+    expect(markup).toContain("2025");
+    expect(markup).toContain("Northwind project");
+    expect(markup).not.toContain("Information needed");
+    expect(markup).not.toContain("This original résumé claim has not been confirmed as a fact.");
+  });
+
+  it("shows an actionable source-fact review notice when the first draft has no packet yet", () => {
+    const diagnostics: ResumeDraftDiagnostics = {
+      version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0,
+      requiredInformation: ["Confirm one date."],
+      findings: [{ claimId: "date-anchor", affectedText: "2025", outcome: "unsupported", reason: "Unconfirmed source claim.", evidenceFactIds: [], requiredInformation: "Confirm this date." }],
+    };
+    const markup = renderToStaticMarkup(createElement(ResumeSourceFactsNotice, { diagnostics, onReviewProfile: () => {} }));
+
+    expect(markup).toContain("Review the source facts before drafting");
+    expect(markup).toContain("Nothing is used until you confirm it in profile facts.");
+    expect(markup).toContain("Review source facts in profile");
+    expect(markup).toContain("2025");
   });
 
   it("does not map saved edits onto a replaced source file", async () => {

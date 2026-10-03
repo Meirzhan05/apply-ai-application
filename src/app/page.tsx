@@ -9,7 +9,8 @@ import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
-import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
+import { hasSourcePreservingResume, ResumeComparison, ResumeSourceFactsNotice, ResumeSourceSupportNotice } from "@/components/resume-comparison";
+import { mergeCurrentSourceFacts } from "@/lib/profile-source-facts";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { WorkspaceDialog } from "@/app/workspace-dialog";
@@ -240,6 +241,8 @@ export default function Dashboard() {
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
   const hasCurrentBrowser = browserSessionAvailable(activeApp);
   const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
+  const activeSourceFactReview = activeApp?.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0;
+  const duplicateSourceFactError = Boolean(activeSourceFactReview && activeApp?.error && error === activeApp.error);
   const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const sharedUnknown = "Work authorization has not been confirmed.";
@@ -427,6 +430,16 @@ export default function Dashboard() {
       setFactCorrection({ applicationId: activeApp.id, facts: structuredClone(data.profile.facts.filter(fact => factIds.includes(fact.id))), claim });
     });
   };
+  const reviewSourceFacts = async () => {
+    try {
+      const latest = await reload();
+      setProfileDraft((current) => current ? mergeCurrentSourceFacts(current, latest.profile) : structuredClone(latest.profile));
+      pendingSetupFocus.current = "confirmed-resume-facts";
+      navigateSection("profile");
+    } catch {
+      setError("Could not refresh the current source facts. Check your connection and try again.");
+    }
+  };
 
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
@@ -459,7 +472,9 @@ export default function Dashboard() {
                               diagnostics={activeApp.resumeDraftDiagnostics}
                               latestError={activeApp.resumeDraftDiagnostics ? activeApp.error : undefined}
                               jobFingerprint={JSON.stringify(appJob)}
-                              onReviewProfile={() => correctClaim(activeApp.packet!.resumeLines.flatMap((line) => line.factIds), "Application resume")}
+                              onReviewProfile={activeApp.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0
+                                ? reviewSourceFacts
+                                : () => correctClaim(activeApp.packet!.resumeLines.flatMap((line) => line.factIds), "Application resume")}
                               onCorrectClaim={activeApp.status === "draft_review" ? correctClaim : undefined}
                               onRebuildResume={activeApp.status === "draft_review" ? () => act("draft", { applicationId: activeApp.id, draftMode: "resume" }) : undefined}
                               rebuildDisabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
@@ -780,7 +795,7 @@ export default function Dashboard() {
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
-        {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
+        {error && !duplicateSourceFactError && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
             <div>{displayError}{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>
@@ -1316,6 +1331,7 @@ export default function Dashboard() {
                       </div>
                     )}
                     {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
+                    {!activeApp.packet && activeApp.resumeDraftDiagnostics && <ResumeSourceFactsNotice diagnostics={activeApp.resumeDraftDiagnostics} onReviewProfile={reviewSourceFacts} />}
                     {activeApp.status === "cancelled" && <section className="step-card" aria-labelledby={`cancelled-${activeApp.id}`}>
                       <h3 id={`cancelled-${activeApp.id}`}>This attempt is cancelled</h3>
                       <p>Cancellation stopped this attempt before submission. {activeApp.packet ? "Your saved resume and answers remain available below." : "The role remains available in Matches."} Starting again creates a new attempt that needs a new review.</p>
@@ -1642,7 +1658,8 @@ export default function Dashboard() {
                         {applicationMaterials}
                       </details>
                     )}
-                    {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) && !activeAppIsAutomatic && (
+                    {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) &&
+                      !(activeApp.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0) && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
                     {canCancelApplication(activeApp) ? (

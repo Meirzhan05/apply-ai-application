@@ -50,7 +50,7 @@ export function sourceProfileHash(profile: Profile) {
 
 export function assertSourceInformationComplete(source: ResumeSourceDocument, profile: Profile): void {
   source = sourceWithCurrentEvidenceClaims(source, profile.name);
-  const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && confirmedFactIdsForAnchor(profile, anchor).length === 0).map((anchor) => ({
+  const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && confirmedFactIdsForAnchor(profile, anchor, source).length === 0).map((anchor) => ({
     claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [],
     requiredInformation: `Confirm this source claim in your profile facts: “${anchor.text}”`,
   }));

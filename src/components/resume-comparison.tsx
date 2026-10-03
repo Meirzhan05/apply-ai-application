@@ -8,6 +8,16 @@ type SourceDocument = NonNullable<Profile["resumeSourceDocument"]>;
 type Freshness = "checking" | "current" | "stale" | "unavailable";
 type FreshnessState = { key: string; value: Freshness; reasons: string[] };
 
+export function ResumeSourceFactsNotice({ diagnostics, onReviewProfile }: { diagnostics: ResumeDraftDiagnostics; onReviewProfile: () => void }) {
+  if (diagnostics.outcome !== "needs_information" || diagnostics.writerAttempts !== 0 || diagnostics.checkerAttempts !== 0) return null;
+  return <section className="resume-comparison-diagnostics" aria-label="Résumé source facts need review">
+    <h4>Review the source facts before drafting</h4>
+    <p>{diagnostics.findings.length} original résumé {diagnostics.findings.length === 1 ? "claim needs" : "claims need"} your review. Nothing is used until you confirm it in profile facts.</p>
+    <ul>{diagnostics.findings.map((finding) => <li key={finding.claimId}><p className="resume-change-text">{finding.affectedText}</p></li>)}</ul>
+    <button className="text-button" type="button" onClick={onReviewProfile}>Review source facts in profile</button>
+  </section>;
+}
+
 function isSourceArtifact(artifact: ResumeArtifact | undefined): artifact is SourceArtifact {
   return Boolean(artifact && artifact.format !== "latex" && "baseline" in artifact && "layoutValidation" in artifact);
 }
@@ -198,6 +208,7 @@ export function ResumeComparisonView({
     currentOriginalName && currentOriginalMime && profile.resumeSource?.sha256 === plan.sourceHash);
   const canPreview = freshness === "current";
   const failingDiagnostics = diagnostics && diagnostics.outcome !== "grounded" ? diagnostics : undefined;
+  const needsSourceFactReview = failingDiagnostics?.outcome === "needs_information" && failingDiagnostics.writerAttempts === 0 && failingDiagnostics.checkerAttempts === 0;
   const changedWording = plan.edits;
   const layout = sourceMatchesSaved ? source?.layout : undefined;
   const columns = layout && "columns" in layout ? layout.columns : undefined;
@@ -211,15 +222,16 @@ export function ResumeComparisonView({
       {failingDiagnostics && (
         <section className="resume-comparison-diagnostics" aria-label="Latest résumé preparation result">
           <h4>{failingDiagnostics.outcome === "needs_information" ? "Résumé needs more information" : "Résumé preparation could not be completed"}</h4>
+          {needsSourceFactReview && <p>{failingDiagnostics.findings.length} source {failingDiagnostics.findings.length === 1 ? "claim needs" : "claims need"} your review. Nothing is used until you confirm it in profile facts.</p>}
           {failingDiagnostics.outcome === "technical_failure" && <p>{latestError || "The latest résumé preparation failed before it produced a new validated file."}</p>}
           {failingDiagnostics.findings.length > 0 && <ul>
             {failingDiagnostics.findings.map((finding) => (
               <li key={`${finding.claimId}:${finding.outcome}`}>
-                <strong>{outcomeLabel(finding.outcome)}</strong>
-                {anchorLabel(sourceMatchesSaved ? source : undefined, finding.claimId) && <span className="resume-change-context"> · {anchorLabel(sourceMatchesSaved ? source : undefined, finding.claimId)}</span>}
+                {!needsSourceFactReview && <><strong>{outcomeLabel(finding.outcome)}</strong>
+                {anchorLabel(sourceMatchesSaved ? source : undefined, finding.claimId) && <span className="resume-change-context"> · {anchorLabel(sourceMatchesSaved ? source : undefined, finding.claimId)}</span>}</>}
                 <p className="resume-change-text">{finding.affectedText}</p>
-                <p>{finding.reason}</p>
-                {finding.requiredInformation && <p><strong>Needed:</strong> {finding.requiredInformation}</p>}
+                {!needsSourceFactReview && <><p>{finding.reason}</p>
+                {finding.requiredInformation && <p><strong>Needed:</strong> {finding.requiredInformation}</p>}</>}
                 {finding.evidenceFactIds.length > 0 && <details>
                   <summary>Confirmed facts checked</summary>
                   <ul>{finding.evidenceFactIds.map((factId) => <li key={factId}>{factsById.get(factId)?.text ?? "This fact is no longer in the current profile."}</li>)}</ul>
@@ -227,10 +239,10 @@ export function ResumeComparisonView({
               </li>
             ))}
           </ul>}
-          {failingDiagnostics.requiredInformation.length > 0 && <ul aria-label="Information needed">
+          {!needsSourceFactReview && failingDiagnostics.requiredInformation.length > 0 && <ul aria-label="Information needed">
             {failingDiagnostics.requiredInformation.map((item) => <li key={item}>{item}</li>)}
           </ul>}
-          {failingDiagnostics.outcome === "needs_information" && onReviewProfile && <button className="text-button" type="button" onClick={onReviewProfile}>Review profile facts</button>}
+          {failingDiagnostics.outcome === "needs_information" && onReviewProfile && <button className="text-button" type="button" onClick={onReviewProfile}>{needsSourceFactReview ? "Review source facts in profile" : "Review profile facts"}</button>}
           {failingDiagnostics.outcome === "technical_failure" && onRebuildResume && <button className="text-button" type="button" disabled={rebuildDisabled} onClick={onRebuildResume}>Retry résumé build</button>}
         </section>
       )}

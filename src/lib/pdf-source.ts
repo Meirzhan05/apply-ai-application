@@ -4,7 +4,7 @@ import { hashJson } from "@/lib/crypto";
 import { groupPositionedSpansIntoRegions } from "@/lib/source-regions";
 import { readablePdfFontFamily } from "@/lib/pdf-fonts";
 import { rendererDiagnosticMessage, type RendererDiagnosticPayload } from "@/lib/resume-renderer-diagnostics";
-import { isResumeSectionHeading, isSubstantiveSourceText } from "@/lib/resume-source-semantics";
+import { canonicalPdfSourceFactText, isResumeSectionHeading, isSubstantiveSourceText, pdfNonClaimArtifactAnchorIds } from "@/lib/resume-source-semantics";
 import type { PdfSourceAnchor, PdfSourceRepresentation, ResumeSourcePageLayout } from "@/lib/types";
 
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024;
@@ -344,6 +344,8 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
       };
     }
     const text = textLines.join("\n").trim();
+    const nonClaimArtifacts = pdfNonClaimArtifactAnchorIds(anchors);
+    for (const anchor of anchors) if (nonClaimArtifacts.has(anchor.id)) anchor.candidateClaim = false;
     if (text.length > MAX_SOURCE_TEXT) throw new Error(`This PDF contains ${text.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported version; no text was dropped.`);
     if (!text) reason = appendReason(reason, "This PDF has no extractable text and appears scanned or image-only. Upload an editable DOCX; OCR and image reconstruction are not supported.");
     if (!anchors.some((anchor) => anchor.candidateClaim)) reason = appendReason(reason, "This PDF has no clearly separated résumé claim text to confirm and preserve. Upload an editable DOCX with ordinary text paragraphs.");
@@ -367,7 +369,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
 
 export function suggestPdfFacts(source: PdfSourceRepresentation): Array<{ text: string; sourceAnchorId: string }> {
   return source.anchors.filter((anchor) => anchor.candidateClaim).flatMap((anchor) => {
-    const text = clean([anchor.sectionHeading, anchor.entryHeading, anchor.text].filter(Boolean).join(" · "));
-    return text.length >= 25 && text.length <= 500 ? [{ text, sourceAnchorId: anchor.id }] : [];
+    const text = canonicalPdfSourceFactText(anchor);
+    return text.length > 0 && text.length <= 500 ? [{ text, sourceAnchorId: anchor.id }] : [];
   });
 }
