@@ -900,6 +900,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   color: #5e6e69;
   line-height: 1.5;
 }
+.step-card > button { max-width: 100%; min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
 .card-title {
   display: flex;
   align-items: center;
@@ -1177,7 +1178,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   font-size: 12px;
 }
 .form-fields span {
-  color: #6a7b73;
+  color: var(--muted);
 }
 .form-fields strong {
   overflow-wrap: anywhere;

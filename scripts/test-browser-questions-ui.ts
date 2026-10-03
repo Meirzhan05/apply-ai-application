@@ -14,7 +14,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   await mkdir(".data/questions", { recursive: true });
   try {
-    for (const [name, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
+    for (const [name, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844], ["narrow", 320, 740]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
       const state = initialDemoState(); const app = selectApplication(state, state.jobs[0].id, state.profile.id);
       const packet = await draftPacket(state.profile, state.jobs[0]); packet.answers = [];
       setPacket(state, app, packet); approveFill(app, state.profile.id, app.packetHash!, state.jobs[0].applyUrl);
@@ -107,6 +107,9 @@ async function main() {
       assert.equal(await page.getByRole("dialog").count(), 0);
       assert.equal(await page.getByText("Complete the browser steps above, then refresh the form for review.", { exact: true }).count(), 0);
       assert.equal(await page.getByRole("button", { name: "Review materials for a new browser session", exact: true }).isVisible(), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Ended-session recovery must fit the narrow viewport");
+      const recovery = await page.getByRole("button", { name: "Review materials for a new browser session", exact: true }).boundingBox();
+      assert.ok(recovery && recovery.x >= 0 && recovery.x + recovery.width <= width && recovery.height >= 44);
       await page.screenshot({ path: `.data/questions/expired-${name}.png` });
       app.browserSessionExpiresAt = undefined; app.error = undefined;
       setFormSnapshot(app, { ...app.form!, readyToSubmit: false, blockers: [], fields: [
