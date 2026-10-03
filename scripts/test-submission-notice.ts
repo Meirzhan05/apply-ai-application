@@ -23,7 +23,7 @@ async function main(){
   await page.getByText(scenario==='blocked'?'Employer blocked submission':'Submission result uncertain',{exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'View submission screenshot ↗',exact:true}).getAttribute('href'),app.submissionReceipt.screenshotPath);
   assert.equal(await page.getByRole('link',{name:'Open employer application ↗',exact:true}).count(),scenario==='blocked'?1:0);
-  assert.equal(await page.getByRole('button',{name:'Return to packet review',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Return to materials review',exact:true}).count(),0);
   assert.equal(await page.getByText('The previous browser run has stopped.',{exact:false}).count(),0);
   assert.match(await page.locator('.warning-note').innerText(),/Sep 30, 2026.*7:09 PM/);
   assert.match(await page.locator('.warning-note').innerText(),/will not retry automatically/);

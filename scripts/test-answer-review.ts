@@ -103,6 +103,7 @@ async function main() {
       assert.equal(await essayInput.inputValue(), essay.answer);
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
+      await page.waitForFunction(id => document.activeElement?.id === `readiness-${id}`, app.id);
       assert.equal(confirmations, 1);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), false);
       assert.equal(app.approvals.length, 0);

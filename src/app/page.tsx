@@ -106,6 +106,7 @@ export default function Dashboard() {
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
+  const actionFocus = useRef<HTMLElement | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
@@ -151,6 +152,8 @@ export default function Dashboard() {
     catch { /* Keep working when browser storage is disabled. */ }
   }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
+    const launcher = document.activeElement;
+    actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
     setError("");
@@ -202,6 +205,17 @@ export default function Dashboard() {
   });
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
+  useEffect(() => {
+    if (busy || !actionFocus.current) return;
+    const launcher = actionFocus.current;
+    actionFocus.current = null;
+    const frame = requestAnimationFrame(() => {
+      if (launcher.isConnected || document.activeElement !== document.body) return;
+      const target = document.getElementById(`readiness-${activeApp?.id}`) ?? document.querySelector<HTMLElement>(".app-detail .status-pill");
+      target?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [busy, activeApp?.id]);
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
@@ -766,7 +780,7 @@ export default function Dashboard() {
                       {needsAction.length > 1 ? "s" : ""} need your decision
                     </strong>
                     <p>
-                      Review a packet, complete a form, or check an uncertain
+                      Review materials, complete a form, or check an uncertain
                       result.
                     </p>
                   </div>
@@ -1213,7 +1227,7 @@ export default function Dashboard() {
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
                       </div>
-                    <span className="status-pill" role="status" aria-live="polite">
+                    <span className="status-pill" role="status" aria-live="polite" tabIndex={-1}>
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
@@ -1249,10 +1263,10 @@ export default function Dashboard() {
                         <p>{activeApp.queuedRun.reason === "budget" ? "The service spending limit is full. Your request is saved and will start when budget is available." : activeApp.queuedRun.reason === "active_run" ? "Finish or cancel your active browser session. This saved request will start afterward." : "Your saved request is waiting for a worker."}</p>
                       </div>
                     )}
-                    {activeApp.status === "drafting" && <p role="status">Preparing your packet from confirmed facts…</p>}
+                    {activeApp.status === "drafting" && <p role="status">Preparing your materials from confirmed facts…</p>}
                     {!activeAppIsAutomatic && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
-                        <h3>Prepare your application packet</h3>
+                        <h3>Prepare your application materials</h3>
                         <p>
                           The agent will use confirmed facts to build a tailored
                           resume and write essays for your confirmation. You
@@ -1282,8 +1296,8 @@ export default function Dashboard() {
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
                         <p>
-                          This opens an isolated browser and enters only the
-                          packet you approved. You will review the filled form
+                          This opens a separate browser session and enters only the
+                          materials you approved. You will review the filled form
                           before submission.
                         </p>
                         <button
@@ -1325,7 +1339,7 @@ export default function Dashboard() {
                       <>
                       {hasCurrentBrowser && hasUnreadableQuestionLabels(activeApp.form) ? <div className="step-card">
                         <h3>Update the form questions</h3>
-                        <p>The employer’s question headings need to be read again before you answer. Your browser and packet are saved.</p>
+                        <p>The employer’s question headings need to be read again before you answer. Your browser session and materials are saved.</p>
                         <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.browserQuestionRun)} onClick={() => act("resumeBrowser", { applicationId: activeApp.id })}>Refresh questions</button>
                       </div> : hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
                       <div className="step-card">
@@ -1507,12 +1521,12 @@ export default function Dashboard() {
                           </p>}
                           {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View submission screenshot ↗</a>}
                           {employerBlock && <p>
-                            Review the employer’s instructions in your own browser. Your saved packet and confirmed essays are available below.{" "}
+                            Review the employer’s instructions in your own browser. Your saved materials and confirmed essays are available below.{" "}
                             <a href={appJob.applyUrl} target="_blank" rel="noreferrer">Open employer application ↗</a>
                           </p>}
                           {activeApp.manualSubmissionReport && !activeApp.manualSubmissionReport.resolution && !activeApp.submissionAttemptedAt && <p>
                             The previous browser run has stopped. No new form fill has started.
-                            Your saved packet and confirmed essays are available for review.
+                            Your saved materials and confirmed essays are available for review.
                           </p>}
                           {!activeApp.autonomousAuthorization && canReopenManualAttempt(activeApp) && <>
                             <p>Check the employer page or confirmation email first. Missing email alone does not confirm that an application failed.</p>
@@ -1521,9 +1535,9 @@ export default function Dashboard() {
                               I confirmed this attempt did not submit an application.
                             </label>
                             <button className="outline-action" disabled={Boolean(busy) || confirmedUnacceptedId !== activeApp.id} onClick={() => act("reviewManualFailure", { applicationId: activeApp.id, confirmedNotAccepted: true })}>
-                              Return to packet review
+                              Return to materials review
                             </button>
-                            <p className="muted">This closes the old browser. A new fill run requires your packet approval.</p>
+                            <p className="muted">This closes the old browser. Filling a new form requires your approval of its materials.</p>
                           </>}
                           {activeApp.form && <details>
                             <summary>View previous browser snapshot</summary>
@@ -1989,7 +2003,7 @@ export default function Dashboard() {
       {pendingNavigation && activeApp?.packet && (
         <WorkspaceDialog labelledBy="unsaved-heading" onClose={() => { if (!busy) setPendingNavigation(null); }}>
           <h2 id="unsaved-heading">Keep your changes?</h2>
-          <p>Your {editingEssay !== null ? "essay edit" : "personal answers"} for {appJob?.company ?? "this application"} have not been saved. Save them before leaving, or discard only these changes.</p>
+          <p>Your {editingEssay !== null ? "essay edit" : "personal answers"} for {appJob?.company ?? "this application"} {editingEssay !== null ? "has" : "have"} not been saved. Save before leaving, or discard only these changes.</p>
           <div className="action-row">
             <button className="dark-button" disabled={Boolean(busy) || (editingEssay !== null && !essayDraft?.text.trim())}
               onClick={async () => {
