@@ -18,11 +18,11 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
-import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
+import { dismissalReasons, emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
-import { postWorkspaceAction } from "@/lib/workspace-action";
+import { actionNeedsWorkspaceCheck, postWorkspaceAction } from "@/lib/workspace-action";
 import { saveRoleBatch } from "@/lib/save-role-batch";
 import { checkAge, discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
@@ -107,6 +107,7 @@ export default function Dashboard() {
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const needsWorkspaceCheck = actionNeedsWorkspaceCheck(error);
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
   const [essayDraft, setEssayDraft] = useState<{ applicationId: string; answerIndex: number; text: string } | null>(null);
@@ -144,6 +145,10 @@ export default function Dashboard() {
             if (saved) {
               setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
               setImportFields(saved.draft); setImportOpen(saved.importOpen);
+              if (saved.dismissDraft && body.jobs.some(job => job.id === saved.dismissDraft?.jobId) && body.feedback.some(item => item.jobId === saved.dismissDraft?.jobId && item.kind === "dismissed")) {
+                setDismissDraft({ owner: body.profile.id, jobId: saved.dismissDraft.jobId, reason: saved.dismissDraft.reason });
+                if (saved.dismissDraft.open) setDismissJobId(saved.dismissDraft.jobId);
+              }
             }
             const navigation = readWorkspaceNavigation(window.sessionStorage, body.profile.id, body.applications.map(app => app.id));
             if (navigation) {
@@ -167,9 +172,9 @@ export default function Dashboard() {
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
-    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen }); }
+    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen, ...(dismissDraft?.owner === owner ? { dismissDraft: { jobId: dismissDraft.jobId, reason: dismissDraft.reason, open: dismissJobId === dismissDraft.jobId } } : {}) }); }
     catch { /* Keep working when browser storage is disabled. */ }
-  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen]);
+  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen, dismissDraft, dismissJobId]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     const launcher = document.activeElement;
     actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
@@ -833,7 +838,7 @@ export default function Dashboard() {
         {error && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
+            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
             <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
             </button>
@@ -890,6 +895,7 @@ export default function Dashboard() {
                 </div>
               )}
               {!emptyPersonalView && <>
+              <div className="matches-browse-controls">
               <div className="job-search">
                 <label htmlFor="job-search">Search roles or companies <kbd>/</kbd></label>
                 <div>
@@ -902,6 +908,7 @@ export default function Dashboard() {
                 {(["all", "saved", "dismissed"] as MatchCollection[]).map(scope => <button key={scope} disabled={Boolean(batchProgress)} className={`collection-filter ${collection === scope ? "selected" : ""}`} aria-pressed={collection === scope} onClick={() => setCollection(scope)}>
                   {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
                 </button>)}
+              </div>
               </div>
               <div className="matches-controls">
               <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filtered.length} {filtered.length === 1 ? "role" : "roles"} · {filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
@@ -955,6 +962,7 @@ export default function Dashboard() {
                   if (!undo) return;
                   const next = await act("feedback", undo);
                   if (next) {
+                    if (dismissDraft?.jobId === undo.jobId) setDismissDraft(null);
                     if (collection === "dismissed") continueAfterRemoval(undo.jobId);
                     else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
                     const restoredRole = next.jobs.find(role => role.id === undo.jobId);
@@ -2114,17 +2122,12 @@ export default function Dashboard() {
                 disabled={busy === "feedback"}
                 onChange={(event) => setDismissDraft({ owner: data.profile.id, jobId: dismissJobId, reason: event.target.value })}
               >
-                <option value="">No reason supplied</option>
-                <option>Wrong role</option>
-                <option>Location is not right</option>
-                <option>Experience level is not right</option>
-                <option>Not interested in this employer</option>
-                <option>Other</option>
+                {dismissalReasons.map(reason => <option key={reason} value={reason}>{reason || "No reason supplied"}</option>)}
               </select>
             </label>
             <button
               className="dark-button"
-              disabled={Boolean(busy) || !dismissedRole}
+              disabled={Boolean(busy) || !dismissedRole || needsWorkspaceCheck}
               onClick={async () => {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
@@ -2137,7 +2140,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
+            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2195,7 +2198,7 @@ export default function Dashboard() {
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
             <form className="job-import-form" onSubmit={async event => {
               event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
-              if (!importReady || busy) return;
+              if (!importReady || busy || needsWorkspaceCheck) return;
               const next = await act("import", importFields);
               if (next) {
                 const added = importedRole(jobs, next.jobs, importFields.url);
@@ -2217,15 +2220,15 @@ export default function Dashboard() {
                   <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
+              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady || needsWorkspaceCheck}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
                 <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>
                 <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setConfirmDiscardImport(false); setError(""); setImportOpen(false); }}>Confirm discard</button>
               </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
-              {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
-                <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
-                <button className="text-button" type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
+              {error && <div role="alert"><p>{displayError} Your entered details are preserved.</p>
+                <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}
+                <button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}

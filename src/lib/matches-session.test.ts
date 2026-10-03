@@ -31,3 +31,22 @@ it("ignores corrupt or unsupported storage and constrains restored values", () =
   expect(readMatchesSession(unavailable, "alice")).toBeNull();
   expect(() => writeMatchesSession(unavailable, "alice", { view: restored!.view, draft: emptyImport, importOpen: false })).not.toThrow();
 });
+
+it("keeps a pending dismissal selection private to its applicant and clears it after saving", () => {
+  const storage = store();
+  const session = { view: { collection: "all" as const, filter: "all" as const, search: "", sort: "relevant" as const }, draft: emptyImport, importOpen: false, dismissDraft: { jobId: "role-a", reason: "Wrong role", open: true } };
+  writeMatchesSession(storage, "alice", session);
+  expect(readMatchesSession(storage, "alice")).toEqual(session);
+  expect(readMatchesSession(storage, "bob")).toBeNull();
+  writeMatchesSession(storage, "alice", { view: session.view, draft: emptyImport, importOpen: false });
+  expect(readMatchesSession(storage, "alice")?.dismissDraft).toBeUndefined();
+  expect(storage.getItem("apply-ai:matches:alice")).not.toContain("Wrong role");
+});
+
+it("does not restore corrupt dismissal choices or oversized role identifiers", () => {
+  const storage = store();
+  for (const dismissDraft of [{ jobId: "role", reason: "unknown" }, { jobId: "x".repeat(201), reason: "Wrong role" }]) {
+    storage.setItem("apply-ai:matches:alice", JSON.stringify({ version: 1, dismissDraft }));
+    expect(readMatchesSession(storage, "alice")?.dismissDraft).toBeUndefined();
+  }
+});

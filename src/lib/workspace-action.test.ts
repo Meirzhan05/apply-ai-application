@@ -1,6 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { postWorkspaceAction } from "./workspace-action";
+import { actionNeedsWorkspaceCheck, postWorkspaceAction } from "./workspace-action";
 afterEach(() => vi.unstubAllGlobals());
+it("requires status recovery for authentication and ambiguous outcomes, while preserving specific domain retry guidance", async () => {
+  expect(actionNeedsWorkspaceCheck("AUTH_REQUIRED")).toBe(true);
+  vi.stubGlobal("fetch", vi.fn(async () => new Response('<html>gateway</html>', { status: 502 })));
+  try { await postWorkspaceAction("import", {}); throw new Error("Expected unreadable response"); }
+  catch (error) { if (!(error instanceof Error)) throw error; expect(actionNeedsWorkspaceCheck(error.message)).toBe(true); }
+  expect(actionNeedsWorkspaceCheck("Posting unavailable. Check the link or try later.")).toBe(false);
+});
 it("sends one JSON action and accepts a successful response", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('{"ok":true}')); vi.stubGlobal("fetch", fetch);
   await postWorkspaceAction("feedback", { jobId: "a", kind: "saved" });

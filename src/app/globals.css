@@ -1750,6 +1750,12 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .correction-facts .checkline input { width: 18px; height: 18px; flex: none; margin: 0; }
 .workspace-dialog .text-button { display: inline-flex; align-items: center; min-height: 44px; }
 .workspace-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.workspace-recovery-actions .dark-button { display: inline-flex; align-items: center; min-height: 44px; }
+@media (min-width: 651px) {
+  .matches-panel .page-heading { margin-bottom: 16px; }
+  .matches-panel .job-search { margin-top: 12px; }
+  .matches-panel .result-summary { margin: 8px 0; }
+}
 .materials-update { padding: 20px 0; margin-bottom: 24px; border-bottom: 1px solid var(--line); scroll-margin-top: 100px; }
 .materials-update h3 { margin: 0 0 8px; }
 .materials-update p { max-width: 65ch; line-height: 1.6; }
@@ -1940,4 +1946,10 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .matches-controls .keyboard-guide { grid-row: 2; grid-column: 2; }
   .matches-controls .fit-guide[open] { grid-row: 4; grid-column: 1 / -1; }
   .matches-controls .keyboard-guide[open] { grid-row: 5; grid-column: 1 / -1; }
+}
+
+@media (min-width: 1100px) {
+  .matches-browse-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 20px; margin: 12px 0 8px; }
+  .matches-browse-controls .job-search { flex: 1 1 260px; margin: 0; }
+  .matches-browse-controls .collectionbar { flex: none; margin: 0; }
 }
