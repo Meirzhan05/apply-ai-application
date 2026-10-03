@@ -94,10 +94,18 @@ async function main() {
         const morePages = page.getByRole("button", { name: "More pages", exact: true });
         await morePages.click();
         await page.getByRole("link", { name: "AI usage", exact: true }).waitFor();
+        await page.locator("#more-pages").getByRole("button", { name: "Agent activity", exact: true }).click();
+        await page.locator("#matches-activity").getByRole("heading", { name: "Agent activity", exact: true }).waitFor();
         await page.keyboard.press("Escape");
+        assert.equal(await page.locator("#matches-activity").isVisible(), false);
+        assert.equal(await page.locator("#more-pages").getByRole("button", { name: "Agent activity", exact: true }).evaluate(element => element === document.activeElement), true, "Closing nested activity returns focus to its More entry");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "More pages");
         assert.equal(await morePages.evaluate(element => element === document.activeElement), true, "Closing auxiliary navigation restores focus");
         await page.getByRole("button", { name: /^Filter and sort/ }).click();
       }
+      assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).getAttribute("aria-describedby"), "sort-help");
+      assert.equal(await page.getByText("Relevance considers fit and your feedback.", { exact: true }).isVisible(), true);
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
       await page.locator(".fit-guide summary").click();
@@ -335,6 +343,13 @@ async function main() {
       fixture.jobs[0].title = "Early career software engineering and analytics opportunity — international product development team";
       fixture.jobs[0].company = "International technology research and development company";
       await page.goto(origin);
+      if (width > 640) {
+        const activityLauncher = page.getByRole("button", { name: "Activity", exact: true });
+        await activityLauncher.click();
+        await page.locator("#matches-activity").getByRole("heading", { name: "Agent activity", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        assert.equal(await activityLauncher.evaluate(element => element === document.activeElement), true, "Tablet retains activity access and focus restoration");
+      }
       await page.getByRole("article").first().waitFor();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Long-content layout must not overflow at ${width}px`);
       for (const name of ["Matches", "Applications", "Profile", "Search settings"]) {

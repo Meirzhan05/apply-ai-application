@@ -552,6 +552,47 @@ export default function Dashboard() {
                           )}
                         </div>
                       );
+  const activityContent = <>
+              <h2>Agent activity</h2>
+              <div className="timeline">
+                {data.activity.slice(0, 4).map((event) => (
+                  <div className="timeline-item" key={event.id}>
+                    <span className="dot" />
+                    <small>
+                      {new Date(event.at).toLocaleTimeString([], {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </small>
+                    <strong>{event.label}</strong>
+                    <p>{event.detail}</p>
+                  </div>
+                ))}
+                <div className="timeline-item future">
+                  <span className="dot" />
+                  <small>{data.profile.demo ? "Source checks" : "Expected check frequency"}</small>
+                  <strong>{data.profile.demo ? "Demo workspace" : "About every 4 hours"}</strong>
+                  <p>{data.profile.demo ? "Demo listings do not run live source checks." : "Supported sources are checked for new roles."}</p>
+                </div>
+              </div>
+              <div className="digest-card">
+                <h3>Daily digest</h3>
+                <p>
+                  One summary of new matches and applications that need you.
+                </p>
+                <span>Available after email is configured</span>
+              </div>
+              <div className="control-card">
+                <ShieldCheck size={22} />
+                <div>
+                  <strong>You’re in control</strong>
+                  <p>{data.automation.enabled ? "Enabled automation can prepare and submit applications using your saved settings." : "Find opportunities, then choose what to prepare."}</p>
+                  <button onClick={() => navigateSection("settings")}>
+                    Adjust search settings <ArrowRight size={15} />
+                  </button>
+                </div>
+              </div>
+  </>;
 
   const nav: {
     key: Section;
@@ -601,7 +642,7 @@ export default function Dashboard() {
         </nav>
         <div className="sidebar-tools"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
         <button className="sidebar-more" popoverTarget="more-pages" aria-label="More pages"><Menu size={20} /><span>More</span></button>
-        <div id="more-pages" popover="auto" className="more-pages"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
+        <div id="more-pages" popover="auto" className="more-pages">{section === "matches" && <button popoverTarget="matches-activity">Agent activity</button>}<a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -684,7 +725,7 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="matches-heading-actions">
-                {quietActivity && <button className="outline-action activity-launcher" popoverTarget="matches-activity">Activity <ChevronDown size={15} /></button>}
+                <button className={`outline-action activity-launcher ${quietActivity ? "" : "activity-attention"}`} popoverTarget="matches-activity">Activity <ChevronDown size={15} /></button>
                 <button
                   className="outline-action import-launcher"
                   aria-label="+ Import a job link"
@@ -735,14 +776,15 @@ export default function Dashboard() {
                   {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
                 </button>)}
               </div>
-              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
+              <div className="matches-controls">
+              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filtered.length} {filtered.length === 1 ? "role" : "roles"} · {filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
               <div id="match-filter-options" className={`filterbar ${filterOptionsOpen ? "expanded" : "collapsed"}`}>
                 <div className="filters" role="group" aria-label="Fit within this collection">
                   {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
                     {item === "all" ? "Any fit" : item[0].toUpperCase() + item.slice(1)} <span>{view.counts[item]}</span>
                   </button>)}
                 </div>
-                <label className="sort-control">Sort <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label>
+                <div className="sort-options"><label className="sort-control">Sort <select aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
               </div>
               <div className="matches-subbar">
               <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
@@ -762,7 +804,7 @@ export default function Dashboard() {
                 <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
               </div>}
               <details className="fit-guide matches-guidance">
-                <summary>{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</summary>
+                <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
                 <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
                 <p>Press <kbd>/</kbd> to search, <kbd>j</kbd> for the next role, or <kbd>k</kbd> for the previous role. Shortcuts pause while you type or use a dialog.</p>
@@ -775,6 +817,7 @@ export default function Dashboard() {
                   <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
                 </dl>
               </details>
+              </div>
               </div>
               <div className="job-list" ref={jobList}>
                 {filtered.length ? (
@@ -1046,47 +1089,10 @@ export default function Dashboard() {
               )}
               </details>
             </main>
-            <aside id="matches-activity" popover={quietActivity ? "auto" : undefined} className={`activity-panel ${quietActivity ? "activity-popover" : ""}`}>
-              {quietActivity && <button className="modal-close" aria-label="Close agent activity" popoverTarget="matches-activity" popoverTargetAction="hide"><X size={18} /></button>}
-              <h2>Agent activity</h2>
-              <div className="timeline">
-                {data.activity.slice(0, 4).map((event) => (
-                  <div className="timeline-item" key={event.id}>
-                    <span className="dot" />
-                    <small>
-                      {new Date(event.at).toLocaleTimeString([], {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </small>
-                    <strong>{event.label}</strong>
-                    <p>{event.detail}</p>
-                  </div>
-                ))}
-                <div className="timeline-item future">
-                  <span className="dot" />
-                  <small>{data.profile.demo ? "Source checks" : "Expected check frequency"}</small>
-                  <strong>{data.profile.demo ? "Demo workspace" : "About every 4 hours"}</strong>
-                  <p>{data.profile.demo ? "Demo listings do not run live source checks." : "Supported sources are checked for new roles."}</p>
-                </div>
-              </div>
-              <div className="digest-card">
-                <h3>Daily digest</h3>
-                <p>
-                  One summary of new matches and applications that need you.
-                </p>
-                <span>Available after email is configured</span>
-              </div>
-              <div className="control-card">
-                <ShieldCheck size={22} />
-                <div>
-                  <strong>You’re in control</strong>
-                  <p>{data.automation.enabled ? "Enabled automation can prepare and submit applications using your saved settings." : "Find opportunities, then choose what to prepare."}</p>
-                  <button onClick={() => navigateSection("settings")}>
-                    Adjust search settings <ArrowRight size={15} />
-                  </button>
-                </div>
-              </div>
+            {!quietActivity && <aside className="activity-panel">{activityContent}</aside>}
+            <aside id="matches-activity" popover="auto" className="activity-panel activity-popover">
+              <button className="modal-close" aria-label="Close agent activity" popoverTarget="matches-activity" popoverTargetAction="hide"><X size={18} /></button>
+              {activityContent}
             </aside>
           </div>
         )}
