@@ -322,7 +322,7 @@ export default function Dashboard() {
       if (!event.repeat && ["s", "d", "u"].includes(event.key)) {
         const role = target.closest("article");
         const action = event.key === "u"
-          ? target.closest(".matches-panel")?.querySelector<HTMLButtonElement>('[data-match-action="undo"]')
+          ? target.closest(".matches-workspace")?.querySelector<HTMLButtonElement>('[data-match-action="undo"]')
           : role?.querySelector<HTMLButtonElement>(event.key === "s" ? '[data-match-action="save"]' : '[data-match-action="dismiss"], [data-match-action="restore"]');
         if (action && !action.disabled) { event.preventDefault(); action.click(); }
       }
@@ -857,8 +857,39 @@ export default function Dashboard() {
             </button>}
           </div>
         )}
+              {section === "matches" && feedbackNotice && <div className="feedback-notice matches-feedback-rail" role="status">
+                <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
+                {feedbackNotice.savedGroup && <button className="text-button" disabled={Boolean(batchProgress)} data-match-action="review-saved" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
+                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts={shortcutsEnabled ? "u" : undefined} aria-label="Undo dismissal" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={async () => {
+                  const undo = feedbackNotice.undo;
+                  if (!undo) return;
+                  const next = await act("feedback", undo);
+                  if (next) {
+                    if (dismissDraft?.jobId === undo.jobId) setDismissDraft(null);
+                    if (collection === "dismissed") continueAfterRemoval(undo.jobId);
+                    else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
+                    const restoredRole = next.jobs.find(role => role.id === undo.jobId);
+                    setFeedbackNotice({ message: restoredRole ? `${restoredRole.title} at ${restoredRole.company} is back in your matches.` : "Dismissal undone. The role is back in your matches." });
+                  }
+                }}>Undo</button>}
+                {feedbackNotice.returnView && <button className="text-button" aria-label="Return to previous view" onClick={() => {
+                  const previous = feedbackNotice.returnView!;
+                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
+                  document.getElementById("matches-heading")?.focus();
+                }}>Previous view</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={() => { setError(""); if (dismissDraft?.owner !== data.profile.id || dismissDraft.jobId !== feedbackNotice.reasonFor) setDismissDraft(null); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
+                <details className="feedback-options" key={feedbackNotice.message}>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
+                  <div className="feedback-details">
+                    {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
+                    {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
+                    {!feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
+                  </div>
+                </details>
+                <button aria-label="Close feedback message" onClick={() => { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice(null); }}><X size={18} /></button>
+              </div>}
         {section === "matches" && (
-          <div className={`content-grid ${quietActivity ? "activity-quiet" : ""}`}>
+          <div className={`content-grid matches-content-scroll ${quietActivity ? "activity-quiet" : ""}`} role="region" aria-label="Matches workspace" tabIndex={0}>
             <main className={`main-panel matches-panel ${feedbackNotice ? "feedback-visible" : ""}`}>
               <div className="page-heading">
                 <div>
@@ -969,37 +1000,6 @@ export default function Dashboard() {
               </div>
               </div>
               </>}
-              {feedbackNotice && <div className="feedback-notice" role="status">
-                <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
-                {feedbackNotice.savedGroup && <button className="text-button" disabled={Boolean(batchProgress)} data-match-action="review-saved" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
-                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={async () => {
-                  const undo = feedbackNotice.undo;
-                  if (!undo) return;
-                  const next = await act("feedback", undo);
-                  if (next) {
-                    if (dismissDraft?.jobId === undo.jobId) setDismissDraft(null);
-                    if (collection === "dismissed") continueAfterRemoval(undo.jobId);
-                    else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
-                    const restoredRole = next.jobs.find(role => role.id === undo.jobId);
-                    setFeedbackNotice({ message: restoredRole ? `${restoredRole.title} at ${restoredRole.company} is back in your matches.` : "Dismissal undone. The role is back in your matches." });
-                  }
-                }}>Undo</button>}
-                {feedbackNotice.returnView && <button className="text-button" aria-label="Return to previous view" onClick={() => {
-                  const previous = feedbackNotice.returnView!;
-                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
-                  document.getElementById("matches-heading")?.focus();
-                }}>Previous view</button>}
-                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={() => { setError(""); if (dismissDraft?.owner !== data.profile.id || dismissDraft.jobId !== feedbackNotice.reasonFor) setDismissDraft(null); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
-                <details className="feedback-options" key={feedbackNotice.message}>
-                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
-                  <div className="feedback-details">
-                    {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
-                    {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
-                    {!feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
-                  </div>
-                </details>
-                <button aria-label="Close feedback message" onClick={() => { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice(null); }}><X size={18} /></button>
-              </div>}
               <div className="job-list" ref={jobList}>
                 {filtered.length ? (
                   filtered.map((job) => {
@@ -1092,7 +1092,7 @@ export default function Dashboard() {
                           </details>
                         </div>
                         <div className="job-actions">
-                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={(Boolean(busy) || needsWorkspaceCheck)} onClick={async () => {
+                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts={shortcutsEnabled ? "d" : undefined} aria-label={`Restore role ${context}`} disabled={(Boolean(busy) || needsWorkspaceCheck)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
                             if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${context} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
@@ -1101,7 +1101,7 @@ export default function Dashboard() {
                               disabled={(Boolean(busy) || needsWorkspaceCheck)}
                               aria-label={`${feedback.get(job.id)?.kind === "saved" ? "Unsave" : "Save"} ${context}`}
                               data-match-action="save"
-                              aria-keyshortcuts="s"
+                              aria-keyshortcuts={shortcutsEnabled ? "s" : undefined}
                               aria-pressed={feedback.get(job.id)?.kind === "saved"}
                               onClick={async () => {
                                 const saved = feedback.get(job.id)?.kind === "saved";
@@ -1131,7 +1131,7 @@ export default function Dashboard() {
                             <button
                               disabled={(Boolean(busy) || needsWorkspaceCheck)}
                               data-match-action="dismiss"
-                              aria-keyshortcuts="d"
+                              aria-keyshortcuts={shortcutsEnabled ? "d" : undefined}
                               aria-label={`Dismiss ${context}`}
                               onClick={async () => {
                                 const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
