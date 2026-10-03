@@ -80,6 +80,10 @@ async function main() {
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
       assert.equal(await humanInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await humanInput.inputValue(), "");
+      const formatHint = page.getByText("Answer Yes or No. Add details only if the question asks for them.", { exact: true });
+      assert.equal(await formatHint.isVisible(), true);
+      assert.equal(await humanInput.getAttribute("aria-describedby"), await formatHint.getAttribute("id"));
+      assert.equal(await page.getByText("Your answer is needed", { exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByText("Before approving", { exact: true }).waitFor();
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Answer 1 personal question" }).count(), 1);

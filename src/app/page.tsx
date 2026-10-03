@@ -76,6 +76,8 @@ type ViewState = Omit<AppState, "applications"> & {
 };
 type Section = WorkspaceSection;
 type Filter = MatchFilter;
+const personalAnswerFormatHint = (question: string) => /^(?:are you.*(?:authorized|eligible).*work|(?:will|do) you.*(?:need|require).*sponsor)/i.test(question)
+  ? "Answer Yes or No. Add details only if the question asks for them." : "";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -593,6 +595,7 @@ export default function Dashboard() {
                                   {applicationFailure?.action === "confirmEssay" && applicationFailure.answerIndex === i && applicationError && <p role="alert">{applicationError} Your draft is still available. Review the current wording and try confirmation again.</p>}
                                 </> : <>
                                   <textarea id={`screening-${activeApp.id}-${i}`} maxLength={4000}
+                                    aria-describedby={answerOwner(answer.question) === "human" && personalAnswerFormatHint(answer.question) ? `answer-format-${activeApp.id}-${i}` : undefined}
                                     disabled={activeApp.status !== "draft_review" || Boolean(activeApp.materialsStale) || Boolean(busy) || Boolean(activeApp.queuedRun) || editingEssay !== null}
                                     readOnly={answerOwner(answer.question) === "ai"} value={(answerDraft[i] ?? answer).answer}
                                     onChange={(event) => {
@@ -601,7 +604,8 @@ export default function Dashboard() {
                                       draft[i] = { ...draft[i], answer: event.target.value, userProvided: true, requiresUserInput: false };
                                       setAnswerDraft(draft);
                                     }} />
-                                  <small>{answerOwner(answer.question) === "ai" ? "AI draft needed · use Write essays with AI below" : answersDirty && answerDraft[i]?.answer !== answer.answer ? "Your answer · unsaved changes" : answer.requiresUserInput && !answer.userProvided ? "Human-only · your answer needed" : answer.userProvided ? "Your own answer" : "From your confirmed profile"}</small>
+                                  {answerOwner(answer.question) === "human" && personalAnswerFormatHint(answer.question) && <small id={`answer-format-${activeApp.id}-${i}`}>{personalAnswerFormatHint(answer.question)}</small>}
+                                  <small>{answerOwner(answer.question) === "ai" ? "AI draft needed · use Write essays with AI below" : answersDirty && answerDraft[i]?.answer !== answer.answer ? "Your answer · unsaved changes" : answer.requiresUserInput && !answer.userProvided ? "Your answer is needed" : answer.userProvided ? "Your own answer" : "From your confirmed profile"}</small>
                                 </>}
                               </div>
                             ))}
