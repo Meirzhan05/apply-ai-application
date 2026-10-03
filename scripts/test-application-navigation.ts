@@ -4,6 +4,7 @@ import { initialDemoState } from "../src/lib/demo-data";
 import { selectApplication, setPacket } from "../src/lib/workflow";
 import { publicState } from "../src/lib/public-state";
 import { packetProfileHash } from "../src/lib/drafting";
+import { applyHumanAnswerEdits } from "../src/lib/answer-policy";
 
 async function main() {
   const state = initialDemoState();
@@ -15,6 +16,9 @@ async function main() {
   const completed = state.applications[5]; completed.status = "submitted"; completed.confirmation = "Synthetic employer confirmation."; completed.submittedAt = new Date().toISOString();
   const fact = state.profile.facts[0];
   setPacket(state, first, { schemaVersion: 1, files: [{ kind: "resume", filename: "tailored-resume.pdf", mimeType: "application/pdf", sha256: "a".repeat(64), size: 1, factIds: [fact.id] }], version: 1, createdAt: new Date().toISOString(), model: "fixture", summary: "Navigation verification", profileHash: packetProfileHash(state.profile), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [{ question: "Are you legally authorized to work in the United States?", answer: "", author: "human", factIds: [], requiresUserInput: true }] });
+  const other = state.applications[1];
+  setPacket(state, other, { ...structuredClone(first.packet!), answers: [{ ...first.packet!.answers[0], answer: "Other employer answer", userProvided: true, requiresUserInput: false }] });
+  assert.equal(applyHumanAnswerEdits(other.packet!.answers, [{ ...first.packet!.answers[0], answer: "Misplaced answer" }])[0].answer, "Misplaced answer", "Matching questions alone cannot establish application ownership");
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     for (const width of [320, 390, 820, 1440]) {
@@ -22,7 +26,15 @@ async function main() {
       const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
       await page.route("**/api/state", route => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
-      await page.route("**/api/actions", () => { throw new Error("Navigation must not perform application actions"); });
+      let saves = 0; let failSave = true;
+      await page.route("**/api/actions", async route => {
+        const { action, payload } = route.request().postDataJSON();
+        assert.equal(action, "editPacket"); assert.equal(payload.applicationId, first.id);
+        assert.equal(payload.answers[0].answer, "Unsaved applicant answer");
+        if (failSave) return route.fulfill({ status: 503, json: { error: "Temporary save failure" } });
+        first.packet!.answers = applyHumanAnswerEdits(first.packet!.answers, payload.answers); saves++;
+        await route.fulfill({ json: { ok: true } });
+      });
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
       const picker = page.getByRole("combobox", { name: "Choose application", exact: true });
@@ -52,13 +64,34 @@ async function main() {
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Unsaved applicant answer");
       if (width <= 650) assert.equal(await picker.isDisabled(), true);
       else assert.equal(await page.locator(".app-list-item").nth(5).isDisabled(), true);
-      await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
-      assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "");
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Keep your changes?" });
+      await dialog.getByRole("button", { name: "Stay here", exact: true }).click();
+      assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "Unsaved applicant answer");
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
+      await dialog.getByRole("button", { name: "Save and continue", exact: true }).click();
+      await dialog.getByRole("alert").waitFor();
+      assert.equal(await dialog.isVisible(), true, "A failed save must preserve the active draft");
+      failSave = false;
+      await dialog.getByRole("button", { name: "Save and continue", exact: true }).click();
+      await page.getByRole("button", { name: /^View application for .*Employer 2/ }).click();
+      await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
+      assert.equal(await page.getByLabel(other.packet!.answers[0].question, { exact: true }).inputValue(), "Other employer answer", "Matches entry must not transfer answers");
+      if (width <= 650) await picker.selectOption(first.id);
+      else await page.locator(".app-list-item").first().click();
+      assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "Unsaved applicant answer");
+      await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Discard this edit");
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
+      await dialog.getByRole("button", { name: "Discard and continue", exact: true }).click();
+      await page.getByRole("button", { name: "Applications", exact: true }).click();
+      assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "Unsaved applicant answer");
+      assert.equal(saves, 1);
       if (width <= 650) assert.equal(await picker.isEnabled(), true);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       assert.deepEqual(errors, []);
       console.log(`PASS ${width}px: explicit collection, direct selection, correct detail, preserved unsaved changes, cancellation, no overflow`);
       await page.close();
+      first.packet!.answers[0] = { ...first.packet!.answers[0], answer: "", userProvided: false, requiresUserInput: true };
     }
   } finally { await browser.close(); }
 }

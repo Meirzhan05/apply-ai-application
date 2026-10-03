@@ -109,6 +109,9 @@ async function main() {
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
       await essayInput.fill("I would like to apply my survey analysis project experience to this role.");
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
+      await page.getByRole("dialog", { name: "Keep your changes?" }).getByRole("button", { name: "Stay here", exact: true }).click();
+      assert.equal(await essayInput.inputValue(), "I would like to apply my survey analysis project experience to this role.", "Navigation cancellation preserves essay wording");
       await page.getByRole("button", { name: "Save essay revision", exact: true }).click();
       await page.getByText("Edited by you · your confirmation needed", { exact: true }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);

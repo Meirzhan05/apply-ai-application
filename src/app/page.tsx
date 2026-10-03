@@ -81,6 +81,8 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
+  const [essayDraft, setEssayDraft] = useState<{ applicationId: string; answerIndex: number; text: string } | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<{ run: () => void } | null>(null);
   const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
@@ -96,7 +98,7 @@ export default function Dashboard() {
   });
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
-  const [answerDraft, setAnswerDraft] = useState<ScreeningAnswer[]>([]);
+  const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
   const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData), []);
@@ -134,7 +136,7 @@ export default function Dashboard() {
       if (!response.ok) throw new Error(body.error || "Action failed.");
       const next = await reload();
       if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
-      if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerDraft([]);
+      if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerEdits(current => current?.applicationId === payload.applicationId ? null : current);
       if (action === "editPacket") setNotice("Your answers are saved.");
       if (action === "reviseEssay") setNotice("Your essay revision is saved. Review and confirm the new wording.");
       if (action === "confirmEssay") setNotice("Essay confirmed. Your application has not been submitted.");
@@ -166,6 +168,9 @@ export default function Dashboard() {
     : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
+  const answerDraft = answerEdits && answerEdits.applicationId === activeApp?.id ? answerEdits.answers : [];
+  const setAnswerDraft = (answers: ScreeningAnswer[]) => setAnswerEdits(activeApp && answers.length ? { applicationId: activeApp.id, answers } : null);
+  const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
   const hasCurrentBrowser = browserSessionAvailable(activeApp);
   const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
@@ -230,6 +235,12 @@ export default function Dashboard() {
     const timer = window.setTimeout(() => updateBrowserClock(value => value + 1), Math.min(expires - Date.now() + 20, 2_147_483_647));
     return () => window.clearTimeout(timer);
   }, [activeApp?.browserSessionId, activeApp?.browserSessionExpiresAt]);
+  useEffect(() => {
+    if (!answersDirty && editingEssay === null) return;
+    const protectDraft = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protectDraft);
+    return () => window.removeEventListener("beforeunload", protectDraft);
+  }, [answersDirty, editingEssay]);
 
   const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
@@ -277,23 +288,32 @@ export default function Dashboard() {
 
   const correctClaim = (factIds: string[], claim: string) => {
     if (!activeApp) return;
-    setEditingEssay(null);
-    setProfileDraft(structuredClone(data.profile));
-    setFactCorrection({ applicationId: activeApp.id, factIds, claim });
-    setSection("profile");
+    requestNavigation(() => {
+      setEditingEssay(null);
+      setProfileDraft(structuredClone(data.profile));
+      setFactCorrection({ applicationId: activeApp.id, factIds, claim });
+      setSection("profile");
+    });
   };
 
-  const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
-
-  const switchApplication = (id: string) => {
-    if (busy || answersDirty || editingEssay !== null) return;
-    const app = applications.find(item => item.id === id);
-    if (!app) return;
+  const requestNavigation = (run: () => void) => {
+    if (busy) return;
+    if (section === "applications" && (answersDirty || editingEssay !== null)) setPendingNavigation({ run });
+    else run();
+  };
+  const navigateSection = (next: Section) => {
+    if (next !== section) requestNavigation(() => setSection(next));
+  };
+  const openApplication = (id: string) => requestNavigation(() => {
     setSelected(id);
-    setAnswerDraft(app.packet?.answers ?? []);
+    setAnswerEdits(null);
+    setEditingEssay(null);
+    setEssayDraft(null);
     setNotice("");
     setError("");
-  };
+    setSection("applications");
+  });
+  const switchApplication = (id: string) => { if (id !== activeApp?.id) openApplication(id); };
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
                       [
@@ -389,7 +409,8 @@ export default function Dashboard() {
                                   <EssayReview key={`${activeApp.id}-${i}-${answerReviewHash(answer)}`} answer={answer} facts={data.profile.facts}
                                     inputId={`screening-${activeApp.id}-${i}`} editable={activeApp.status === "draft_review"}
                                     blocked={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || (editingEssay !== null && editingEssay !== i)}
-                                    onEditingChange={(editing) => setEditingEssay(editing ? i : null)}
+                                    onEditingChange={(editing) => { setEditingEssay(editing ? i : null); setEssayDraft(editing ? { applicationId: activeApp.id, answerIndex: i, text: answer.answer } : null); }}
+                                    onDraftChange={(text) => setEssayDraft({ applicationId: activeApp.id, answerIndex: i, text })}
                                     onSave={(text) => act("reviseEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answerReviewHash(answer), text })} />
                                   {!answer.confirmedAt && activeApp.status === "draft_review" && <button className="outline-action"
                                     disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null}
@@ -404,7 +425,7 @@ export default function Dashboard() {
                                       draft[i] = { ...draft[i], answer: event.target.value, userProvided: true, requiresUserInput: false };
                                       setAnswerDraft(draft);
                                     }} />
-                                  <small>{answerOwner(answer.question) === "ai" ? "AI draft needed · use Write essays with AI below" : answer.requiresUserInput && !answer.userProvided ? "Human-only · your answer needed" : answer.userProvided ? "Your own answer" : "From your confirmed profile"}</small>
+                                  <small>{answerOwner(answer.question) === "ai" ? "AI draft needed · use Write essays with AI below" : answersDirty && answerDraft[i]?.answer !== answer.answer ? "Your answer · unsaved changes" : answer.requiresUserInput && !answer.userProvided ? "Human-only · your answer needed" : answer.userProvided ? "Your own answer" : "From your confirmed profile"}</small>
                                 </>}
                               </div>
                             ))}
@@ -504,7 +525,7 @@ export default function Dashboard() {
               aria-current={section === key ? "page" : undefined}
               title={label}
               className={`navitem ${section === key ? "active" : ""}`}
-              onClick={() => { setEditingEssay(null); setSection(key); }}
+              onClick={() => navigateSection(key)}
             >
               <Icon size={21} strokeWidth={1.8} />
               <span className="nav-label">{key === "settings" ? "Settings" : label}</span>
@@ -609,7 +630,7 @@ export default function Dashboard() {
               </div>
               {hasSharedUnknown && <div className="profile-context" role="note">
                 <span>Work authorization needs confirmation.</span>
-                <button className="text-button" onClick={() => setSection("profile")}>Review profile</button>
+                <button className="text-button" onClick={() => navigateSection("profile")}>Review profile</button>
               </div>}
 
               {needsAction.length > 0 && (
@@ -627,7 +648,7 @@ export default function Dashboard() {
                       result.
                     </p>
                   </div>
-                  <button onClick={() => setSection("applications")}>
+                  <button onClick={() => navigateSection("applications")}>
                     Open applications <ArrowRight size={15} />
                   </button>
                 </div>
@@ -667,7 +688,7 @@ export default function Dashboard() {
               <details className="fit-guide matches-guidance">
                 <summary>{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
-                <button className="text-button" onClick={() => setSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
+                <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
                 <p>Press <kbd>/</kbd> to search, <kbd>j</kbd> for the next role, or <kbd>k</kbd> for the previous role. Shortcuts pause while you type or use a dialog.</p>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
                 <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
@@ -739,11 +760,11 @@ export default function Dashboard() {
                             <strong>Posting terms found in confirmed facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
                             <dl>{evidence.comparisons.map(item => <div key={item.requirement}><dt>{item.requirement}</dt><dd>{item.fact}</dd></div>)}</dl>
-                            <button className="text-button" onClick={() => setSection("profile")}>Review profile evidence</button>
+                            <button className="text-button" onClick={() => navigateSection("profile")}>Review profile evidence</button>
                           </div>}
                           {!evidence.comparisons.length && evidence.listedSkills.length > 0 && <div className="evidence-comparison">
                             <p>This overlap comes from skills you listed. No confirmed fact excerpt is linked to these terms here.</p>
-                            <button className="text-button" onClick={() => setSection("profile")}>Review profile evidence</button>
+                            <button className="text-button" onClick={() => navigateSection("profile")}>Review profile evidence</button>
                           </div>}
                           <div className={`match-reasons ${evidence.detailedReasons.length ? "" : "only-checks"}`}>
                             {evidence.detailedReasons.length > 0 && <div>
@@ -816,12 +837,7 @@ export default function Dashboard() {
                             <button
                               className="dark-button"
                               aria-label={`View application for ${context}`}
-                              onClick={() => {
-                                setSelected(application.id);
-                                setNotice("");
-                                setEditingEssay(null);
-                                setSection("applications");
-                              }}
+                              onClick={() => openApplication(application.id)}
                             >
                               View application
                             </button>
@@ -842,10 +858,7 @@ export default function Dashboard() {
                                     (item) => item.jobId === job.id,
                                   );
                                   if (app) {
-                                    setSelected(app.id);
-                                    setNotice("");
-                                    setEditingEssay(null);
-                                    setSection("applications");
+                                    openApplication(app.id);
                                   }
                                 }
                               }}
@@ -892,7 +905,7 @@ export default function Dashboard() {
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
                   <p>{data.onboarding.complete ? "Your confirmed facts and saved settings are ready." : `Onboarding is incomplete: ${data.onboarding.missing.map(onboardingMissingLabel).join(", ")}.`}</p>
                 </div>
-                <button className="text-button" onClick={() => setSection("settings")}>Review settings <ArrowRight size={15} /></button>
+                <button className="text-button" onClick={() => navigateSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
               {data.discovery && (
                 <section className="discovery-pulse" aria-label="Discovery freshness">
@@ -942,7 +955,7 @@ export default function Dashboard() {
                   </div>
                   <button
                     className="dark-button"
-                    onClick={() => setSection("profile")}
+                    onClick={() => navigateSection("profile")}
                   >
                     Review profile
                   </button>
@@ -985,7 +998,7 @@ export default function Dashboard() {
                 <div>
                   <strong>You’re in control</strong>
                   <p>We find opportunities. You decide what happens next.</p>
-                  <button onClick={() => setSection("settings")}>
+                  <button onClick={() => navigateSection("settings")}>
                     Adjust search settings <ArrowRight size={15} />
                   </button>
                 </div>
@@ -1020,7 +1033,7 @@ export default function Dashboard() {
                           <span>{blocker.message}</span>
                           {question && <small>Observed {question.kind} control “{question.label}”{question.options.length ? ` · options: ${question.options.join(", ")}` : ""}</small>}
                         </div>
-                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small>{job?.url && <a className="text-button" href={job.url} target="_blank" rel="noreferrer">Open employer posting</a>}<button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => setSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
+                        {canRecheckImported ? <div className="blocker-resolution"><small>{importedPreflightHandoff(app)}</small>{job?.url && <a className="text-button" href={job.url} target="_blank" rel="noreferrer">Open employer posting</a>}<button className="outline-action" disabled={Boolean(busy) || blocker.progress === "resuming"} onClick={() => act("preflightImportedPosting", { jobId: app.jobId })}>{busy === "preflightImportedPosting" ? "Checking…" : "Check employer link again"}</button></div> : !blocker.reviewOnly && blocker.reason === "disabled_material" ? <button className="outline-action" disabled={Boolean(busy)} onClick={() => navigateSection("settings")}>Open search settings</button> : canAnswer ? <div className="blocker-resolution">
                           {question!.options.length ? <select aria-label={`Answer ${question!.label} for ${jobTitle}`} value={draft} disabled={Boolean(busy) || blocker.progress === "resuming"} onChange={(event) => setBlockerAnswers((current) => ({ ...current, [blocker.id]: event.target.value }))}>
                             <option value="">Choose an answer</option>
                             {question!.options.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -1070,7 +1083,7 @@ export default function Dashboard() {
                     <p>Select a match to start an application.</p>
                     <button
                       className="text-button"
-                      onClick={() => setSection("matches")}
+                      onClick={() => navigateSection("matches")}
                     >
                       Browse matches →
                     </button>
@@ -1420,7 +1433,7 @@ export default function Dashboard() {
                   <div className="empty">
                     <h2>Start with a role you want</h2>
                     <p>Choose a match to prepare your first application. You review the materials and the employer form before submission.</p>
-                    <button className="dark-button" onClick={() => setSection("matches")}>Browse matches <ArrowRight size={16} /></button>
+                    <button className="dark-button" onClick={() => navigateSection("matches")}>Browse matches <ArrowRight size={16} /></button>
                   </div>
                 )}
               </div>
@@ -1841,6 +1854,26 @@ export default function Dashboard() {
               {busy === "feedback" ? "Dismissing…" : "Dismiss role"}
             </button>
             {error && <p role="alert">{error}</p>}
+        </WorkspaceDialog>
+      )}
+      {pendingNavigation && activeApp?.packet && (
+        <WorkspaceDialog labelledBy="unsaved-heading" onClose={() => { if (!busy) setPendingNavigation(null); }}>
+          <h2 id="unsaved-heading">Keep your changes?</h2>
+          <p>Your {editingEssay !== null ? "essay edit" : "personal answers"} for {appJob?.company ?? "this application"} have not been saved. Save them before leaving, or discard only these changes.</p>
+          <div className="action-row">
+            <button className="dark-button" disabled={Boolean(busy) || (editingEssay !== null && !essayDraft?.text.trim())}
+              onClick={async () => {
+                const answer = essayDraft && activeApp.packet!.answers[essayDraft.answerIndex];
+                const unchanged = answer && essayDraft!.text.trim() === answer.answer;
+                const saved = unchanged || (editingEssay !== null && essayDraft?.applicationId === activeApp.id && answer
+                  ? await act("reviseEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: essayDraft.answerIndex, answerHash: answerReviewHash(answer), text: essayDraft.text })
+                  : await act("editPacket", { applicationId: activeApp.id, answers: answerDraft }));
+                if (saved) { setEditingEssay(null); setEssayDraft(null); setPendingNavigation(null); pendingNavigation.run(); }
+              }}>{busy ? "Saving…" : "Save and continue"}</button>
+            <button className="outline-action" disabled={Boolean(busy)} onClick={() => { setAnswerEdits(null); setEditingEssay(null); setEssayDraft(null); setPendingNavigation(null); pendingNavigation.run(); }}>Discard and continue</button>
+            <button className="text-button" disabled={Boolean(busy)} onClick={() => setPendingNavigation(null)}>Stay here</button>
+          </div>
+          {error && <p role="alert">{displayError} Your changes are still here. Try saving again or stay in this application.</p>}
         </WorkspaceDialog>
       )}
       {importOpen && (

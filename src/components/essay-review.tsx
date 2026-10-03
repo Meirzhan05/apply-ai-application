@@ -3,10 +3,11 @@
 import { useState } from "react";
 import type { ScreeningAnswer, VerifiedFact } from "@/lib/types";
 
-export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange }: {
+export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange }: {
   answer: ScreeningAnswer; facts: VerifiedFact[]; inputId: string;
   editable: boolean; blocked: boolean; onSave: (text: string) => Promise<unknown | null>;
   onEditingChange?: (editing: boolean) => void;
+  onDraftChange?: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(answer.answer);
@@ -14,7 +15,7 @@ export function EssayReview({ answer, facts, inputId, editable, blocked, onSave,
   const sourceIds = revision?.originalFactIds ?? answer.factIds;
   return <div className="essay-review">
     <textarea id={inputId} readOnly={!editing} disabled={blocked} value={editing ? text : answer.answer}
-      maxLength={4000} rows={5} onChange={(event) => setText(event.target.value)} />
+      maxLength={4000} rows={5} onChange={(event) => { setText(event.target.value); onDraftChange?.(event.target.value); }} />
     <p className="essay-attribution">{revision ? "Edited by you · " : "AI essay · "}{answer.confirmedAt ? "confirmed by you" : "your confirmation needed"}</p>
     {editing ? <>
       <p className="muted">Use truthful wording. Your changes apply only to this answer and need fresh confirmation.</p>
