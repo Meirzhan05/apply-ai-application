@@ -40,6 +40,12 @@ async function main() {
       assert.ok((await page.getByRole("link", { name: "Download LaTeX source" }).getAttribute("href"))?.endsWith("/resume-source"));
       await page.locator(".resume-sources summary").first().click();
       assert.ok((await page.locator(".resume-sources[open]").innerText()).includes("Professional profile:"));
+      await page.locator(".resume-sources[open]").getByRole("button", { name: "Correct or unconfirm these facts", exact: true }).click();
+      const corrections = page.getByRole("dialog", { name: "Correct the source facts", exact: true });
+      const editor = corrections.getByLabel("Source fact 1", { exact: true });
+      const editorBox = await editor.boundingBox(); const rowBox = await editor.locator("..").boundingBox();
+      assert.ok(editorBox && rowBox && editorBox.width >= rowBox.width - 2 && editorBox.height >= 96, "Structured source corrections must be readable");
+      await corrections.getByRole("button", { name: "Cancel corrections", exact: true }).click();
       await page.locator(".resume-omissions > summary").click();
       assert.ok((await page.locator(".resume-omissions").innerText()).includes("community garden"));
       assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= window.innerWidth), true);

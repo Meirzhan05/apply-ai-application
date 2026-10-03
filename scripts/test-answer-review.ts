@@ -137,7 +137,10 @@ async function main() {
 
       await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
       const corrections = page.getByRole("dialog", { name: "Correct the source facts", exact: true });
-      const factInput = page.getByLabel(`Correct source fact ${fact.id}`, { exact: true });
+      const factInput = corrections.getByLabel("Source fact 1", { exact: true });
+      const editorBox = await factInput.boundingBox();
+      const rowBox = await factInput.locator("..").boundingBox();
+      assert.ok(editorBox && rowBox && editorBox.width >= rowBox.width - 2 && editorBox.height >= 96, "Source correction must provide a readable full-width editor");
       assert.equal(await corrections.locator("textarea").count(), 1, "A narrow correction must show only the selected source fact");
       assert.equal(await page.getByRole("heading", { name: "Your profile", exact: true }).count(), 0);
       const unrelatedFacts = structuredClone(state.profile.facts.filter(item => item.id !== fact.id));
@@ -147,7 +150,7 @@ async function main() {
       await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
       assert.equal(await factInput.inputValue(), fact.text);
       await factInput.fill("Analyzed survey data in my Python coursework project");
-      assert.equal(await page.locator(".fact-row").filter({ has: factInput }).getByRole("checkbox").isChecked(), false);
+      assert.equal(await factInput.locator("..").getByRole("checkbox").isChecked(), false);
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
