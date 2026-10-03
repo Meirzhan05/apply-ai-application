@@ -1,7 +1,8 @@
 "use client";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { ApplicationProgress } from "@/components/application-progress";
 import { EssayReview } from "@/components/essay-review";
 import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
@@ -25,6 +26,7 @@ import {
   ClipboardList,
   FileText,
   LoaderCircle,
+  MoreHorizontal,
   Search,
   Settings2,
   ShieldCheck,
@@ -64,6 +66,8 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
+  const applicationList = useRef<HTMLDivElement>(null);
+  const moreNavigation = useRef<HTMLDetailsElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
@@ -185,6 +189,23 @@ export default function Dashboard() {
   const blockers = applications.flatMap((app) => (app.blockers ?? [])
     .filter((blocker) => (blocker.progress === "blocked" || blocker.progress === "resuming" || (blocker.reviewOnly && blocker.progress === "expired")) && blocker.userId === data?.profile.id)
     .map((blocker) => ({ blocker, app })));
+
+  useEffect(() => {
+    const list = applicationList.current;
+    if (section !== "applications" || !list) return;
+    const keepSelectedVisible = () => {
+      const item = list.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+      if (!item || list.scrollWidth <= list.clientWidth) return;
+      const container = list.getBoundingClientRect();
+      const selectedItem = item.getBoundingClientRect();
+      if (selectedItem.left < container.left) list.scrollLeft += selectedItem.left - container.left;
+      else if (selectedItem.right > container.right) list.scrollLeft += selectedItem.right - container.right;
+    };
+    keepSelectedVisible();
+    const observer = new ResizeObserver(keepSelectedVisible);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [section, activeApp?.id]);
 
   if (!data)
     return (
@@ -432,16 +453,23 @@ export default function Dashboard() {
             <button
               key={key}
               aria-label={label}
+              aria-current={section === key ? "page" : undefined}
               className={`navitem ${section === key ? "active" : ""}`}
-              onClick={() => { setEditingEssay(null); setSection(key); }}
+              onClick={() => { setEditingEssay(null); if (moreNavigation.current) moreNavigation.current.open = false; setSection(key); }}
             >
               <Icon size={21} strokeWidth={1.8} />
-              {label}
+              <span className="nav-label">{key === "settings" ? "Settings" : label}</span>
               {Boolean(count) && <b>{count}</b>}
             </button>
           ))}
         </nav>
-        <div style={{ display: "flex", gap: 18, padding: "16px 24px" }}><a href="/usage" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a><a href="/pilot" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>Autonomy pilot</a></div>
+        <div className="sidebar-links"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
+        <details className="mobile-more" ref={moreNavigation} onKeyDown={(event) => {
+          if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); }
+        }}>
+          <summary><MoreHorizontal size={21} aria-hidden="true" /><span>More</span></summary>
+          <div className="more-links"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
+        </details>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -854,7 +882,6 @@ export default function Dashboard() {
         )}
         {section === "applications" && (
           <main className="wide-panel">
-            {!hasAutomaticApplications && <p className="eyebrow">EACH STEP NEEDS YOUR SAY</p>}
             <h1>Your applications</h1>
             <p className="subheading">
               {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
@@ -895,13 +922,14 @@ export default function Dashboard() {
               </section>
             )}
             <div className="app-layout">
-              <div className="app-list" hidden={!applications.length}>
+              <div className="app-list" ref={applicationList} hidden={!applications.length} aria-label="Your application list">
                 {applications.length ? (
                   applications.map((app) => {
                     const job = jobs.find((item) => item.id === app.jobId);
                     return (
                       <button
                         key={app.id}
+                        aria-pressed={activeApp?.id === app.id}
                         className={`app-list-item ${activeApp?.id === app.id ? "selected" : ""}`}
                         onClick={() => {
                           setSelected(app.id);
@@ -959,29 +987,7 @@ export default function Dashboard() {
                         {activeApp.importedCompatibility?.blocker && <p className="muted">{activeApp.importedCompatibility.blocker}</p>}
                       </div>
                     )}
-                    {!activeAppIsAutomatic && <div className="progress">
-                      {[
-                        "Selected",
-                        "Packet",
-                        "Fill",
-                        "Final review",
-                        "Submitted",
-                      ].map((item, i) => (
-                        <span
-                          key={item}
-                          className={
-                            progressIndex(activeApp.status) >= i ? "done" : ""
-                          }
-                        >
-                          {i < progressIndex(activeApp.status) ? (
-                            <Check size={13} />
-                          ) : (
-                            i + 1
-                          )}{" "}
-                          {item}
-                        </span>
-                      ))}
-                    </div>}
+                    {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
                     {(activeApp.autonomousAuthorization || activeApp.importedOutcome) && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
                     {activeApp.queuedRun && (
                       <div className="step-card" role="status">
@@ -1835,22 +1841,5 @@ function statusLabel(status: Application["status"]) {
     submitted: "Submitted",
     uncertain: "Result uncertain",
     cancelled: "Cancelled",
-  }[status];
-}
-function progressIndex(status: Application["status"]) {
-  return {
-    selected: 0,
-    drafting: 1,
-    draft_review: 1,
-    authorized_to_fill: 2,
-    filling: 2,
-    needs_user_action: 2,
-    final_review: 3,
-    approved_to_submit: 3,
-    submitting: 3,
-    awaiting_verification: 3,
-    submitted: 4,
-    uncertain: 3,
-    cancelled: 0,
   }[status];
 }
