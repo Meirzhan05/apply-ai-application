@@ -28,9 +28,11 @@ async function main() {
       await page.route("**/api/applications/*/files/resume*", (route) => route.fulfill({ contentType: route.request().url().includes("resume-source") ? "text/plain" : "application/pdf", body: route.request().url().includes("resume-source") ? source : pdf }));
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3100");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.locator(".material-tools > summary").click();
       await page.getByRole("button", { name: "Rebuild resume", exact: true }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Write essays with AI", exact: true }).isVisible(), true);
       assert.equal(await page.locator('iframe[title="Compiled one-page resume PDF"]').count(), 1);
+      await page.getByText("Advanced download", { exact: true }).click();
       assert.ok((await page.getByRole("link", { name: "Download LaTeX source" }).getAttribute("href"))?.endsWith("/resume-source"));
       await page.locator(".resume-sources summary").first().click();
       assert.ok((await page.locator(".resume-sources[open]").innerText()).includes("Professional profile:"));

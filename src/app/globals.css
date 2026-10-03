@@ -740,11 +740,11 @@ a {
   display: block;
 }
 .app-list-item strong {
-  font-size: 12px;
+  font-size: 14px;
 }
 .app-list-item small {
-  font-size: 11px;
-  color: #687773;
+  font-size: 12px;
+  color: var(--muted);
   margin-top: 4px;
 }
 .app-detail {
@@ -807,12 +807,12 @@ a {
 }
 .card-title span {
   margin-left: auto;
-  color: #84928c;
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 13px;
 }
 .muted {
-  color: #78867e !important;
-  font-size: 12px;
+  color: var(--muted) !important;
+  font-size: 13px;
 }
 .resume-preview {
   border: 1px solid var(--line);
@@ -845,8 +845,8 @@ a {
 .resume-preview p small {
   display: block;
   margin: 4px 0 0 13px;
-  color: #83968a;
-  font-size: 10px;
+  color: var(--muted);
+  font-size: 13px;
 }
 .resume-comparison {
   margin-top: 16px;
@@ -1524,7 +1524,7 @@ a {
 .resume-entry ul { padding-left: 20px; }
 .resume-entry li { margin: 8px 0; }
 .resume-claim { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
-.resume-sources { font-weight: normal; font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+.resume-sources { font-weight: normal; font-size: 13px; color: var(--muted); margin: 2px 0 6px; }
 .resume-sources summary, .resume-omissions summary { cursor: pointer; }
 .resume-sources p { margin: 5px 0; padding-left: 10px; border-left: 2px solid var(--line); }
 .resume-omissions { margin-top: 16px; font-size: 14px; }
