@@ -114,9 +114,11 @@ async function main() {
       }
       assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).getAttribute("aria-describedby"), "sort-help");
       assert.equal(await page.getByText("Relevance considers fit and your feedback.", { exact: true }).isVisible(), true);
+      await page.locator("#matches-help > summary").click();
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
       await page.locator(".fit-guide summary").click();
+      await page.locator("#matches-help > summary").click();
       assert.equal(await strongRole.locator(".match-reasons").isVisible(), false, "Full reasoning is disclosed on request");
       await strongRole.locator(".fit-evidence summary").click();
       assert.equal(await strongRole.locator(".evidence-comparison").getByText("Built a React portfolio project", { exact: true }).isVisible(), true);
@@ -273,6 +275,7 @@ async function main() {
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("?");
       const keyboardHelp = page.locator("#matches-keyboard-help");
+      assert.notEqual(await page.locator("#matches-help").getAttribute("open"), null, "The help shortcut must reveal its enclosing disclosure");
       assert.notEqual(await keyboardHelp.getAttribute("open"), null);
       assert.equal(await keyboardHelp.locator("summary").evaluate(element => element === document.activeElement), true);
       assert.equal(await keyboardHelp.getByText("Save or Unsave", { exact: true }).isVisible(), true);
@@ -778,7 +781,8 @@ async function main() {
     const connectionNotice = connectionPage.locator(".workspace-connection");
     try { await connectionNotice.waitFor({ timeout: 60_000 }); }
     catch (error) { console.error("Connection test diagnostics", { failedChecks, hidden: await connectionPage.evaluate(() => document.hidden) }); throw error; }
-    assert.match((await connectionNotice.textContent()) ?? "", /updates are paused/);
+    assert.match((await connectionNotice.textContent()) ?? "", /Reconnecting.*last received list/);
+    assert.ok((await connectionNotice.boundingBox())!.height <= 76, "Connection recovery should leave phone reading space while retaining a touch-sized retry");
     assert.equal(await connectionPage.getByRole("article").count(), 3, "Interrupted updates retain the last received list");
     await connectionPage.screenshot({ path: ".data/matches-connection-mobile.png" });
     failedUpdates = false;

@@ -318,6 +318,8 @@ export default function Dashboard() {
       if (event.key === "?") {
         event.preventDefault();
         const help = document.getElementById("matches-keyboard-help") as HTMLDetailsElement | null;
+        const guidance = document.getElementById("matches-help") as HTMLDetailsElement | null;
+        if (guidance) guidance.open = true;
         if (help) { help.open = true; help.querySelector<HTMLElement>("summary")?.focus(); }
       }
       if (!event.repeat && ["s", "d", "u"].includes(event.key)) {
@@ -862,14 +864,14 @@ export default function Dashboard() {
           </div>
         </header>
         {connection !== "current" && <div className="workspace-connection" role="status">
-          <p>{connection === "auth-required" ? "Sign in to resume workspace updates. Showing the last received list." : "Workspace updates are paused. Showing the last received list; we’ll keep trying."}</p>
+          <p>{connection === "auth-required" ? "Sign in to resume updates. Showing the last received list." : "Reconnecting. Showing the last received list."}</p>
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "saving-view" ? `${batchProgress?.stopping ? "Stopping after the current save" : "Saving this view"}: ${batchProgress?.done ?? 0} of ${batchProgress?.total ?? 0} roles…` : busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}{batchProgress && <button className="text-button" disabled={batchProgress.stopping} onClick={() => { batchCancel.current = true; setBatchProgress(current => current ? { ...current, stopping: true } : null); }}>{batchProgress.stopping ? "Stopping…" : "Stop further saves"}</button>}</p>}
         {activeError && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            <div>{batchRecovery && <strong>{batchRecovery.confirmed} of {batchRecovery.total} saves confirmed. </strong>}{displayError}{!actionCheck && <p>Refresh the workspace to check the latest status.</p>}<div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
+            <div>{batchRecovery && <strong>This batch: {batchRecovery.confirmed} of {batchRecovery.total} saves confirmed. </strong>}{displayError}{!actionCheck && <p>Refresh the workspace to check the latest status.</p>}<div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
             {!actionCheck && <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
             </button>}
@@ -985,6 +987,8 @@ export default function Dashboard() {
               </div>
               <div className="matches-subbar">
               <p className={`result-summary ${collection === "all" && filter === "all" && !search.trim() ? "sr-only" : ""}`} role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
+              <details id="matches-help" className="matches-help matches-guidance">
+                <summary aria-label="Fit and keyboard help">Help</summary>
               <details className="fit-guide matches-guidance">
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto apply on" : "Fit guide"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
@@ -1011,6 +1015,7 @@ export default function Dashboard() {
                   <div><dt><kbd>u</kbd></dt><dd>Undo dismissal</dd></div>
                 </dl>
                 <p>Shortcuts never prepare or submit an application.</p>
+              </details>
               </details>
               </div>
               </div>
@@ -2231,7 +2236,7 @@ export default function Dashboard() {
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}
-            <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
+            {!activeError && <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>}
             <form className="job-import-form" onSubmit={async event => {
               event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
               if (!importReady || busy || needsWorkspaceCheck) return;
