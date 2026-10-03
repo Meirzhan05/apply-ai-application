@@ -473,11 +473,61 @@ async function main() {
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer saved.`, { exact: true }).waitFor();
     await sameTitleRole.getByRole("button", { name: `Dismiss ${intern.title} at Same-title employer`, exact: true }).click();
     await sameTitleRole.waitFor({ state: "hidden" });
-    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Same-title employer:/);
+    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Dismissed: Same-title employer\./);
     await sameTitlePage.getByRole("button", { name: "Undo dismissal", exact: true }).click();
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer is back in your matches.`, { exact: true }).waitFor();
     await sameTitleRole.waitFor(); await sameTitlePage.close();
     console.log("PASS identical titles: Save, Dismiss and Undo identify the employer");
+    const personalPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const personalState = structuredClone(demoState);
+    personalState.profile.demo = false;
+    personalState.profile.name = "Invented QA";
+    personalState.personalSearch = { status: "complete", requestId: "qa-request", profileKey: "qa-profile", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString(), jobs: personalState.jobs };
+    let personalFixture = publicState(personalState);
+    await personalPage.route("**/api/state", route => route.fulfill({ json: personalFixture }));
+    await personalPage.route("**/api/actions", () => assert.fail("Personal-search presentation checks must not write workspace data"));
+    await personalPage.goto(origin); await personalPage.getByRole("article").first().waitFor();
+    assert.equal(await personalPage.getByRole("status", { name: "Personal search status" }).isVisible(), false, "Routine completed-search detail belongs in the disclosure");
+    const personalPrepare = await personalPage.getByRole("article").first().getByRole("button", { name: /^Prepare application for/ }).boundingBox();
+    assert.ok(personalPrepare && personalPrepare.y + personalPrepare.height <= 844, "The completed personal-search banner must not push the first role action out of view");
+    await personalPage.screenshot({ path: ".data/matches-personal-mobile.png" });
+    const searchStatus = personalPage.locator(".search-status");
+    await searchStatus.locator("summary").click();
+    await searchStatus.getByRole("button", { name: "Edit search preferences", exact: true }).click();
+    assert.equal(await personalPage.locator("#search-preferences").evaluate(element => element === document.activeElement), true);
+    const emptyState = structuredClone(personalState);
+    emptyState.jobs = []; emptyState.importedJobs = []; emptyState.applications = []; emptyState.personalSearch = undefined;
+    emptyState.profile.facts = []; emptyState.profile.preferredTitles = []; emptyState.profile.preferredLocations = []; emptyState.profile.remoteOnly = false; emptyState.profile.searchPreferencesConfirmedAt = undefined;
+    personalFixture = publicState(emptyState);
+    await personalPage.getByRole("button", { name: "Matches", exact: true }).click();
+    await personalPage.goto(origin);
+    await personalPage.getByRole("heading", { name: "Your personal search starts here", exact: true }).waitFor();
+    assert.equal(await personalPage.locator(".collectionbar, .job-search, .matches-controls, .setup-context").count(), 0, "A fresh empty account needs setup, not zero-result filters");
+    const emptySetup = personalPage.locator(".empty").getByRole("button", { name: "Set up my profile", exact: true });
+    assert.equal(await emptySetup.isVisible(), true);
+    await personalPage.screenshot({ path: ".data/matches-empty-mobile.png" });
+    await emptySetup.click();
+    assert.equal(await personalPage.locator("#confirmed-resume-facts").evaluate(element => element === document.activeElement), true);
+    await personalPage.getByRole("button", { name: "Matches", exact: true }).click();
+    for (const status of ["failed", "budget_limited"] as const) {
+      personalState.jobs = []; personalState.importedJobs = []; personalState.applications = [];
+      personalState.personalSearch = { ...personalState.personalSearch!, status, jobs: [] };
+      personalFixture = publicState(personalState);
+      await personalPage.goto(origin);
+      const notice = personalPage.getByRole("status", { name: "Personal search status" });
+      await notice.waitFor();
+      if (status === "failed") {
+        assert.match((await notice.textContent()) ?? "", /every four hours/);
+        await notice.getByRole("button", { name: "Import a posting", exact: true }).click();
+        await personalPage.getByRole("dialog", { name: "Import a job link", exact: true }).waitFor();
+        await personalPage.keyboard.press("Escape");
+      } else {
+        assert.match((await notice.textContent()) ?? "", /00:00 UTC on the first day/);
+        assert.equal(await notice.getByRole("link", { name: "Review AI usage", exact: true }).getAttribute("href"), "/usage");
+      }
+    }
+    await personalPage.close();
+    console.log("PASS personal-search states: compact completed status, first role action, focused setup, failed-search import and monthly budget recovery");
     const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const connectionFixture = publicState(structuredClone(demoState));
     let failedUpdates = false; let expiredUpdates = false;

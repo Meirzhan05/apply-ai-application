@@ -680,6 +680,11 @@ export default function Dashboard() {
     { key: "profile", label: "Profile", icon: UserRound },
     { key: "settings", label: "Search settings", icon: Settings2 },
   ];
+  const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
+  const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
+    pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => fact.verified && fact.text.trim()) ? "confirmed-resume-facts" : "search-preferences";
+    navigateSection("profile");
+  }} onImport={() => { setError(""); setImportOpen(true); }} />;
   return (
     <div className={`shell ${section === "matches" ? "matches-workspace" : section === "applications" ? "applications-workspace" : ""}`}>
       <aside className="sidebar">
@@ -815,14 +820,14 @@ export default function Dashboard() {
                 </button>
                 </div>
               </div>
-              {!data.profile.demo && <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => navigateSection("profile")} />}
-              {!data.onboarding.complete ? <details className="profile-context setup-context">
+              {!data.profile.demo && !emptyPersonalView && data.personalSearch?.status !== "complete" && personalStatus}
+              {!emptyPersonalView && (!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
                 <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
               </details> : hasSharedUnknown && <div className="profile-context" role="note">
                 <span>Work authorization needs confirmation.</span>
                 <button className="text-button" onClick={() => navigateSection("profile")}>Review profile</button>
-              </div>}
+              </div>)}
 
               {needsAction.length > 0 && (
                 <div className="next-action">
@@ -844,6 +849,7 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+              {!emptyPersonalView && <>
               <div className="job-search">
                 <label htmlFor="job-search">Search roles or companies <kbd>/</kbd></label>
                 <div>
@@ -899,6 +905,7 @@ export default function Dashboard() {
               </details>
               </div>
               </div>
+              </>}
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
                 {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
@@ -1066,7 +1073,7 @@ export default function Dashboard() {
                                 const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
                                 if (next) {
                                   continueAfterRemoval(job.id);
-                                  setFeedbackNotice({ message: `${context} dismissed. Find it in Dismissed.`, compactMessage: `${job.company}: ${job.title} dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                  setFeedbackNotice({ message: `${context} dismissed. Find it in Dismissed.`, compactMessage: `Dismissed: ${job.company}.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
                                 }
                               }}
                             >
@@ -1133,6 +1140,7 @@ export default function Dashboard() {
                     <Search size={28} />
                     <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Your personal search starts here" : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Finding opportunities for you" : "No jobs in this view"}</h3>
                     <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Confirm your experience and save your search preferences. Your agent will start automatically." : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Your agent is searching employer job boards using your profile and preferences. Results appear after the postings are verified." : !data.profile.demo && data.personalSearch?.status === "complete" ? "Your last search found no verified openings in this view. Your agent will search again every four hours. You can update your preferences or import a specific job link." : "Try another filter or import a job link."}</p>
+                    {emptyPersonalView && personalStatus}
                     {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
                     {filter !== "all" && <button className="outline-action" onClick={() => setFilter("all")}>Show any fit in this collection</button>}
                     {!search.trim() && (collection === "saved" || collection === "dismissed") && <button className="outline-action" onClick={() => { setCollection("all"); setFilter("all"); }}>Browse matches</button>}
@@ -1141,6 +1149,7 @@ export default function Dashboard() {
               </div>
               <details className="search-status">
                 <summary>Search status · {data.lastRefreshAt ? `workspace updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
+              {!data.profile.demo && data.personalSearch?.status === "complete" && !emptyPersonalView && personalStatus}
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
@@ -1712,6 +1721,7 @@ export default function Dashboard() {
                     <label key={key}>
                       {labels[key]}
                       <input
+                        id={`setup-basic-${key}`}
                         value={profileDraft[key]}
                         disabled={key === "email" && !data.profile.demo}
                         onChange={(event) =>
@@ -1724,7 +1734,7 @@ export default function Dashboard() {
                     </label>
                   ))}
                 </div>
-                <h3>Search preferences</h3>
+                <h3 id="search-preferences" tabIndex={-1}>Search preferences</h3>
                 <div className="form-grid">
                   {(
                     ["preferredTitles", "preferredLocations", "skills"] as const
