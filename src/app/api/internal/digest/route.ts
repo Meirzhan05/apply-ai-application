@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { adminSupabase } from "@/lib/supabase-admin";
-import { isDemo, mutateState } from "@/lib/repository";
+import { isDemo, loadState, mutateState } from "@/lib/repository";
 import { sendDigest } from "@/lib/email";
-import { readActiveCatalogRows } from "@/lib/catalog";
 import { digestDay } from "@/lib/digest-time";
-import type { AppState } from "@/lib/types";
 import { withAccountOperation } from "@/lib/account-lifecycle";
 
 export const runtime = "nodejs";
@@ -20,10 +18,7 @@ export async function POST(request: Request) {
     });
   const client = adminSupabase();
   const asOf = new Date();
-  const [{ data: rows, error: stateError }, jobs] = await Promise.all([
-      client.from("app_states").select("user_id,data").limit(1000),
-      readActiveCatalogRows(),
-    ]);
+  const { data: rows, error: stateError } = await client.from("app_states").select("user_id").limit(1000);
   if (stateError)
     return NextResponse.json(
       { error: stateError.message },
@@ -34,10 +29,10 @@ export async function POST(request: Request) {
   for (const row of rows ?? []) {
     try {
       await withAccountOperation(row.user_id, "email", async () => {
-        const state = row.data as AppState;
+        const state = await loadState(row.user_id);
         const previousDigest = new Date(state.lastDigestAt ?? "");
         if (Number.isFinite(previousDigest.getTime()) && digestDay(previousDigest) === digestDay(asOf)) return;
-        if (await sendDigest(state, jobs.map((item) => ({ ...item.data, discoveredAt: item.discovered_at })), asOf)) {
+        if (await sendDigest(state, state.jobs, asOf)) {
           sent++;
           await mutateState(row.user_id, (current) => { current.lastDigestAt = asOf.toISOString(); });
         }

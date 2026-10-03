@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { enrollPilot } from "@/lib/pilot";
 import { selectApplication } from "@/lib/workflow";
@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   conflicts: 0,
   writes: [] as Array<{ revision: number; data: string }>,
   user: vi.fn(),
+  search: vi.fn(),
+  match: vi.fn(),
   catalog: vi.fn(),
 }));
 
@@ -55,6 +57,8 @@ const db = {
 };
 
 vi.mock("@/lib/demo-mode", () => ({ isDemo: () => false }));
+vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: mocks.match }));
+vi.mock("@/lib/personal-search", () => ({ queuePersonalSearch: mocks.search }));
 vi.mock("@/lib/catalog", () => ({ readActiveCatalogRows: mocks.catalog }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => db }));
 vi.mock("@/lib/supabase", () => ({ serverSupabase: async () => ({ auth: { async getUser() { return { data: { user: { id: "owner-a", email: "owner@example.com" } }, error: null }; } } }) }));
@@ -68,6 +72,8 @@ function post(action: string, payload: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "false");
   mocks.catalog.mockResolvedValue([]);
+  mocks.search.mockReset().mockResolvedValue(false);
+  mocks.match.mockReset().mockResolvedValue(undefined);
   mocks.revision = 1;
   mocks.conflicts = 0;
   mocks.writes.length = 0;
@@ -120,4 +126,33 @@ it("returns an idle approved attempt to materials review and rejects a started s
   mocks.state!.applications[0].submissionAttemptedAt = new Date().toISOString();
   expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(400);
   expect(mocks.state!.applications[0].status).toBe("final_review");
+});
+
+it("automatically dispatches the authenticated student's search after saving explicit preferences", async () => {
+  const response = await POST(post("profile", { preferredTitles: [], preferredLocations: [], remoteOnly: false, userId: "other-student", searchPreferencesConfirmedAt: "untrusted" }));
+  expect(response.status).toBe(200);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toMatch(/^\d{4}-/);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).not.toBe("untrusted");
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
+});
+
+it("rechecks personal search readiness when the student confirms experience or updates search settings", async () => {
+  expect((await POST(post("onboarding", { facts: initialDemoState().profile.facts }))).status).toBe(200);
+  expect((await POST(post("automationSettings", { preferredTitles: ["Analyst"] }))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledTimes(2);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toBeTruthy();
+});
+
+
+afterEach(() => vi.unstubAllEnvs());
+it("reassesses privately retained roles when profile edits reuse the existing personal search", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture");
+  expect((await POST(post("profile", { headline: "Updated career focus" }))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
+  expect(mocks.match).toHaveBeenCalledExactlyOnceWith("owner-a");
+});
+it("does not queue a duplicate assessment while a new personal search is being dispatched", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture"); mocks.search.mockResolvedValue(true);
+  expect((await POST(post("profile", { preferredTitles: ["Data intern"] }))).status).toBe(200);
+  expect(mocks.match).not.toHaveBeenCalled();
 });

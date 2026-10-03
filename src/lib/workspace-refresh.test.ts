@@ -69,3 +69,51 @@ it("retries a failed poll and does not publish a response after stopping", async
   await late;
   expect(onState).toHaveBeenCalledTimes(2);
 });
+
+
+it("reports persistent failures once, preserves data and clears the notice on a successful conditional check", async () => {
+  refresh.stop();
+  const onConnection = vi.fn();
+  refresh = createWorkspaceRefresh(onState, onConnection); refresh.start();
+  fetchState.mockResolvedValueOnce(changed(1)).mockRejectedValue(new Error("Offline"));
+  await refresh.reload();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(onConnection).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(onConnection.mock.calls).toEqual([["stale"]]);
+  expect(onState).toHaveBeenCalledTimes(1);
+  fetchState.mockResolvedValue(new Response(null, { status: 304 }));
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(onConnection.mock.calls).toEqual([["stale"], ["current"]]);
+  expect(onState).toHaveBeenCalledTimes(1);
+});
+
+it("reports expired authentication immediately and clears it after explicit recovery", async () => {
+  refresh.stop();
+  const onConnection = vi.fn();
+  refresh = createWorkspaceRefresh(onState, onConnection); refresh.start();
+  fetchState.mockResolvedValueOnce(changed(1)).mockResolvedValue(Response.json({ error: "AUTH_REQUIRED" }, { status: 401 }));
+  await refresh.reload();
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(onConnection).toHaveBeenLastCalledWith("auth-required");
+  fetchState.mockRejectedValue(new Error("Offline"));
+  await vi.advanceTimersByTimeAsync(45_000);
+  expect(onConnection.mock.calls).toEqual([["auth-required"]]);
+  fetchState.mockResolvedValue(changed(2));
+  await refresh.reload();
+  expect(onConnection).toHaveBeenLastCalledWith("current");
+  expect(onState).toHaveBeenLastCalledWith({ revision: 2 });
+});
+
+it("does not publish a connection failure after the refresh loop stops", async () => {
+  refresh.stop();
+  const onConnection = vi.fn();
+  refresh = createWorkspaceRefresh(onState, onConnection); refresh.start();
+  fetchState.mockResolvedValueOnce(changed(1)); await refresh.reload();
+  let reject: (error: Error) => void = () => undefined;
+  fetchState.mockImplementationOnce(() => new Promise<Response>((_, fail) => { reject = fail; }));
+  await vi.advanceTimersByTimeAsync(15_000);
+  refresh.stop(); reject(new Error("Offline"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(onConnection).not.toHaveBeenCalled();
+});

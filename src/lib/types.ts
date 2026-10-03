@@ -190,6 +190,7 @@ export interface Profile {
   preferredLocations: string[];
   remoteOnly: boolean;
   strictLocations?: boolean;
+  searchPreferencesConfirmedAt?: string;
   timeZone?: string;
   workAuthorization: string;
   facts: VerifiedFact[];
@@ -251,6 +252,7 @@ export interface JobFeedback {
   reason?: string;
   updatedAt: string;
   jobSnapshot?: Pick<Job, "title" | "requirements" | "location">;
+  posting?: Job;
 }
 
 export interface ResumeLine {
@@ -984,6 +986,16 @@ export interface DiscoveryState {
   };
 }
 
+export interface PersonalSearchState {
+  status: "queued" | "searching" | "complete" | "failed" | "budget_limited";
+  requestId: string;
+  profileKey: string;
+  requestedAt: string;
+  completedAt?: string;
+  resultsKey?: string;
+  jobs: Job[];
+}
+
 export interface AppState {
   profile: Profile;
   jobs: Job[];
@@ -999,5 +1011,6 @@ export interface AppState {
   budgetReservations?: Record<string, number>;
   matchLabels?: Array<{ jobId: string; label: "strong" | "possible" | "uncertain"; profile: Profile; job: Job; labeledAt: string }>;
   discovery?: DiscoveryState;
+  personalSearch?: PersonalSearchState;
   pilot?: PilotState;
 }
