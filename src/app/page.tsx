@@ -5,6 +5,7 @@ import { createWorkspaceRefresh } from "@/lib/workspace-refresh";
 import Image from "next/image";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
+import { AccountDeletionPanel } from "@/components/account-deletion";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
@@ -1608,6 +1609,7 @@ export default function Dashboard() {
               </tbody></table>
               <p className="muted">Reserved costs are projections. Actual provider charges must be reconciled before beta expansion.</p>
             </section>}
+            {section === "settings" && <AccountDeletionPanel demo={data.profile.demo} />}
           </main>
         )}
       </div>

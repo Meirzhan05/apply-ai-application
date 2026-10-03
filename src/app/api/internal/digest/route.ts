@@ -5,8 +5,10 @@ import { sendDigest } from "@/lib/email";
 import { readActiveCatalogRows } from "@/lib/catalog";
 import { digestDay } from "@/lib/digest-time";
 import type { AppState } from "@/lib/types";
+import { withAccountOperation } from "@/lib/account-lifecycle";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_TASK_SECRET;
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`)
@@ -31,25 +33,15 @@ export async function POST(request: Request) {
   const errors: string[] = [];
   for (const row of rows ?? []) {
     try {
-      const state = row.data as AppState;
-      const previousDigest = new Date(state.lastDigestAt ?? "");
-      if (
-        Number.isFinite(previousDigest.getTime()) &&
-        digestDay(previousDigest) === digestDay(asOf)
-      )
-        continue;
-      if (
-        await sendDigest(
-          state,
-          jobs.map((item) => ({ ...item.data, discoveredAt: item.discovered_at })),
-          asOf,
-        )
-      ) {
-        sent++;
-        await mutateState(row.user_id, (current) => {
-          current.lastDigestAt = asOf.toISOString();
-        });
-      }
+      await withAccountOperation(row.user_id, "email", async () => {
+        const state = row.data as AppState;
+        const previousDigest = new Date(state.lastDigestAt ?? "");
+        if (Number.isFinite(previousDigest.getTime()) && digestDay(previousDigest) === digestDay(asOf)) return;
+        if (await sendDigest(state, jobs.map((item) => ({ ...item.data, discoveredAt: item.discovered_at })), asOf)) {
+          sent++;
+          await mutateState(row.user_id, (current) => { current.lastDigestAt = asOf.toISOString(); });
+        }
+      }, "daily-digest");
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "Email failed.");
     }

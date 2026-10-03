@@ -36,7 +36,8 @@
     "test:latex-worker": "node --env-file=.env --import tsx scripts/test-latex-worker.ts",
     "test:docx-worker": "node --env-file=.env --import tsx scripts/test-docx-worker.ts",
     "test:pdf-worker": "node --env-file=.env --import tsx scripts/test-pdf-worker.ts",
-    "test:live-browser": "node --env-file=.env --import tsx scripts/test-live-browser.ts"
+    "test:live-browser": "node --env-file=.env --import tsx scripts/test-live-browser.ts",
+    "test:account-deletion:integration": "node --env-file=.env --import tsx scripts/test-account-deletion.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.21.0",

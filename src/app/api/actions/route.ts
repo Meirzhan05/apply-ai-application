@@ -16,6 +16,7 @@ import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { checkSubmissionResult } from "@/lib/submission-verification";
 import { sameOrigin } from "@/lib/request-security";
+import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
 import { adminSupabase } from "@/lib/supabase-admin";
 import {
   refreshBrowserSnapshot,
@@ -509,10 +510,11 @@ async function perform(
     }, ownerContext);
     if (!isDemo()) {
       try {
-        await tasks.trigger<typeof submitApplicationForm>(
+        await withAccountOperation(userId, "dispatch", () => tasks.trigger<typeof submitApplicationForm>(
           "submit-application-form",
           { userId, applicationId: appId },
-        );
+          { tags: [`owner:${userId}`] },
+        ), `submission:${appId}`);
         return;
       } catch (error) {
         await mutateState(userId, (state) => {
@@ -625,6 +627,7 @@ export async function POST(request: Request) {
     );
   try {
     const userId = await currentUserId();
+    return await withAccountOperation(userId, "request", async () => {
     const { action, payload } = Input.parse(await request.json());
     await perform(userId, action, payload);
     if (
@@ -659,11 +662,12 @@ export async function POST(request: Request) {
     }
     if (action === "cancel" || action === "submit") await dispatchUserQueue(userId);
     return NextResponse.json({ ok: true });
+    }, "api/actions");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Action failed.";
     return NextResponse.json(
       { error: message },
-      { status: message === "AUTH_REQUIRED" ? 401 : 400 },
+      { status: message === "AUTH_REQUIRED" ? 401 : error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
   }
 }

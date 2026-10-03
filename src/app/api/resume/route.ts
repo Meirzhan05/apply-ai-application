@@ -7,11 +7,13 @@ import { sameOrigin } from "@/lib/request-security";
 import { parseDocxSource, suggestDocxFacts } from "@/lib/docx-source";
 import { parsePdfSource, suggestPdfFacts } from "@/lib/pdf-source";
 import { bumpAutomationVersion } from "@/lib/onboarding";
+import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
 
 import { saveDemoOriginalResume } from "@/lib/original-resume";
 import type { ResumeSourceDocument } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 export async function POST(request: Request) {
   if (!sameOrigin(request))
     return NextResponse.json(
@@ -20,6 +22,7 @@ export async function POST(request: Request) {
     );
   try {
     const userId = await currentUserId();
+    return await withAccountOperation(userId, "upload", async () => {
     const trustedName = (await loadState(userId)).profile.name;
     const data = await request.formData();
     const file = data.get("file");
@@ -116,13 +119,14 @@ export async function POST(request: Request) {
       });
     });
     return NextResponse.json({ ok: true, extracted, ...(sourceDocument ? { sourceStatus: sourceDocument.support } : {}) });
+    }, "api/resume");
   } catch (error) {
     return NextResponse.json(
       {
         error:
           error instanceof Error ? error.message : "Unable to read resume.",
       },
-      { status: 400 },
+      { status: error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
   }
 }

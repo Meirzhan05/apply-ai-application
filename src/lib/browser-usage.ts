@@ -7,7 +7,7 @@ import type { BrowserProvider } from "@/lib/types";
 import { writeUsageLedger } from "@/lib/usage-ledger";
 
 export type BrowserUsageEvent =
-  | "created" | "connected" | "disconnected" | "status" | "stopped"
+  | "allocation_started" | "created" | "connected" | "disconnected" | "status" | "stopped"
   | "expired" | "cancelled" | "failed" | "ambiguous" | "release_failed";
 
 export interface BrowserUsageRate {
@@ -198,7 +198,8 @@ export async function readBrowserUsage(userId: string): Promise<BrowserUsageRepo
   else {
     records = [];
     for (let offset = 0; ; offset += 500) {
-      const { data, error } = await adminSupabase().from("browser_usage_records").select("data").eq("user_id", userId).order("occurred_at", { ascending: false }).range(offset, offset + 499);
+      const { data, error } = await adminSupabase().from("browser_usage_records").select("data").eq("user_id", userId)
+        .order("occurred_at", { ascending: false }).order("id", { ascending: true }).range(offset, offset + 499);
       if (error) throw new Error("Browser usage could not be loaded.");
       records.push(...(data ?? []).map((row) => row.data as BrowserUsageRecord));
       if (!data || data.length < 500) break;
@@ -223,7 +224,8 @@ export async function readAllBrowserUsage(): Promise<BrowserUsageRecord[]> {
   if (file) { await writes; return await readLocal(file); }
   const records: BrowserUsageRecord[] = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await adminSupabase().from("browser_usage_records").select("data").order("occurred_at", { ascending: false }).range(offset, offset + 499);
+    const { data, error } = await adminSupabase().from("browser_usage_records").select("data")
+      .order("occurred_at", { ascending: false }).order("id", { ascending: true }).range(offset, offset + 499);
     if (error) throw new Error("Browser usage could not be loaded.");
     records.push(...(data ?? []).map((row) => row.data as BrowserUsageRecord));
     if (!data || data.length < 500) break;

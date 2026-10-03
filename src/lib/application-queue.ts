@@ -11,6 +11,7 @@ import { runDraft, runFill, type RunPayload } from "@/lib/application-runs";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { AppState } from "@/lib/types";
 import type { PilotMutationContext } from "@/lib/pilot";
+import { withAccountOperation } from "@/lib/account-lifecycle";
 
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
@@ -142,7 +143,7 @@ export async function dispatchUserQueue(userId: string) {
 
 async function handoff(userId: string, applicationId: string, kind: "draft" | "fill", token: string, draftMode?: "resume" | "essays"): Promise<boolean> {
   try {
-    await tasks.trigger(kind === "fill" ? "fill-application-form" : "draft-application-packet", { userId, applicationId, runToken: token, ...(draftMode ? { draftMode } : {}) }, { idempotencyKey: token });
+    await withAccountOperation(userId, "dispatch", () => tasks.trigger(kind === "fill" ? "fill-application-form" : "draft-application-packet", { userId, applicationId, runToken: token, ...(draftMode ? { draftMode } : {}) }, { idempotencyKey: token, tags: [`owner:${userId}`] }), `application:${applicationId}:${token}`);
     await mutateState(userId, (state) => {
       const app = state.applications.find((item) => item.id === applicationId);
       if (app?.runDispatch?.token === token) { app.runDispatch.confirmedAt = new Date().toISOString(); if (!app.autonomousAuthorization || ["drafting", "filling"].includes(app.status)) app.error = undefined; }

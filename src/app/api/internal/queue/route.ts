@@ -2,8 +2,10 @@ import { dispatchUserQueue } from "@/lib/application-queue";
 import { isDemo } from "@/lib/demo-mode";
 import { readAllAppStateOwners } from "@/lib/app-state-owners";
 import type { AppState } from "@/lib/types";
+import { withAccountOperation } from "@/lib/account-lifecycle";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_TASK_SECRET;
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Unauthorized", { status: 401 });
@@ -15,7 +17,7 @@ export async function POST(request: Request) {
   const errors: string[] = [];
   for (const row of data ?? []) {
     if (!(row.data as AppState).applications.some((app) => app.queuedRun || app.budgetReservation?.status === "release_pending" || (app.runDispatch && !app.runDispatch.confirmedAt && ["drafting", "filling"].includes(app.status)) || (app.submissionDispatch && !app.submissionDispatch.confirmedAt && app.status === "submitting"))) continue;
-    try { dispatched += (await dispatchUserQueue(row.user_id)).dispatched; }
+    try { dispatched += (await withAccountOperation(row.user_id, "maintenance", () => dispatchUserQueue(row.user_id), "internal/queue")).dispatched; }
     catch (error) { errors.push(error instanceof Error ? error.message : "Queue dispatch failed."); }
   }
   return Response.json({ dispatched, errors }, { status: errors.length ? 207 : 200 });

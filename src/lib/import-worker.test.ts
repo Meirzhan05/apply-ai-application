@@ -9,7 +9,8 @@ vi.mock("@trigger.dev/sdk", () => ({ task: (config: unknown) => config }));
 vi.mock("@/lib/repository", () => ({ loadState: mocks.load, mutateState: mocks.mutate }));
 vi.mock("@/lib/import-jobs", async (original) => ({ ...await original<typeof import("@/lib/import-jobs")>(), refreshImportedJobs: mocks.refresh }));
 vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: mocks.queue }));
-const run = (refreshUserImports as unknown as { run: (payload: { userId: string }) => Promise<Record<string, unknown>> }).run;
+const taskRun = (refreshUserImports as unknown as { run: (payload: { userId: string }, options: { ctx: { run: { id: string } } }) => Promise<Record<string, unknown>> }).run;
+const run = (payload: { userId: string }) => taskRun(payload, { ctx: { run: { id: "synthetic-import-run" } } });
 let state: AppState;
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "synthetic");

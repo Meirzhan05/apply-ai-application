@@ -12,6 +12,7 @@ const fixture = vi.hoisted(() => ({
   jobs: [] as Job[],
   calls: [] as Array<{ task: string; payload: Record<string, unknown> }>,
   files: new Map<string, Buffer>(),
+  leases: [] as Array<{ ownerId: string; operation: string; reference?: string }>,
   prepare: vi.fn(),
   submit: vi.fn(),
   admin: vi.fn(),
@@ -115,7 +116,14 @@ function query(table: string) {
 fixture.admin.mockImplementation(() => ({ from: (table: string) => query(table) }));
 fixture.admin.mockImplementation(() => ({
   from: (table: string) => query(table),
-  rpc: async () => ({ data: null, error: null }),
+  rpc: async (name: string, args: Record<string, unknown>) => {
+    if (name !== "save_account_state") return { data: true, error: null };
+    const row = fixture.rows.find((item) => item.user_id === args.p_owner_id);
+    if (!row || row.revision !== args.p_expected_revision) return { data: null, error: null };
+    row.data = args.p_data as Partial<AppState>;
+    row.revision += 1;
+    return { data: row.revision, error: null };
+  },
   storage: { from: () => ({
     upload: async (key: string, bytes: Buffer) => { fixture.files.set(key, Buffer.from(bytes)); return { data: { path: key }, error: null }; },
     download: async (key: string) => ({ data: new Blob([new Uint8Array(fixture.files.get(key) ?? Buffer.alloc(0))]), error: null }),
@@ -126,6 +134,12 @@ vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: fixture.admin }));
 vi.mock("@trigger.dev/sdk", () => ({
   task: (config: unknown) => config,
   tasks: { trigger: fixture.trigger },
+}));
+vi.mock("@/lib/account-lifecycle", () => ({
+  withAccountOperation: async (ownerId: string, operation: string, callback: () => Promise<unknown>, reference?: string) => {
+    fixture.leases.push({ ownerId, operation, reference });
+    return callback();
+  },
 }));
 vi.mock("@/lib/budget", () => ({
   reserveServiceBudget: async () => true,
@@ -152,7 +166,8 @@ import { assessUserMatches } from "../../trigger/matches";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 
-const runMatches = (assessUserMatches as unknown as { run: (payload: { userId: string }) => Promise<Record<string, unknown>> }).run;
+const runMatchesTask = (assessUserMatches as unknown as { run: (payload: { userId: string }, options: { ctx: { run: { id: string } } }) => Promise<Record<string, unknown>> }).run;
+const runMatches = (payload: { userId: string }) => runMatchesTask(payload, { ctx: { run: { id: "synthetic-match-run" } } });
 
 function greenhousePayload(count: number) {
   return { jobs: Array.from({ length: count }, (_, index) => ({ id: String(index + 1), title: `Product Analyst ${index + 1}`, absolute_url: `https://jobs.example/product-${index + 1}`, location: { name: "New York, NY" }, content: "<h3>Requirements</h3><ul><li>Python</li><li>SQL</li></ul>" })) };
@@ -169,6 +184,7 @@ async function runPipeline(hoursAfterRefresh: number) {
   fixture.rows = [{ user_id: "owner-1", data: { ...state, jobs: [] }, revision: 1 }];
   fixture.jobs = [];
   fixture.files = new Map();
+  fixture.leases = [];
   const originalBytes = await createPdfSourceFixture();
   const originalKey = `${state.profile.id}/${randomUUID()}.pdf`;
   fixture.files.set(originalKey, originalBytes);
@@ -194,7 +210,7 @@ async function runPipeline(hoursAfterRefresh: number) {
   vi.stubEnv("JOB_BOARDS", "greenhouse:controlled");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => greenhousePayload(4) }));
   const response = await POST(new Request("https://example.com/api/internal/refresh", { method: "POST", headers: { authorization: "Bearer synthetic" } }));
-  expect(response.status).toBe(200);
+  expect(response.status, await response.clone().text()).toBe(200);
   vi.advanceTimersByTime(hoursAfterRefresh * 60 * 60 * 1000);
   const matchRequest = fixture.calls.find((call) => call.task === "assess-user-matches");
   expect(matchRequest).toBeTruthy();

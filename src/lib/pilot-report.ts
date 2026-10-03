@@ -147,6 +147,83 @@ export function pilotReportDigest(report: PilotReportSnapshot): string {
   return hashJson(copy);
 }
 
+/** Remove one owner's evidence from a shared immutable report while retaining other owners' rows. */
+export function redactPilotReportOwner(
+  report: PilotReportSnapshot,
+  ownerId: string,
+  additionalEvidenceIds: string[] = [],
+): PilotReportSnapshot {
+  const erasedAttempts = report.attempts.filter((attempt) => attempt.ownerId === ownerId);
+  const erasedAttemptIds = new Set(erasedAttempts.map((attempt) => attempt.id));
+  const erasedEvidenceIds = new Set(erasedAttempts.flatMap((attempt) => [
+    ...(attempt.costEvidence.evidenceIds ?? []),
+    ...(attempt.costEvidence.estimatedEvidenceIds ?? []),
+    ...(attempt.costEvidence.measuredEvidenceIds ?? []),
+    ...(attempt.costEvidence.reconciledEvidenceIds ?? []),
+  ]).concat(additionalEvidenceIds));
+  const attempts = report.attempts.filter((attempt) => attempt.ownerId !== ownerId);
+  const permanentlyExcluded = new Set(attempts
+    .filter((attempt) => attempt.origin === "controlled" || attempt.events.some((item) => item.kind === "controlled-excluded"))
+    .map((attempt) => attempt.id));
+  const real = attempts.filter((attempt) => attempt.origin === "real" && !permanentlyExcluded.has(attempt.id) && !pilotAttemptExcluded(attempt));
+  const controlled = attempts.filter((attempt) => permanentlyExcluded.has(attempt.id) || pilotAttemptExcluded(attempt));
+  const unknown = attempts.filter((attempt) => attempt.origin === "unknown" && !permanentlyExcluded.has(attempt.id) && !pilotAttemptExcluded(attempt));
+  const confirmedReal = real.filter(confirmed);
+  const cohorts: PilotReportSnapshot["cohorts"] = {
+    internship: { initiated: 0, confirmed: 0 },
+    "new-grad": { initiated: 0, confirmed: 0 },
+    unclassified: { initiated: 0, confirmed: 0 },
+  };
+  for (const attempt of real) {
+    cohorts[attempt.cohort].initiated += 1;
+    if (confirmed(attempt)) cohorts[attempt.cohort].confirmed += 1;
+  }
+  const reasons: string[] = [];
+  if (real.length < 20) reasons.push("fewer-than-20-real-initiated");
+  if (!cohorts.internship.initiated || !cohorts["new-grad"].initiated) reasons.push("cohorts-missing");
+  if (real.length && unattendedConfirmed(real).length / real.length < 0.8) reasons.push("unattended-rate-below-80-percent");
+  if (confirmedReal.some((attempt) => !reviewed(attempt))) reasons.push("confirmed-attempt-review-incomplete");
+  if (confirmedReal.some((attempt) => {
+    const review = attempt.reviews.at(-1);
+    return review?.suitability === "fail" || review?.factualAccuracy === "fail";
+  })) reasons.push("confirmed-attempt-review-failed");
+
+  const next: PilotReportSnapshot = {
+    ...report,
+    createdBy: report.createdBy.userId === ownerId ? { kind: "service" } : report.createdBy,
+    status: pilotReportStatus(reasons),
+    reasons,
+    totals: {
+      realInitiated: real.length,
+      confirmed: confirmedReal.length,
+      unattendedConfirmed: unattendedConfirmed(confirmedReal).length,
+      interventions: real.filter(pilotAttemptHasIntervention).length,
+      controlled: controlled.length,
+      unknown: unknown.length,
+      unknownCosts: real.filter((attempt) => attempt.costEvidence?.status !== "measured").length,
+    },
+    cohorts,
+    sourceManifest: {
+      ...report.sourceManifest,
+      stateOwnerIds: report.sourceManifest.stateOwnerIds.filter((id) => id !== ownerId),
+      stateRows: report.sourceManifest.stateRows.filter((row) => row.ownerId !== ownerId),
+      controlledExclusions: report.sourceManifest.controlledExclusions.filter((row) => !erasedAttemptIds.has(row.attemptId)),
+      ...(report.sourceManifest.cost ? {
+        cost: {
+          ...report.sourceManifest.cost,
+          evidenceIds: report.sourceManifest.cost.evidenceIds.filter((id) => !erasedEvidenceIds.has(id)),
+        },
+      } : {}),
+    },
+    attempts,
+  };
+  return next;
+}
+
+function unattendedConfirmed(attempts: PilotAttempt[]): PilotAttempt[] {
+  return attempts.filter((attempt) => confirmed(attempt) && !pilotAttemptHasIntervention(attempt));
+}
+
 export function pilotReportIdentity(report: PilotReportSnapshot): string {
   return hashJson({ gateVersion: report.gateVersion, cutoffAt: report.cutoffAt, stateOwnerIds: report.sourceManifest.stateOwnerIds, complete: report.sourceManifest.complete, stateRows: report.sourceManifest.stateRows.map((row) => ({ ownerId: row.ownerId, revision: row.revision, eventPrefixes: row.eventPrefixes })), controlledExclusions: report.sourceManifest.controlledExclusions, cost: report.sourceManifest.cost ? { scope: report.sourceManifest.cost.scope, period: report.sourceManifest.cost.period, evidenceIds: report.sourceManifest.cost.evidenceIds, unknownComponents: report.sourceManifest.cost.unknownComponents } : undefined, attempts: report.attempts.map((attempt) => ({ id: attempt.id, applicationId: attempt.applicationId, events: attempt.events, reviews: attempt.reviews, controlledExclusion: attempt.controlledExclusion, costEvidence: { ...attempt.costEvidence, capturedAt: undefined } })) });
 }
