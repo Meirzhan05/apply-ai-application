@@ -168,6 +168,10 @@ async function main() {
       await dismissDialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
       assert.equal(await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
       assert.doesNotMatch(await dismissDialog.getByRole("alert").innerText(), /AUTH_REQUIRED/);
+      assert.equal(await page.locator(".inline-error").count(), 0, "Modal recovery must not duplicate the global error");
+      const signInBounds = (await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).boundingBox())!;
+      const refreshBounds = (await dismissDialog.getByRole("button", { name: "Refresh workspace", exact: true }).boundingBox())!;
+      assert.ok(refreshBounds.y >= signInBounds.y + signInBounds.height || refreshBounds.x >= signInBounds.x + signInBounds.width + 16, "Recovery controls need visible separation or a separate row");
       await page.screenshot({ path: `.data/matches-reason-recovery-${label}.png`, fullPage: true });
       await dismissDialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
       await dismissDialog.getByRole("alert").waitFor({ state: "hidden" });
@@ -303,6 +307,7 @@ async function main() {
       await dialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
       assert.equal(await dialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
       assert.doesNotMatch(await dialog.getByRole("alert").innerText(), /Check the link|AUTH_REQUIRED/);
+      assert.equal(await page.locator(".inline-error").count(), 0, "Import recovery must not duplicate the global error");
       assert.equal(await url.inputValue(), "https://company.example/careers/role");
       failImport = true;
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();

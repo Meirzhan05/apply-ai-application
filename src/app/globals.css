@@ -1749,6 +1749,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .correction-facts .checkline { display: flex; align-items: center; min-height: 44px; }
 .correction-facts .checkline input { width: 18px; height: 18px; flex: none; margin: 0; }
 .workspace-dialog .text-button { display: inline-flex; align-items: center; min-height: 44px; }
+.workspace-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
 .materials-update { padding: 20px 0; margin-bottom: 24px; border-bottom: 1px solid var(--line); scroll-margin-top: 100px; }
 .materials-update h3 { margin: 0 0 8px; }
 .materials-update p { max-width: 65ch; line-height: 1.6; }

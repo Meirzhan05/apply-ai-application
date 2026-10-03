@@ -830,10 +830,10 @@ export default function Dashboard() {
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "saving-view" ? `${batchProgress?.stopping ? "Stopping after the current save" : "Saving this view"}: ${batchProgress?.done ?? 0} of ${batchProgress?.total ?? 0} roles…` : busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}{batchProgress && <button className="text-button" disabled={batchProgress.stopping} onClick={() => { batchCancel.current = true; setBatchProgress(current => current ? { ...current, stopping: true } : null); }}>{batchProgress.stopping ? "Stopping…" : "Stop further saves"}</button>}</p>}
-        {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
+        {error && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            <div>{displayError}{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>
+            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
             <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
             </button>
@@ -1167,11 +1167,11 @@ export default function Dashboard() {
                           >
                             View original posting ↗
                           </a>
-                          {error && busyJob === job.id && !dismissJobId && <div className="job-action-error" role="alert">
+                          {error && busyJob === job.id && !dismissJobId && !importOpen && <div className="job-action-error" role="alert">
                             <p>{displayError}</p>
                             <p>Refresh to check the latest status for {context}. Your current view is preserved.</p>
-                            <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
-                            {error === "AUTH_REQUIRED" && <a href="/login">Sign in</a>}
+                            <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a href="/login">Sign in</a>}
+                            <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>
                           </div>}
                         </div>
                       </article>
@@ -2137,7 +2137,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p>{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>}
+            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2224,9 +2224,9 @@ export default function Dashboard() {
                 <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setConfirmDiscardImport(false); setError(""); setImportOpen(false); }}>Confirm discard</button>
               </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
               {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
-                {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
+                <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
                 <button className="text-button" type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
-                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
+                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}
             </form>
