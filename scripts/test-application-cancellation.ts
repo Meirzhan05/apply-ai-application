@@ -32,6 +32,15 @@ async function main() {
       await page.locator(".packet-reference > summary").click();
       await page.getByRole("link", { name: "Open tailored resume PDF ↗", exact: true }).waitFor();
       assert.equal(await page.getByRole("button", { name: /Approve materials/ }).count(), 0);
+      await page.getByRole("heading", { name: "This attempt is cancelled", exact: true }).waitFor();
+      await page.getByText(/Your saved resume and answers remain available below/).waitFor();
+      await page.getByRole("button", { name: "Review this role in Matches", exact: true }).click();
+      await page.getByRole("heading", { name: "Your next opportunities", exact: true }).waitFor();
+      assert.equal(await page.getByRole("searchbox", { name: "Search roles or companies" }).inputValue(), `${state.jobs[0].company} ${state.jobs[0].title}`);
+      assert.equal(cancellations, 1, "Recovery must only navigate, never start a new attempt");
+      await page.getByRole("button", { name: "Applications", exact: true }).click();
+      await page.getByRole("button", { name: "Browse other matches", exact: true }).click();
+      assert.equal(await page.getByRole("searchbox", { name: "Search roles or companies" }).inputValue(), "");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); assert.deepEqual(errors, []);
       console.log(`PASS ${width}px: cancellation choice, Escape/focus return, one bound action, retained materials, no overflow`);
       await page.close();

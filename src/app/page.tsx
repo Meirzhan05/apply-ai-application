@@ -1228,6 +1228,20 @@ export default function Dashboard() {
                       </div>
                     )}
                     {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
+                    {activeApp.status === "cancelled" && <section className="step-card" aria-labelledby={`cancelled-${activeApp.id}`}>
+                      <h3 id={`cancelled-${activeApp.id}`}>This attempt is cancelled</h3>
+                      <p>Cancellation stopped this attempt before submission. {activeApp.packet ? "Your saved resume and answers remain available below." : "The role remains available in Matches."} Starting again creates a new attempt that needs a new review.</p>
+                      {activeApp.browserReleasePending && <p role="status">Browser shutdown is still being confirmed. A new attempt must wait until that browser is released. Refresh the workspace to check its status.</p>}
+                      <div className="action-row">
+                        <button className="outline-action" disabled={Boolean(busy)} onClick={() => {
+                          navigateSection("matches");
+                          revealRole(appJob, "Your cancelled attempt is saved. Review this role before starting a new application.");
+                        }}>Review this role in Matches</button>
+                        <button className="text-button" disabled={Boolean(busy)} onClick={() => {
+                          navigateSection("matches"); setCollection("all"); setFilter("all"); setSearch("");
+                        }}>Browse other matches</button>
+                      </div>
+                    </section>}
                     {(activeApp.autonomousAuthorization || activeApp.importedOutcome) && <AutonomousApplicationStatus application={activeApp} busy={Boolean(busy)} checkResult={() => act("checkSubmissionResult", { applicationId: activeApp.id })} />}
                     {activeApp.queuedRun && (
                       <div className="step-card" role="status">
