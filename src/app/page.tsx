@@ -418,6 +418,7 @@ export default function Dashboard() {
   const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const applicationError = applicationFailure?.id === activeApp?.id ? displayError : "";
+  const hasLocalReviewError = Boolean(factCorrection || pendingNavigation || (section === "applications" && applicationFailure?.id === activeApp?.id && ["editPacket", "reviseEssay", "confirmEssay"].includes(applicationFailure?.action ?? "")));
   const retryWorkspace = async () => {
     setBusy("reload");
     try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); }
@@ -824,7 +825,7 @@ export default function Dashboard() {
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
-        {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
+        {error && (error === "AUTH_REQUIRED" || !hasLocalReviewError) && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
             <div>{displayError}{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>

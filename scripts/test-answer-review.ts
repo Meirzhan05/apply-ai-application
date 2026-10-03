@@ -102,6 +102,7 @@ async function main() {
       const saveAnswers = page.getByRole("button", { name: "Save my answers", exact: true });
       await saveAnswers.focus(); await saveAnswers.press("Enter");
       const localError = page.locator(".packet-readiness .application-save-error"); await localError.waitFor();
+      assert.equal(await page.locator(".inline-error").count(), 0, "Local save recovery must not compete with global refresh guidance");
       await page.waitForFunction(id => document.activeElement?.id === id, `save-answers-${app.id}`);
       assert.equal(await humanInput.inputValue(), "My own verified answer");
       const errorBox = await localError.boundingBox(); const viewport = page.viewportSize()!;
@@ -171,6 +172,7 @@ async function main() {
       assert.equal(await factInput.locator("..").getByRole("checkbox").isChecked(), false);
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await corrections.getByRole("alert").waitFor();
+      assert.equal(await page.locator(".inline-error").count(), 0, "Correction recovery must have one local instruction");
       assert.equal(await factInput.inputValue(), "Analyzed survey data in my Python coursework project");
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.text, fact.text);
       const checkboxWidth = await corrections.getByRole("checkbox").evaluate(element => element.getBoundingClientRect().width);
