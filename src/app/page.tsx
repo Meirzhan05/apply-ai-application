@@ -114,6 +114,8 @@ export default function Dashboard() {
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
   const actionFocus = useRef<HTMLElement | null>(null);
+  const pendingApplicationFocus = useRef<string | null>(null);
+  const [applicationOutcome, setApplicationOutcome] = useState<{ id: string; message: string } | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
@@ -163,6 +165,8 @@ export default function Dashboard() {
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     const launcher = document.activeElement;
     actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
+    if (typeof payload.applicationId === "string") setSelected(payload.applicationId);
+    setApplicationOutcome(null);
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
     setError("");
@@ -181,6 +185,17 @@ export default function Dashboard() {
       if (action === "editPacket") setNotice("Your answers are saved.");
       if (action === "reviseEssay") setNotice("Your essay revision is saved. Review and confirm the new wording.");
       if (action === "confirmEssay") setNotice("Essay confirmed. Your application has not been submitted.");
+      const outcomeMessages: Record<string, string> = {
+        approveFill: "Materials approved for form filling. Nothing has been submitted.",
+        approveSubmit: "Final form approved. Nothing has been submitted; choose Submit application once when ready.",
+        restartBrowser: "Returned to materials review. Earlier permissions are cleared.",
+        cancel: "This attempt is cancelled. Your saved materials remain available.",
+      };
+      if (outcomeMessages[action] && typeof payload.applicationId === "string") {
+        const application = next.applications.find(item => item.id === payload.applicationId);
+        const job = next.jobs.find(item => item.id === application?.jobId);
+        setApplicationOutcome({ id: payload.applicationId, message: `${job?.company ?? "This employer"}: ${outcomeMessages[action]}` });
+      }
       return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed.");
@@ -208,12 +223,15 @@ export default function Dashboard() {
   filtered.sort((a, b) => sort === "newest"
     ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
     : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
-  const displayedApplications = applications.filter(app => {
+  const matchesApplicationView = (app: Application) => {
     const job = jobs.find(item => item.id === app.jobId);
     return (!attentionOnly || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(applicationSearch.trim().toLowerCase());
-  });
+  };
+  const retainedApplication = applications.find(app => app.id === selected && !matchesApplicationView(app));
+  const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id);
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
+  const nextMatchingApplication = displayedApplications.find(app => app.id !== activeApp?.id && matchesApplicationView(app));
   useEffect(() => {
     if (busy || !actionFocus.current) return;
     const launcher = actionFocus.current;
@@ -225,6 +243,15 @@ export default function Dashboard() {
     });
     return () => cancelAnimationFrame(frame);
   }, [busy, activeApp?.id]);
+  useEffect(() => {
+    if (busy || section !== "applications") return;
+    const outcome = applicationOutcome?.id === activeApp?.id ? document.getElementById(`application-outcome-${activeApp?.id}`) : null;
+    const heading = pendingApplicationFocus.current === activeApp?.id ? document.getElementById(`application-heading-${activeApp?.id}`) : null;
+    if (!outcome && !heading) return;
+    pendingApplicationFocus.current = null;
+    const frame = requestAnimationFrame(() => (outcome ?? heading)?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [busy, section, activeApp?.id, applicationOutcome]);
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
@@ -316,6 +343,8 @@ export default function Dashboard() {
   };
   const openApplication = useCallback((id: string, resetCollection = true) => requestNavigation(() => {
     if (resetCollection) { setApplicationSearch(""); setAttentionOnly(false); }
+    pendingApplicationFocus.current = id;
+    setApplicationOutcome(null);
     setSelected(id);
     setAnswerEdits(null);
     setEditingEssay(null);
@@ -1181,15 +1210,15 @@ export default function Dashboard() {
             </p>
             <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
-              <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => setApplicationSearch(event.target.value)} /></label>
+              <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { setSelected(null); setApplicationOutcome(null); setApplicationSearch(event.target.value); }} /></label>
               <div className="application-filters" role="group" aria-label="Application collection">
                 <button type="button" aria-pressed={!attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(false)}>All applications ({applications.length})</button>
-                <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(true)}>Needs your review ({needsAction.length})</button>
+                <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(null); setApplicationOutcome(null); setAttentionOnly(true); }}>Needs your review ({needsAction.length})</button>
               </div>
               <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
             </div></details>}</div>
             {(applicationSearch.trim() || attentionOnly) && <div className="application-active-view" role="status">
-              <span>{attentionOnly ? "Needs your review" : "All stages"}{applicationSearch.trim() && ` · Search: “${applicationSearch.trim()}”`} · {displayedApplications.length} of {applications.length} applications</span>
+              <span>{attentionOnly ? "Needs your review" : "All stages"}{applicationSearch.trim() && ` · Search: “${applicationSearch.trim()}”`} · {displayedApplications.length} of {applications.length} applications{retainedApplication && " · Current application kept in view until you choose another"}</span>
               <button type="button" className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setApplicationSearch(""); setAttentionOnly(false); }}>Clear application filters</button>
             </div>}
             {blockers.length > 0 && (
@@ -1277,7 +1306,7 @@ export default function Dashboard() {
                     <div className="detail-head">
                       <div>
                         <p className="employer-name">{appJob.company}</p>
-                        <h2>{appJob.title}</h2>
+                        <h2 id={`application-heading-${activeApp.id}`} tabIndex={-1}>{appJob.title}</h2>
                         <p>
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
@@ -1296,6 +1325,10 @@ export default function Dashboard() {
                         {activeApp.importedCompatibility?.blocker && <p className="muted">{activeApp.importedCompatibility.blocker}</p>}
                       </div>
                     )}
+                    {(applicationOutcome?.id === activeApp.id || retainedApplication?.id === activeApp.id) && <div className="application-outcome" role="status" id={`application-outcome-${activeApp.id}`} tabIndex={-1}>
+                      <p>{applicationOutcome?.id === activeApp.id ? applicationOutcome.message : `${appJob.company}: Your current application remains open outside this collection filter.`}</p>
+                      {retainedApplication?.id === activeApp.id && <><p>Keep working on this application, or choose the next one. Your collection filter stays active.</p>{nextMatchingApplication && <button type="button" className="outline-action" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => switchApplication(nextMatchingApplication.id)}>{attentionOnly ? "Next application needing review" : "Next matching application"}</button>}</>}
+                    </div>}
                     {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
                     {activeApp.status === "cancelled" && <section className="step-card" aria-labelledby={`cancelled-${activeApp.id}`}>
                       <h3 id={`cancelled-${activeApp.id}`}>This attempt is cancelled</h3>
