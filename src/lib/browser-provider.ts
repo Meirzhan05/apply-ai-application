@@ -56,7 +56,7 @@ export function applicationBrowserProvider(app: Pick<Application, "browserProvid
   return app.browserProvider || "browserbase";
 }
 
-async function browserUseRequest(method: string, suffix = "", body?: unknown) {
+async function browserUseRequest(method: string, suffix = "", body?: unknown, allocationResponse = false) {
   const key = process.env.BROWSER_USE_API_KEY;
   if (!key) throw new Error("Browser Use Cloud is not configured. Add BROWSER_USE_API_KEY on the server.");
   let response: Response;
@@ -76,7 +76,19 @@ async function browserUseRequest(method: string, suffix = "", body?: unknown) {
     if (response.status === 429) throw new Error("Browser Use Cloud is at capacity. Wait for the current sessions to finish.");
     throw new Error(`Browser Use Cloud request failed (${response.status}).`);
   }
-  return CloudBrowser.parse(await response.json());
+  try {
+    return CloudBrowser.parse(await response.json());
+  } catch (error) {
+    // A successful allocation response may have created a remote browser even
+    // when its body is truncated or does not match the expected schema. Keep
+    // the allocation marker unresolved so account erasure cannot miss it.
+    if (!allocationResponse) throw error;
+    const uncertain = error instanceof Error
+      ? error
+      : new Error("Browser Use Cloud returned an unreadable session response.");
+    Object.assign(uncertain, { allocationUncertain: true });
+    throw uncertain;
+  }
 }
 
 function sessionPath(sessionId: string) {
@@ -99,7 +111,7 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
       session = await browserUseRequest("POST", "", {
         timeout: 30, proxyCountryCode: "us", solveCaptchas: captchaSolving,
         enableRecording: false, allowResizing: false,
-      });
+      }, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       const ambiguous = Boolean(error && typeof error === "object" && "allocationUncertain" in error)

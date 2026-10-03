@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 const legacy = vi.hoisted(() => ({ update: vi.fn(), retrieve: vi.fn() }));
+const usage = vi.hoisted(() => ({ context: undefined as undefined | { userId: string; applicationId: string; runId: string }, record: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@browserbasehq/sdk", () => ({ default: class { sessions = legacy; } }));
+vi.mock("./browser-usage", () => ({
+  BROWSER_USE_RATE: 0,
+  browserUsageContext: () => usage.context,
+  recordBrowserUsageEvent: usage.record,
+}));
 import { applicationBrowserProvider, configuredBrowserProvider, createRemoteBrowser, releaseRemoteBrowser, remoteBrowserStatus } from "./browser-provider";
 
 const id = "d1be2c6e-a564-40c9-b139-b111d8b161fe";
 const session = { id, status: "active", cdpUrl: "https://test.cdp.browser-use.com", liveUrl: "https://live.browser-use.com/session/test", timeoutAt: "2026-10-01T01:00:00Z" };
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+afterEach(() => { usage.context = undefined; vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
 function setup() { vi.stubEnv("BROWSER_USE_API_KEY", "secret-test-key"); vi.stubEnv("BROWSER_PROVIDER", "browser-use"); vi.stubEnv("BROWSER_USE_SOLVE_CAPTCHAS", ""); }
 describe("Browser Use Cloud session lifecycle", () => {
   it("creates a bounded isolated browser with provider CAPTCHA handling enabled", async () => {
@@ -46,6 +52,33 @@ describe("Browser Use Cloud session lifecycle", () => {
   it("does not retry allocation after ambiguous transport failures", async () => {
     setup(); const fetch = vi.fn().mockRejectedValue(new Error("secret-test-key")); vi.stubGlobal("fetch", fetch);
     await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("No automatic session retry"); expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["malformed JSON", () => new Response("{", { status: 200 })],
+    ["a failed response body read", () => ({ ok: true, status: 200, json: () => Promise.reject(new TypeError("stream terminated")) })],
+  ])("keeps a successful allocation with %s unresolved", async (_label, makeResponse) => {
+    setup();
+    usage.context = { userId: "owner-a", applicationId: "application-a", runId: "run-a" };
+    const response = makeResponse();
+    const fetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(createRemoteBrowser("https://employer.example/apply"))
+      .rejects.toMatchObject({ allocationUncertain: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usage.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ event: "allocation_started", sessionId: null }));
+    expect(usage.record).toHaveBeenLastCalledWith(expect.objectContaining({ event: "ambiguous", failure: "ambiguous_allocation" }));
+  });
+  it("resolves a definite rejected allocation response", async () => {
+    setup();
+    usage.context = { userId: "owner-a", applicationId: "application-a", runId: "run-a" };
+    const fetch = vi.fn().mockResolvedValue(Response.json({ detail: "credits" }, { status: 402 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("insufficient credits");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(usage.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ event: "allocation_started", sessionId: null }));
+    expect(usage.record).toHaveBeenLastCalledWith(expect.objectContaining({ event: "failed", failure: "allocation_failed" }));
   });
   it("releases sessions with unsafe connection or viewer URLs", async () => {
     setup(); const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...session, liveUrl: "https://evil.example" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })).mockResolvedValueOnce(Response.json({ ...session, status: "stopped" })); vi.stubGlobal("fetch", fetch);
