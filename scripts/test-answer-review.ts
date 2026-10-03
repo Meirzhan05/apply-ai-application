@@ -193,10 +193,12 @@ async function main() {
       assert.equal(await page.locator(".packet-orientation a").count(), 1, "Only the available rebuild task should be linked while materials are stale");
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
       await page.getByRole("button", { name: "Undo source fact changes", exact: true }).click();
-      await page.locator(".materials-update").getByText("Source fact correction undone. Review your materials before approving.", { exact: true }).waitFor();
+      await page.locator(".materials-update").getByText("Source fact correction undone. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.deepEqual(state.profile.facts.find(item => item.id === fact.id), fact);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Undo source fact changes", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true, "Undo must not imply materials are ready without rebuilding");
       assert.equal(app.approvals.length, 0);
       assert.deepEqual(failures, []);
       console.log(`PASS ${label}: editable essay with preserved original, fresh confirmation, contextual fact correction, separate approval, prerequisite guidance`);

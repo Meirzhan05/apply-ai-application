@@ -1432,7 +1432,7 @@ export default function Dashboard() {
                       </details>
                       <button className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={async () => {
                         if (await act("profile", { factPatch: { expected: lastFactCorrection.after, updated: lastFactCorrection.before } })) {
-                          setLastFactCorrection(null); setNotice("Source fact correction undone. Review your materials before approving.");
+                          setLastFactCorrection(null); setNotice("Source fact correction undone. Rebuild the materials and review them before approving.");
                         }
                       }}>Undo source fact changes</button>
                     </section>}
