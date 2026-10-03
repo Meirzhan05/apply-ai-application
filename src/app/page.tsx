@@ -22,6 +22,7 @@ import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView }
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
+import { saveRoleBatch } from "@/lib/save-role-batch";
 import { checkAge, discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
@@ -93,6 +94,9 @@ export default function Dashboard() {
   const [importTouched, setImportTouched] = useState(false);
   const [confirmDiscardImport, setConfirmDiscardImport] = useState(false);
   const keepImportEditing = useRef<HTMLButtonElement>(null);
+  const batchCancel = useRef(false);
+  const batchActive = useRef(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; stopping?: boolean } | null>(null);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
   const [filterOptionsOpen, setFilterOptionsOpen] = useState(false);
@@ -113,7 +117,7 @@ export default function Dashboard() {
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
-  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; savedGroup?: boolean; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
   const actionFocus = useRef<HTMLElement | null>(null);
@@ -685,6 +689,34 @@ export default function Dashboard() {
     { key: "profile", label: "Profile", icon: UserRound },
     { key: "settings", label: "Search settings", icon: Settings2 },
   ];
+  const batchCandidates = filtered.filter(job => feedback.get(job.id)?.kind !== "saved" && feedback.get(job.id)?.kind !== "dismissed").slice(0, 20);
+  const saveFilteredRoles = async () => {
+    if (busy || batchActive.current || batchCandidates.length < 2) return;
+    batchActive.current = true;
+    const ids = batchCandidates.map(job => job.id);
+    const owner = data.profile.id;
+    batchCancel.current = false;
+    setBusy("saving-view"); setBusyJob(""); setError("");
+    setBatchProgress({ done: 0, total: ids.length });
+    try {
+      const result = await saveRoleBatch(ids, {
+        cancelled: () => batchCancel.current,
+        onProgress: done => setBatchProgress(current => current ? { ...current, done } : null),
+        save: async jobId => {
+          let response: Response;
+          try { response = await fetch("/api/actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "feedback", payload: { jobId, kind: "saved", expectedKind: "clear", expectedOwnerId: owner } }) }); }
+          catch { throw new Error("Connection interrupted while saving. Refresh to check the latest save status before trying again."); }
+          const body = await response.json().catch(() => { throw new Error("The save response could not be read. Refresh to check the latest save status before trying again."); });
+          if (!response.ok) throw new Error(body.error || "A role could not be saved. Try again.");
+        },
+      });
+      const count = result.savedIds.length;
+      setFeedbackNotice({ message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, savedGroup: count > 0 });
+      if (result.error) setError(result.error);
+      try { const next = await reload(); if (next.profile.id !== owner) { setFeedbackNotice(null); setError(""); } }
+      catch { setError("The save status could not be refreshed. Refresh your workspace to check which roles were saved before trying again."); }
+    } finally { batchActive.current = false; setBatchProgress(null); setBusy(""); }
+  };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
   const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
     pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => fact.verified && fact.text.trim()) ? "confirmed-resume-facts" : "search-preferences";
@@ -794,7 +826,7 @@ export default function Dashboard() {
           <p>{connection === "auth-required" ? "Sign in to resume workspace updates. Showing the last received list." : "Workspace updates are paused. Showing the last received list; we’ll keep trying."}</p>
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
-        {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
+        {busy && <p className="workspace-progress" role="status">{busy === "saving-view" ? `${batchProgress?.stopping ? "Stopping after the current save" : "Saving this view"}: ${batchProgress?.done ?? 0} of ${batchProgress?.total ?? 0} roles…` : busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}{batchProgress && <button className="text-button" disabled={batchProgress.stopping} onClick={() => { batchCancel.current = true; setBatchProgress(current => current ? { ...current, stopping: true } : null); }}>{batchProgress.stopping ? "Stopping…" : "Stop further saves"}</button>}</p>}
         {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
@@ -877,6 +909,7 @@ export default function Dashboard() {
                   </button>)}
                 </div>
                 <div className="sort-options"><label className="sort-control">Sort <select aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
+                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy)} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20 unsaved" : batchCandidates.length} roles in this view</button></div>}
               </div>
               <div className="matches-subbar">
               <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
@@ -913,6 +946,7 @@ export default function Dashboard() {
               </>}
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
+                {feedbackNotice.savedGroup && <button className="text-button" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
                 {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;

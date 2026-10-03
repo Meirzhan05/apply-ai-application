@@ -454,6 +454,11 @@ async function main() {
         const navigation = page.getByRole("button", { name, exact: true });
         assert.ok(await navigation.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 10), `Navigation labels stay visible at ${width}px`);
       }
+      if (width <= 650) {
+        const boxes = await page.locator(".collection-filter").evaluateAll(elements => elements.map(element => { const box = element.getBoundingClientRect(); return { top: box.top, height: box.height }; }));
+        assert.equal(new Set(boxes.map(box => box.top)).size, 1, "Collection controls stay on one readable row at narrow widths");
+        assert.ok(boxes.every(box => box.height >= 44));
+      }
       console.log(`PASS responsive ${width}x${height}: long content, visible navigation, no horizontal overflow`);
     }
     const sameTitlePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -543,6 +548,50 @@ async function main() {
     }
     await personalPage.close();
     console.log("PASS personal-search states: compact completed status, first role action, focused setup, failed-search import and monthly budget recovery");
+    const batchPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const batchState = structuredClone(demoState);
+    batchState.jobs = Array.from({ length: 4 }, (_, index) => ({ ...intern, id: `batch-${index}`, company: `QA Batch ${index}`, url: `https://example.com/batch-${index}` }));
+    batchState.importedJobs = []; batchState.applications = [];
+    updateJobFeedback(batchState, { jobId: "batch-0", kind: "saved" });
+    let batchFixture = publicState(batchState); let batchCalls = 0; let failBatch = true;
+    let releaseBatch: (() => void) | undefined; let slowBatch = false;
+    await batchPage.route("**/api/state", route => route.fulfill({ json: batchFixture }));
+    await batchPage.route("**/api/actions", async route => {
+      const body = route.request().postDataJSON();
+      assert.equal(body.action, "feedback"); assert.equal(body.payload.kind, "saved");
+      assert.equal(body.payload.expectedKind, "clear"); assert.equal(body.payload.expectedOwnerId, batchFixture.profile.id);
+      batchCalls++;
+      if (failBatch && batchCalls === 2) return route.fulfill({ status: 503, json: { error: "A role could not be saved. Try again." } });
+      if (slowBatch) { slowBatch = false; await new Promise<void>(resolve => { releaseBatch = resolve; }); }
+      updateJobFeedback(batchFixture, body.payload); return route.fulfill({ json: { ok: true } });
+    });
+    await batchPage.goto(origin); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).fill("QA Batch");
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Confirmed 1 of 3 saves. Refresh to check remaining roles before trying again.", { exact: true }).waitFor();
+    assert.equal(batchCalls, 2, "Stop after the first failed request");
+    assert.equal(batchFixture.feedback.filter(item => item.kind === "saved").length, 2, "Keep the completed save and original bookmark");
+    failBatch = false;
+    await batchPage.getByRole("button", { name: "Save 2 roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Saved 2 of 2 roles from this view. Review them in Saved.", { exact: true }).waitFor();
+    assert.equal(batchCalls, 4, "Retry only the remaining unsaved roles");
+    await batchPage.getByRole("button", { name: "Review saved", exact: true }).click();
+    assert.equal(await batchPage.getByRole("article").count(), 4);
+    await batchPage.getByRole("button", { name: "Return to previous view", exact: true }).click();
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; slowBatch = true;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Stop further saves", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Stopping…", exact: true }).waitFor();
+    while (!releaseBatch) await batchPage.waitForTimeout(10);
+    releaseBatch();
+    await batchPage.locator(".feedback-summary").getByText("Saved 1 of 3 roles from this view. Stopped further saves.", { exact: true }).waitFor();
+    assert.equal(batchCalls, 1, "Stopping finishes the in-flight bookmark without starting another");
+    await batchPage.screenshot({ path: ".data/matches-batch-mobile.png" });
+    await batchPage.close();
+    console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
     const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const connectionFixture = publicState(structuredClone(demoState));
     let failedUpdates = false; let expiredUpdates = false;

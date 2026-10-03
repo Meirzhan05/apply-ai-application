@@ -287,6 +287,8 @@ async function perform(
         jobId: text(payload.jobId, 200),
         kind: z.enum(["saved", "dismissed", "clear"]).parse(payload.kind),
         reason: text(payload.reason, 500),
+        expectedOwnerId: z.string().min(1).max(200).optional().parse(payload.expectedOwnerId),
+        expectedKind: z.enum(["saved", "dismissed", "clear"]).optional().parse(payload.expectedKind),
       });
       activity(state, result.label, result.title);
     }, ownerContext);

@@ -228,7 +228,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 }
 .top-context {
   font-size: 12px;
-  color: #73817d;
+  color: var(--muted);
 }
 .top-context span {
   padding: 0 10px;
@@ -1901,4 +1901,14 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .personal-search-actions .dark-button { min-height: 44px; }
 @media (max-width: 650px) {
   .matches-panel .job-search label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+
+.batch-save-control { text-align: right; }
+.batch-save-control button { min-height: 44px; }
+.workspace-progress button { min-height: 44px; margin-left: 16px; }
+@media (max-width: 650px) {
+  .matches-panel .collectionbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .matches-panel .collection-filter { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 6px; font-size: 13px; }
+  .matches-panel .collection-filter > svg { display: none; }
+  .matches-panel .collection-filter > span { font-size: 11px; line-height: 1.2; }
 }
