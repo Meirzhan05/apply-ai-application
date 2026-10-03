@@ -94,6 +94,7 @@ async function main() {
       assert.ok(firstRoleBox && firstRoleBox.y < height, "The first role must begin in the initial viewport");
       assert.equal(await strongRole.locator(".fit-highlight").innerText(), "Posting: React · Your confirmed experience: Built a React portfolio project");
       if (label === "mobile") {
+        assert.ok(firstRoleBox && firstRoleBox.y <= height / 2, "Role reading should begin within the first half of the phone viewport");
         const prepareBox = await jobButton("Prepare application for").boundingBox();
         assert.ok(prepareBox && prepareBox.y + prepareBox.height <= height, "One complete opportunity and its preparation action should fit in the opening phone viewport");
       }
@@ -357,6 +358,9 @@ async function main() {
       await dialog.getByRole("button", { name: "Try adding again", exact: true }).click();
       await dialog.getByRole("alert").getByText(/couldn’t confirm whether this role was added/).waitFor();
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "An uncertain import outcome requires refreshing status before retrying");
+      const recoveryBox = await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).boundingBox();
+      const urlBox = await url.boundingBox();
+      assert.ok(recoveryBox && urlBox && recoveryBox.y + recoveryBox.height <= urlBox.y, "Import reconciliation is discoverable before the retained form fields");
       await page.screenshot({ path: `.data/matches-import-uncertain-${label}.png`, fullPage: true });
       failRefresh = true;
       await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
@@ -730,12 +734,15 @@ async function main() {
     await batchPage.getByRole("alert").filter({ hasText: "Could not refresh your workspace" }).waitFor();
     assert.equal(await saveView.isDisabled(), true, "Repeated refresh failure must not release uncertainty");
     assert.equal(batchCalls, 1, "No automatic mutation retry after an unreadable success response");
+    assert.equal(await batchPage.locator(".matches-feedback-rail").count(), 0, "Uncertain batch recovery consolidates the confirmed count and next action in one region");
+    assert.match(await batchPage.getByRole("alert").filter({ hasText: "0 of 3 saves confirmed" }).innerText(), /Remaining save outcomes need checking/);
     await batchPage.screenshot({ path: ".data/matches-batch-uncertain-mobile.png" });
     failedBatchRefresh = false;
     await batchPage.getByRole("button", { name: "Refresh workspace", exact: true }).click();
     await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).waitFor();
     assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false);
     assert.equal(batchCalls, 1, "Successful reconciliation reveals the accepted save without repeating it");
+    await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
     await batchPage.close();
     console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
     if (process.env.TEST_MATCHES_SKIP_CONNECTION === "1") {

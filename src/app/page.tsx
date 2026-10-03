@@ -126,7 +126,7 @@ export default function Dashboard() {
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissDraft, setDismissDraft] = useState<{ owner: string; jobId: string; reason: string } | null>(null);
   const dismissReason = dismissDraft?.owner === data?.profile.id && dismissDraft?.jobId === dismissJobId ? dismissDraft.reason : "";
-  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; savedGroup?: boolean; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; savedGroup?: boolean; batchResult?: { confirmed: number; total: number }; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
   const actionFocus = useRef<HTMLElement | null>(null);
@@ -184,6 +184,7 @@ export default function Dashboard() {
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     if (!data) return null;
     if (actionCheck) { setError(actionCheck.message); return null; }
+    setFeedbackNotice(current => current?.batchResult ? { ...current, batchResult: undefined } : current);
     const launcher = document.activeElement;
     actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
     setBusy(action);
@@ -415,11 +416,14 @@ export default function Dashboard() {
   };
   const baseError = activeError === "This link is already in your catalog." ? "This role is already in your list." : activeError === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(activeError) ? "Connection lost. Check your internet connection, then refresh your workspace." : activeError;
-  const outcomeUncertainty = actionCheck?.action === "import" ? "We couldn’t confirm whether this role was added." : actionCheck?.action === "feedback" ? "We couldn’t confirm whether your collection changes were saved." : "We couldn’t confirm whether your changes were saved.";
+  const batchRecovery = section === "matches" && actionCheck?.action === "feedback" ? feedbackNotice?.batchResult : undefined;
+  const outcomeUncertainty = batchRecovery ? batchRecovery.confirmed === batchRecovery.total ? "Your saves were confirmed, but the role list is out of date." : "Remaining save outcomes need checking." : actionCheck?.action === "import" ? "We couldn’t confirm whether this role was added." : actionCheck?.action === "feedback" ? "We couldn’t confirm whether your collection changes were saved." : "We couldn’t confirm whether your changes were saved.";
   const displayError = actionCheck && !requiresSignIn ? activeError !== actionCheck.message ? `${baseError} ${outcomeUncertainty}` : `${outcomeUncertainty} Refresh your workspace to check the latest status before trying again.` : baseError;
   const retryWorkspace = async () => {
     setBusy("reload");
-    try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); setPendingActionCheck(null); }
+    try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); setPendingActionCheck(null);
+      if (batchRecovery) { pendingBatchFocus.current = true; setFeedbackNotice({ message: "Save status refreshed. Review your saved roles.", compactMessage: "Save status refreshed.", savedGroup: true }); }
+    }
     catch (err) { setError(err instanceof Error && err.message === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : "Could not refresh your workspace. Check your connection and try again."); }
     finally { setBusy(""); }
   };
@@ -734,7 +738,7 @@ export default function Dashboard() {
         },
       });
       const count = result.savedIds.length;
-      setFeedbackNotice({ message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, compactMessage: result.error ? `Interrupted. ${count}/${ids.length} saves confirmed.` : result.stopped ? `Stopped. Saved ${count}/${ids.length}.` : `Saved ${count} roles.`, savedGroup: count > 0 });
+      setFeedbackNotice({ batchResult: { confirmed: count, total: ids.length }, message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, compactMessage: result.error ? `Interrupted. ${count}/${ids.length} saves confirmed.` : result.stopped ? `Stopped. Saved ${count}/${ids.length}.` : `Saved ${count} roles.`, savedGroup: count > 0 });
       if (result.error) {
         setError(result.error);
         if (actionNeedsWorkspaceCheck(result.error)) setPendingActionCheck({ owner, action: "feedback", message: result.error });
@@ -861,13 +865,13 @@ export default function Dashboard() {
         {activeError && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
+            <div>{batchRecovery && <strong>{batchRecovery.confirmed} of {batchRecovery.total} saves confirmed. </strong>}{displayError}{!actionCheck && <p>Refresh the workspace to check the latest status.</p>}<div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
             {!actionCheck && <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
             </button>}
           </div>
         )}
-              {section === "matches" && feedbackNotice && <div className="feedback-notice matches-feedback-rail" role="status">
+              {section === "matches" && feedbackNotice && !batchRecovery && <div className="feedback-notice matches-feedback-rail" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
                 {feedbackNotice.savedGroup && <button className="text-button" disabled={Boolean(batchProgress)} data-match-action="review-saved" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
                 {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts={shortcutsEnabled ? "u" : undefined} aria-label="Undo dismissal" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={async () => {
@@ -2217,6 +2221,12 @@ export default function Dashboard() {
               <X size={20} />
             </button>
             <h2 id="import-heading">Import a job link</h2>
+              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Return here afterward to continue."}</p>
+                <div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}
+                {needsWorkspaceCheck && <button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
+                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
+                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
+              </div>}
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
             <form className="job-import-form" onSubmit={async event => {
               event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
@@ -2242,12 +2252,7 @@ export default function Dashboard() {
                   <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Return here afterward to continue."}</p>
-                <div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}
-                {needsWorkspaceCheck && <button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
-                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
-                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
-              </div>}
+
               {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady || needsWorkspaceCheck}>{busy === "import" ? "Checking and adding…" : error && !needsWorkspaceCheck && !existingImport ? "Try adding again" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
