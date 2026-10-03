@@ -54,6 +54,7 @@ import type {
   MatchAssessment,
   Profile,
   ScreeningAnswer,
+  VerifiedFact,
 } from "@/lib/types";
 
 type ViewState = Omit<AppState, "applications"> & {
@@ -100,7 +101,8 @@ export default function Dashboard() {
   const [cancellationId, setCancellationId] = useState<string | null>(null);
   const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
-  const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
+  const [factCorrection, setFactCorrection] = useState<{ applicationId: string; facts: VerifiedFact[]; claim: string } | null>(null);
+  const [lastFactCorrection, setLastFactCorrection] = useState<{ owner: string; applicationId: string; before: VerifiedFact[]; after: VerifiedFact[] } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
@@ -406,7 +408,7 @@ export default function Dashboard() {
     requestNavigation(() => {
       setEditingEssay(null);
       setError("");
-      setFactCorrection({ applicationId: activeApp.id, factIds, claim });
+      setFactCorrection({ applicationId: activeApp.id, facts: structuredClone(data.profile.facts.filter(fact => factIds.includes(fact.id))), claim });
     });
   };
 
@@ -1312,6 +1314,18 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
+                    {lastFactCorrection?.owner === data.profile.id && lastFactCorrection.applicationId === activeApp.id && <section className="fact-change-history" aria-label="Last source fact change">
+                      <strong>Source facts saved</strong>
+                      <p>You can undo this correction while these facts still match your saved changes. Other profile edits stay intact.</p>
+                      <details><summary>Review your last source fact changes</summary>
+                        {lastFactCorrection.before.map((fact, index) => <div key={fact.id}><p><strong>Before:</strong> {fact.text} · {fact.verified ? "confirmed" : "unconfirmed"}</p><p><strong>Saved:</strong> {lastFactCorrection.after[index]?.text} · {lastFactCorrection.after[index]?.verified ? "confirmed" : "unconfirmed"}</p></div>)}
+                      </details>
+                      <button className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={async () => {
+                        if (await act("profile", { factPatch: { expected: lastFactCorrection.after, updated: lastFactCorrection.before } })) {
+                          setLastFactCorrection(null); setNotice("Source fact correction undone. Review your materials before approving.");
+                        }
+                      }}>Undo source fact changes</button>
+                    </section>}
                     {activeApp.status === "draft_review" && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
                       <h3>Your profile changed</h3>
                       <p>The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
@@ -2007,11 +2021,12 @@ export default function Dashboard() {
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
-        facts={data.profile.facts.filter(fact => factCorrection.factIds.includes(fact.id))} busy={Boolean(busy)} error={displayError}
+        facts={factCorrection.facts} busy={Boolean(busy)} error={displayError}
         onCancel={() => { setFactCorrection(null); setError(""); }}
         onSave={async facts => {
-          const updated = data.profile.facts.map(fact => facts.find(item => item.id === fact.id) ?? fact);
-          if (await act("profile", { ...data.profile, facts: updated })) {
+          const next = await act("profile", { factPatch: { expected: factCorrection.facts, updated: facts } });
+          if (next) {
+            setLastFactCorrection({ owner: data.profile.id, applicationId: factCorrection.applicationId, before: factCorrection.facts, after: next.profile.facts.filter(fact => facts.some(item => item.id === fact.id)) });
             setFactCorrection(null);
             setNotice("Source facts saved. Rebuild the materials and review them before approving.");
           }

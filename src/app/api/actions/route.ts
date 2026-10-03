@@ -13,6 +13,7 @@ import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue"
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
+import { applyFactCorrection } from "@/lib/fact-corrections";
 import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
@@ -209,7 +210,8 @@ async function perform(
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
       });
-      profile.email = verifiedEmail || text(payload.email, 254);
+      if (verifiedEmail) profile.email = verifiedEmail;
+      else if ("email" in payload) profile.email = text(payload.email, 254);
       for (const key of [
         "skills",
         "preferredTitles",
@@ -231,7 +233,7 @@ async function perform(
         new Intl.DateTimeFormat("en-US", { timeZone });
         profile.timeZone = timeZone;
       }
-      const facts = "facts" in payload ? z
+      const facts = "factPatch" in payload ? applyFactCorrection(profile.facts, payload.factPatch) : "facts" in payload ? z
           .array(
             z.object({
               id: z.string(),

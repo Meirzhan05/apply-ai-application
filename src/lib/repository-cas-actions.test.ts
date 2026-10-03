@@ -89,3 +89,15 @@ it("does not persist a permanent CAS loser or create a phantom owner event", asy
   expect(mocks.state?.profile.headline).not.toBe("Should not save");
   expect(mocks.state?.applications[0].pilotAttempt?.events.some((event) => event.kind === "owner-action" && event.detail === "profile")).toBe(false);
 });
+
+it("applies a narrow fact correction and undo without replacing unrelated facts", async () => {
+  const original = structuredClone(mocks.state!.profile.facts[0]);
+  const updated = { ...original, text: "Applicant corrected this fact", verified: false, source: "user" as const, sourceAnchorId: undefined };
+  const unrelated = structuredClone(mocks.state!.profile.facts.slice(1));
+  expect((await POST(post("profile", { factPatch: { expected: [original], updated: [updated] } }))).status).toBe(200);
+  expect(mocks.state!.profile.facts).toEqual([updated, ...unrelated]);
+  expect((await POST(post("profile", { factPatch: { expected: [original], updated: [updated] } }))).status).toBe(400);
+  expect(mocks.writes).toHaveLength(1);
+  expect((await POST(post("profile", { factPatch: { expected: [updated], updated: [original] } }))).status).toBe(200);
+  expect(mocks.state!.profile.facts).toEqual([original, ...unrelated]);
+});
