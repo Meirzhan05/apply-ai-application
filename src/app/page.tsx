@@ -15,7 +15,7 @@ import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { matchEvidence } from "@/lib/match-evidence";
-import { importInput } from "@/lib/import-input";
+import { importInput, importedRole } from "@/lib/import-input";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
@@ -56,6 +56,7 @@ type ViewState = AppState & {
 };
 type Section = "matches" | "applications" | "profile" | "settings";
 type Filter = MatchFilter;
+type BrowseView = { collection: MatchCollection; filter: Filter; search: string; sort: "relevant" | "newest" };
 
 export default function Dashboard() {
   const router = useRouter();
@@ -65,6 +66,7 @@ export default function Dashboard() {
   const [collection, setCollection] = useState<MatchCollection>("all");
   const searchInput = useRef<HTMLInputElement>(null);
   const jobList = useRef<HTMLDivElement>(null);
+  const pendingRoleFocus = useRef<string | null>(null);
   const [importTouched, setImportTouched] = useState(false);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
@@ -76,8 +78,8 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
-  const [dismissReason, setDismissReason] = useState("Wrong role");
-  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" } } | null>(null);
+  const [dismissReason, setDismissReason] = useState("");
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState({
     url: "",
     company: "",
@@ -192,6 +194,11 @@ export default function Dashboard() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [section]);
+  useEffect(() => {
+    if (!pendingRoleFocus.current) return;
+    const role = document.getElementById(`role-${pendingRoleFocus.current}`)?.closest("article") ?? document.getElementById("matches-heading");
+    if (role instanceof HTMLElement) { role.focus(); pendingRoleFocus.current = null; }
+  }, [data, feedbackNotice]);
   const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const retryWorkspace = async () => {
@@ -361,7 +368,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} in your catalog</span> ·{" "}
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span> ·{" "}
                     {data.lastRefreshAt
                       ? `updated ${relative(data.lastRefreshAt)}`
                       : "ready for your review"}
@@ -430,6 +437,13 @@ export default function Dashboard() {
                   const next = await act("feedback", feedbackNotice.undo);
                   if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
                 }}>Undo dismissal</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
+                {feedbackNotice.returnView && <button className="text-button" onClick={() => {
+                  const previous = feedbackNotice.returnView!;
+                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
+                  document.getElementById("matches-heading")?.focus();
+                }}>Return to previous view</button>}
+                {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
                 <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
               </div>}
               <details className="fit-guide matches-guidance">
@@ -459,6 +473,7 @@ export default function Dashboard() {
                     const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
                     const context = `${job.title} at ${job.company}`;
                     const evidence = matchEvidence(data.profile, job, match);
+                    const checkCount = new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])]).size;
                     const preparing = busyJob === job.id && ["select", "startAutonomous", "preflightImportedPosting"].includes(busy);
                     return (
                       <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id}`}>
@@ -502,7 +517,7 @@ export default function Dashboard() {
                           {rowChecks.length > 0 && <div className="job-review-note"><span><strong>{match?.category === "excluded" ? "Search rule conflict: " : "To review: "}</strong>{rowChecks[0]}</span></div>}
                           {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
                           <details className="fit-evidence">
-                          <summary aria-label={`Review fit evidence for ${context}`}>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
+                          <summary aria-label={`Review fit evidence for ${context}${match ? ` · ${checkCount} checks to review` : ""}`}>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
                             <strong>Posting terms found in confirmed facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
@@ -570,10 +585,15 @@ export default function Dashboard() {
                             <button
                               disabled={Boolean(busy)}
                               aria-label={`Dismiss ${context}`}
-                              onClick={() => {
-                                setError("");
-                                setDismissJobId(job.id);
-                                setDismissReason("Wrong role");
+                              onClick={async () => {
+                                const index = filtered.findIndex(item => item.id === job.id);
+                                const adjacent = filtered[index + 1] ?? filtered[index - 1];
+                                const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
+                                const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
+                                if (next) {
+                                  pendingRoleFocus.current = adjacent?.id ?? "__heading__";
+                                  setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                }
                               }}
                             >
                               <X size={17} />
@@ -1731,15 +1751,15 @@ export default function Dashboard() {
             >
               <X size={20} />
             </button>
-            <p className="eyebrow">HELP REFINE YOUR SEARCH</p>
-            <h2 id="dismiss-heading">Why dismiss this role?</h2>
-            <p>Your reason will guide the order of similar future matches.</p>
+            <h2 id="dismiss-heading">Add a dismissal reason</h2>
+            <p>Optional. Choose a reason only if it reflects your decision. It can guide the order of similar future matches.</p>
             <label>
               Reason
               <select
                 value={dismissReason}
                 onChange={(event) => setDismissReason(event.target.value)}
               >
+                <option value="">No reason supplied</option>
                 <option>Wrong role</option>
                 <option>Location is not right</option>
                 <option>Experience level is not right</option>
@@ -1754,13 +1774,13 @@ export default function Dashboard() {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
                   kind: "dismissed",
-                  reason: dismissReason,
+                  reason: dismissReason || undefined,
                 });
                 if (next) setDismissJobId(null);
-                if (next) setFeedbackNotice({ message: `${jobs.find(job => job.id === dismissJobId)?.title ?? "Role"} dismissed. Find it in Dismissed.`, undo: { jobId: dismissJobId, kind: feedback.get(dismissJobId)?.kind === "saved" ? "saved" : "clear" } });
+                if (next) setFeedbackNotice({ message: "Dismissal reason updated.", undo: feedbackNotice?.undo });
               }}
             >
-              {busy === "feedback" ? "Dismissing…" : "Dismiss role"}
+              {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
             {error && <p role="alert">{error}</p>}
         </WorkspaceDialog>
@@ -1781,8 +1801,16 @@ export default function Dashboard() {
               if (!importReady || busy) return;
               const next = await act("import", importFields);
               if (next) {
-                setImportOpen(false); setImportTouched(false); setCollection("all"); setFilter("all"); setSearch("");
-                setFeedbackNotice({ message: "Job link added. Review its posting details and fit before applying." });
+                const added = importedRole(jobs, next.jobs, importFields.url);
+                setImportOpen(false); setImportTouched(false);
+                if (added?.active) {
+                  const previousView = { collection, filter, search, sort };
+                  setCollection("all"); setFilter("all"); setSearch(`${added.company} ${added.title}`);
+                  pendingRoleFocus.current = added.id;
+                  setFeedbackNotice({ message: `Added ${added.title} at ${added.company}. Review the posting details and fit below.`, returnView: previousView });
+                } else {
+                  setFeedbackNotice({ message: added ? `${added.title} at ${added.company} was added, but the posting is closed. Your view is preserved.` : "Link added. Refresh your workspace to locate its posting details.", postingUrl: added?.url });
+                }
                 setImportFields({ url: "", company: "", title: "", location: "" });
               }
             }}>
@@ -1795,7 +1823,7 @@ export default function Dashboard() {
                   <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => setImportFields({ ...importFields, [key]: event.target.value })} />
                 </label>)}
               </fieldset>}
-              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add to catalog"}</button>
+              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
               {error && <p role="alert">{displayError} Your entered details are preserved. Correct the link or try again.</p>}
             </form>
         </WorkspaceDialog>

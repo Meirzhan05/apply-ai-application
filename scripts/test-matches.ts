@@ -18,6 +18,7 @@ async function main() {
   let fixture = publicState(demoState);
   let failFeedback = false;
   let slowFeedback = false;
+  let failImport = false;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -27,7 +28,15 @@ async function main() {
     await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(fixture)}\n\n` }));
     await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
-      assert.equal(body.action, "feedback", "Only synthetic feedback actions are allowed in this test");
+      if (body.action === "import") {
+        if (failImport) { failImport = false; return route.fulfill({ status: 503, json: { error: "Posting unavailable. Check the link or try later." } }); }
+        await new Promise(resolve => setTimeout(resolve, 750));
+        const job = { ...intern, id: "synthetic-import", company: body.payload.company, title: body.payload.title, url: body.payload.url, importUrl: body.payload.url, requirements: [], source: "imported" as const, sourceLabel: "Imported link", importCheck: { status: "manual" as const, checkedAt: new Date().toISOString() } };
+        fixture.jobs.push(job);
+        fixture.matches.push({ jobId: job.id, assessment: assessMatchLocally(fixture.profile, job) });
+        return route.fulfill({ json: { ok: true } });
+      }
+      assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
       if (failFeedback) { failFeedback = false; return route.fulfill({ status: 503, json: { error: "Feedback could not be saved. Try again." } }); }
       if (slowFeedback) { slowFeedback = false; await new Promise(resolve => setTimeout(resolve, 750)); }
@@ -101,12 +110,25 @@ async function main() {
       assert.equal(await launcher.evaluate(element => element === document.activeElement), true, "Closing import restores launcher focus");
       const dismissLauncher = jobButton("Dismiss");
       await dismissLauncher.click();
-      const dismissDialog = page.getByRole("dialog", { name: "Why dismiss this role?" });
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
+      assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, undefined, "Quick dismissal must not invent a reason");
+      const reasonLauncher = page.getByRole("button", { name: "Add a reason (optional)", exact: true });
+      await reasonLauncher.click();
+      const dismissDialog = page.getByRole("dialog", { name: "Add a dismissal reason" });
       await dismissDialog.waitFor();
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "");
       assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).evaluate(element => element === document.activeElement), true);
       await page.keyboard.press("Escape");
       await dismissDialog.waitFor({ state: "hidden" });
-      assert.equal(await dismissLauncher.evaluate(element => element === document.activeElement), true);
+      assert.equal(await reasonLauncher.evaluate(element => element === document.activeElement), true);
+      await reasonLauncher.click();
+      await dismissDialog.getByRole("combobox", { name: "Reason" }).selectOption("Location is not right");
+      await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
+      await dismissDialog.waitFor({ state: "hidden" });
+      assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Location is not right");
+      await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+      await strongRole.waitFor();
+      assert.match(await strongRole.locator(".fit-evidence summary").getAttribute("aria-label") ?? "", /3 checks to review/);
       assert.equal(await page.getByRole("button", { name: "Matches", exact: true }).getAttribute("aria-current"), "page");
       assert.equal(await page.getByRole("button", { name: "Any fit 3", exact: true }).getAttribute("aria-pressed"), "true");
       for (const control of await strongRole.locator(".small-actions button, .dark-button, .job-link").all()) {
@@ -141,15 +163,16 @@ async function main() {
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
       await jobButton("Save").click();
       await jobButton("Unsave").waitFor();
+      await page.getByRole("button", { name: "Saved 1", exact: true }).click();
       await jobButton("Dismiss").click();
-      await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
-      assert.equal(await page.getByRole("article").count(), 2);
+      assert.equal(await page.getByRole("article").count(), 0);
+      assert.equal(await page.getByRole("heading", { name: "Your next opportunities", exact: true }).evaluate(element => element === document.activeElement), true, "Removing the last visible role leaves focus at the view heading");
       await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
       await jobButton("Unsave").waitFor();
-      assert.equal(await page.getByRole("article").count(), 3, "Undo restores both the role and its previous saved state");
+      assert.equal(await page.getByRole("article").count(), 1, "Undo restores both the role and its previous saved state");
+      await page.getByRole("button", { name: "All roles 3", exact: true }).click();
       await jobButton("Dismiss").click();
-      await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
       assert.equal(await page.getByRole("article").count(), 1);
       await jobButton("Restore role").click();
@@ -165,20 +188,48 @@ async function main() {
       assert.equal(await page.getByRole("article").first().evaluate(element => element === document.activeElement), true);
       await launcher.click();
       const url = page.getByRole("textbox", { name: "Job URL (required)", exact: true });
-      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isDisabled(), true);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true);
       await url.fill("http://company.example/role");
       await url.blur();
       assert.equal(await dialog.getByText("Use an HTTPS job link.", { exact: true }).isVisible(), true);
       await url.fill("https://boards.greenhouse.io/team/jobs/123");
       assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).count(), 0);
-      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isEnabled(), true);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isEnabled(), true);
       await url.fill("https://company.example/careers/role");
       await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).fill("Example");
-      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isDisabled(), true);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true);
       await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).fill("Analyst");
-      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isEnabled(), true);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isEnabled(), true);
+      failImport = true;
+      await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/Posting unavailable/).waitFor();
+      assert.equal(await url.inputValue(), "https://company.example/careers/role", "Failed import preserves the entered link");
+      assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
       await page.keyboard.press("Escape");
-      if (label === "mobile") await page.getByRole("button", { name: "Any fit · Most relevant", exact: true }).click();
+      await jobButton("Save").click();
+      await page.getByRole("button", { name: "Saved 1", exact: true }).click();
+      await page.getByRole("button", { name: "Strong 1", exact: true }).click();
+      await query.fill("Cedar");
+      await page.getByRole("combobox", { name: "Sort roles" }).selectOption("newest");
+      await launcher.click();
+      await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+      await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).waitFor();
+      assert.equal(await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).isDisabled(), true);
+      await dialog.waitFor({ state: "hidden" });
+      const imported = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Analyst", exact: true }) });
+      await imported.waitFor();
+      assert.equal(await page.getByRole("article").count(), 1, "Import reveals its specific opportunity, rather than the full list");
+      assert.equal(await imported.evaluate(element => element === document.activeElement), true, "Import moves focus to its role");
+      assert.equal(await page.getByText("Added Analyst at Example. Review the posting details and fit below.", { exact: true }).isVisible(), true);
+      await page.getByRole("button", { name: "Return to previous view", exact: true }).click();
+      await strongRole.waitFor();
+      assert.equal(await query.inputValue(), "Cedar");
+      assert.equal(await page.getByRole("button", { name: "Saved 1", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).inputValue(), "newest");
+      fixture = publicState(structuredClone(demoState));
+      await page.reload();
+      await strongRole.waitFor();
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
       await page.screenshot({ path: `.data/matches-${label}-viewport.png` });
