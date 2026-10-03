@@ -1160,6 +1160,10 @@ export default function Dashboard() {
               </div>
               <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
             </div></details>}</div>
+            {(applicationSearch.trim() || attentionOnly) && <div className="application-active-view" role="status">
+              <span>{attentionOnly ? "Needs your review" : "All stages"}{applicationSearch.trim() && ` · Search: “${applicationSearch.trim()}”`} · {displayedApplications.length} of {applications.length} applications</span>
+              <button type="button" className="text-button" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setApplicationSearch(""); setAttentionOnly(false); }}>Clear application filters</button>
+            </div>}
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">
                 <div className="next-icon"><CircleHelp size={20} /></div>

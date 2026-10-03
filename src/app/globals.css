@@ -1815,6 +1815,9 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .collection-tools > summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
 .application-tools > label { display: flex; flex: 1 1 240px; flex-direction: column; gap: 6px; min-width: 0; font-size: 14px; }
 .application-tools input { width: 100%; min-height: 44px; margin: 0; }
+.application-active-view { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 4px 0 16px; font-size: 14px; }
+.application-active-view span { min-width: 0; overflow-wrap: anywhere; }
+.application-active-view button { min-height: 44px; }
 .application-filters { display: flex; flex-wrap: wrap; gap: 8px; }
 .application-filters button { min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--forest); font: inherit; font-size: 14px; cursor: pointer; }
 .application-filters button[aria-pressed="true"] { border-color: var(--forest); font-weight: 600; }

@@ -44,8 +44,12 @@ async function main() {
       await page.reload();
       await page.getByRole("heading", { name: "Your applications", exact: true }).waitFor();
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
+      assert.equal(await page.locator(".application-active-view").isVisible(), true, "Restored constraints must remain visible outside the closed tools");
+      assert.match(await page.locator(".application-active-view").innerText(), /Search: “Employer 2” · 1 of 6 applications/);
+      await page.getByRole("button", { name: "Clear application filters", exact: true }).click();
+      assert.equal(await page.locator(".application-collection option").count(), 6);
       await page.getByText("Find or filter applications", { exact: true }).click();
-      assert.equal(await appSearch.inputValue(), "Employer 2", "Refresh must restore the application and collection search");
+      assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
       await appSearch.fill("No such employer");
       await page.getByRole("heading", { name: "No applications match this view", exact: true }).waitFor();
       await page.getByRole("button", { name: "Show all applications", exact: true }).click();
