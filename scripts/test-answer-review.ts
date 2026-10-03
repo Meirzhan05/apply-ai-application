@@ -1,3 +1,4 @@
+import { saveOnboarding } from "../src/lib/onboarding";
 import { applyFactCorrection } from "../src/lib/fact-corrections";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
@@ -30,7 +31,7 @@ async function main() {
       page.on("pageerror", (error) => failures.push(error.message));
       await page.route("**/api/state", (route) => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", (route) => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
-      let confirmations = 0; let failFactSave = true;
+      let confirmations = 0; let failFactSave = true; let failAnswerSave = true;
       let edits = 0;
       await page.route("**/api/actions", async (route) => {
         const { action, payload } = route.request().postDataJSON();
@@ -51,8 +52,9 @@ async function main() {
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, answers }));
         } else if (action === "profile") {
           if (failFactSave) { failFactSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
-          state.profile.facts = applyFactCorrection(state.profile.facts, payload.factPatch);
+          saveOnboarding(state.profile, { facts: applyFactCorrection(state.profile.facts, payload.factPatch) });
         } else if (action === "editPacket") {
+          if (failAnswerSave) { failAnswerSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
           const answers = applyHumanAnswerEdits(app.packet!.answers, payload.answers);
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, profileHash: packetProfileHash(state.profile), answers }));
           edits++;
@@ -97,7 +99,14 @@ async function main() {
       assert.equal(await orientation.getByRole("link", { name: "1 personal answer", exact: true }).count(), 0, "An entered answer needs saving rather than answering again");
       await page.getByRole("link", { name: "Save your changed answers" }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Confirm essay", exact: true }).isDisabled(), true, "Unsaved answers must be saved first");
-      await page.getByRole("button", { name: "Save my answers", exact: true }).click();
+      const saveAnswers = page.getByRole("button", { name: "Save my answers", exact: true });
+      await saveAnswers.focus(); await saveAnswers.press("Enter");
+      const localError = page.locator(".packet-readiness .application-save-error"); await localError.waitFor();
+      await page.waitForFunction(id => document.activeElement?.id === id, `save-answers-${app.id}`);
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
+      const errorBox = await localError.boundingBox(); const viewport = page.viewportSize()!;
+      assert.ok(errorBox && errorBox.y >= 0 && errorBox.y + errorBox.height <= viewport.height, "Save failure must be visible beside the initiating action");
+      await saveAnswers.click();
       await page.getByRole("button", { name: "Confirm essay", exact: true }).waitFor();
       await page.waitForFunction(() => !(document.querySelector(".screening-answer button") as HTMLButtonElement)?.disabled);
       assert.equal(edits, 1);
@@ -170,7 +179,7 @@ async function main() {
       assert.equal(await page.locator(".packet-orientation a").count(), 1, "Only the available rebuild task should be linked while materials are stale");
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
       await page.getByRole("button", { name: "Undo source fact changes", exact: true }).click();
-      await page.getByText("Source fact correction undone. Review your materials before approving.", { exact: true }).waitFor();
+      await page.locator(".materials-update").getByText("Source fact correction undone. Review your materials before approving.", { exact: true }).waitFor();
       assert.deepEqual(state.profile.facts.find(item => item.id === fact.id), fact);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Undo source fact changes", exact: true }).count(), 0);

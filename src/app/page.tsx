@@ -98,6 +98,7 @@ export default function Dashboard() {
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [applicationFailure, setApplicationFailure] = useState<{ id: string; action: string; answerIndex?: number } | null>(null);
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
   const [essayDraft, setEssayDraft] = useState<{ applicationId: string; answerIndex: number; text: string } | null>(null);
@@ -167,6 +168,7 @@ export default function Dashboard() {
     actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
     if (typeof payload.applicationId === "string") setSelected(payload.applicationId);
     setApplicationOutcome(null);
+    setApplicationFailure(null);
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
     setError("");
@@ -199,6 +201,7 @@ export default function Dashboard() {
       return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed.");
+      if (typeof payload.applicationId === "string") setApplicationFailure({ id: payload.applicationId, action, answerIndex: typeof payload.answerIndex === "number" ? payload.answerIndex : undefined });
       return null;
     } finally {
       setBusy("");
@@ -237,7 +240,8 @@ export default function Dashboard() {
     const launcher = actionFocus.current;
     actionFocus.current = null;
     const frame = requestAnimationFrame(() => {
-      if (launcher.isConnected || document.activeElement !== document.body) return;
+      if (document.activeElement !== document.body) return;
+      if (launcher.isConnected && !launcher.matches(":disabled")) { launcher.focus(); return; }
       const target = document.getElementById(`readiness-${activeApp?.id}`) ?? document.querySelector<HTMLElement>(".app-detail .status-pill");
       target?.focus();
     });
@@ -396,6 +400,7 @@ export default function Dashboard() {
   };
   const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
+  const applicationError = applicationFailure?.id === activeApp?.id ? displayError : "";
   const retryWorkspace = async () => {
     setBusy("reload");
     try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); }
@@ -543,6 +548,7 @@ export default function Dashboard() {
                                   <EssayReview key={`${activeApp.id}-${i}-${answerReviewHash(answer)}`} answer={answer} facts={data.profile.facts}
                                     inputId={`screening-${activeApp.id}-${i}`} editable={activeApp.status === "draft_review"}
                                     editing={editingEssay === i}
+                                    error={applicationFailure?.action === "reviseEssay" && applicationFailure.answerIndex === i ? applicationError : ""}
                                     blocked={Boolean(busy) || Boolean(activeApp.queuedRun) || Boolean(activeApp.materialsStale) || answersDirty || (editingEssay !== null && editingEssay !== i)}
                                     onEditingChange={(editing) => { setEditingEssay(editing ? i : null); setEssayDraft(editing ? { applicationId: activeApp.id, answerIndex: i, text: answer.answer } : null); }}
                                     onDraftChange={(text) => setEssayDraft({ applicationId: activeApp.id, answerIndex: i, text })}
@@ -550,6 +556,7 @@ export default function Dashboard() {
                                   {!answer.confirmedAt && activeApp.status === "draft_review" && <button className="outline-action"
                                     disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || Boolean(activeApp.materialsStale) || answersDirty || editingEssay !== null}
                                     onClick={() => act("confirmEssay", { applicationId: activeApp.id, packetHash: activeApp.packetHash, answerIndex: i, answerHash: answerReviewHash(answer) })}>Confirm essay</button>}
+                                  {applicationFailure?.action === "confirmEssay" && applicationFailure.answerIndex === i && applicationError && <p role="alert">{applicationError} Your draft is still available. Review the current wording and try confirmation again.</p>}
                                 </> : <>
                                   <textarea id={`screening-${activeApp.id}-${i}`} maxLength={4000}
                                     disabled={activeApp.status !== "draft_review" || Boolean(activeApp.materialsStale) || Boolean(busy) || Boolean(activeApp.queuedRun) || editingEssay !== null}
@@ -567,10 +574,11 @@ export default function Dashboard() {
                           </div>
                           {activeApp.status === "draft_review" && (
                             <>
-                            <PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} />
+                            <PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} error={applicationFailure?.action === "editPacket" ? applicationError : ""} editingEssay={editingEssay !== null} />
                             <div className="action-row">
                               <button
                                 id={`save-answers-${activeApp.id}`}
+                                aria-describedby={applicationFailure?.action === "editPacket" && applicationError ? `answer-save-error-${activeApp.id}` : undefined}
                                 className="outline-action"
                                 disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || Boolean(activeApp.materialsStale) || !answersDirty || editingEssay !== null}
                                 onClick={() =>
@@ -1387,7 +1395,7 @@ export default function Dashboard() {
                     </section>}
                     {!activeAppIsAutomatic && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
                       <h3>Your profile changed</h3>
-                      <p>The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
+                      <p>These materials were prepared before your latest profile update. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
                       {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
                       {notice && <p>{notice}</p>}
                     </section>}

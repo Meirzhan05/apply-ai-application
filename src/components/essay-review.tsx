@@ -3,12 +3,12 @@
 import { useState } from "react";
 import type { ScreeningAnswer, VerifiedFact } from "@/lib/types";
 
-export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange, editing: controlledEditing }: {
+export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange, editing: controlledEditing, error }: {
   answer: ScreeningAnswer; facts: VerifiedFact[]; inputId: string;
   editable: boolean; blocked: boolean; onSave: (text: string) => Promise<unknown | null>;
   onEditingChange?: (editing: boolean) => void;
   onDraftChange?: (text: string) => void;
-  editing?: boolean;
+  editing?: boolean; error?: string;
 }) {
   const [localEditing, setLocalEditing] = useState(false);
   const editing = controlledEditing ?? localEditing;
@@ -28,6 +28,7 @@ export function EssayReview({ answer, facts, inputId, editable, blocked, onSave,
         <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(false); }}>Cancel editing</button>
       </div>
     </> : editable && <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(true); }}>Edit wording</button>}
+    {error && <p className="application-save-error" role="alert">{error} Your wording is preserved. Try saving again or cancel editing.</p>}
     <details className="essay-evidence">
       <summary aria-label={`${revision ? "Original draft and source facts" : "Source facts"} for: ${answer.question}`}>{revision ? "Original AI draft and source facts" : "Facts used in this essay"}</summary>
       {revision && <><p>{revision.originalAnswer}</p><p className="muted">These facts supported the original draft. Your revision is applicant-provided wording, not a newly verified claim.</p></>}
