@@ -14,8 +14,9 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
+import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
-import { importInput, importedRole } from "@/lib/import-input";
+import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { answerOwner, answerNeedsAction } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
@@ -24,6 +25,7 @@ import {
   Bookmark,
   BriefcaseBusiness,
   Check,
+  ChevronDown,
   CircleHelp,
   ClipboardList,
   FileText,
@@ -39,6 +41,7 @@ import {
 import type {
   AppState,
   Application,
+  Job,
   MatchAssessment,
   Profile,
   ScreeningAnswer,
@@ -160,7 +163,11 @@ export default function Dashboard() {
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
   const sharedUnknown = "Work authorization has not been confirmed.";
   const hasSharedUnknown = data?.matches.some(entry => entry.assessment.uncertainty.includes(sharedUnknown));
+  const dismissedRole = jobs.find(job => job.id === dismissJobId);
+  const unavailableSources = data?.discovery?.sources.filter(source => source.status === "unavailable").length ?? 0;
+  const sourceFreshness = discoveryStatus(data?.discovery, data?.profile.demo ?? false);
   const importCheck = importInput(importFields.url);
+  const existingImport = error === "This link is already in your catalog." ? roleForPosting(jobs, importFields.url) : undefined;
   const importReady = !importCheck.error && (!importCheck.manual || Boolean(importFields.company.trim() && importFields.title.trim()));
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
@@ -199,7 +206,13 @@ export default function Dashboard() {
     const role = document.getElementById(`role-${pendingRoleFocus.current}`)?.closest("article") ?? document.getElementById("matches-heading");
     if (role instanceof HTMLElement) { role.focus(); pendingRoleFocus.current = null; }
   }, [data, feedbackNotice]);
-  const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
+  const revealRole = (job: Job, message: string, dismissed = feedback.get(job.id)?.kind === "dismissed") => {
+    const previousView = { collection, filter, search, sort };
+    setImportOpen(false); setCollection(dismissed ? "dismissed" : "all"); setFilter("all"); setSearch(`${job.company} ${job.title}`);
+    pendingRoleFocus.current = job.id;
+    setFeedbackNotice({ message, returnView: previousView });
+  };
+  const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const retryWorkspace = async () => {
     setBusy("reload");
@@ -368,10 +381,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span> ·{" "}
-                    {data.lastRefreshAt
-                      ? `updated ${relative(data.lastRefreshAt)}`
-                      : "ready for your review"}
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{sourceFreshness}</span>
                   </p>
                 </div>
                 <button
@@ -420,7 +430,7 @@ export default function Dashboard() {
                   {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
                 </button>)}
               </div>
-              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} />{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</button>
+              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
               <div id="match-filter-options" className={`filterbar ${filterOptionsOpen ? "expanded" : "collapsed"}`}>
                 <div className="filters" role="group" aria-label="Fit within this collection">
                   {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
@@ -473,16 +483,17 @@ export default function Dashboard() {
                     const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
                     const context = `${job.title} at ${job.company}`;
                     const evidence = matchEvidence(data.profile, job, match);
-                    const checkCount = new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])]).size;
+                    const checkCount = rowChecks.length;
+                    const checkLabel = checkCount ? ` · ${checkCount} ${checkCount === 1 ? "thing" : "things"} to check` : "";
                     const preparing = busyJob === job.id && ["select", "startAutonomous", "preflightImportedPosting"].includes(busy);
                     return (
-                      <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id}`}>
+                      <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id} company-${job.id}`}>
                         <div className="company-block">
                           <div className="company-mark">
                             {job.company.charAt(0)}
                           </div>
                           <div>
-                            <strong>{job.company}</strong>
+                            <strong id={`company-${job.id}`}>{job.company}</strong>
                             <small>{job.location}</small>
                             <small>
                               {job.salary ? `${job.salary} · ` : "Salary not listed · "}
@@ -517,7 +528,7 @@ export default function Dashboard() {
                           {rowChecks.length > 0 && <div className="job-review-note"><span><strong>{match?.category === "excluded" ? "Search rule conflict: " : "To review: "}</strong>{rowChecks[0]}</span></div>}
                           {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
                           <details className="fit-evidence">
-                          <summary aria-label={`Review fit evidence for ${context}${match ? ` · ${checkCount} checks to review` : ""}`}>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
+                          <summary aria-label={`Review fit evidence for ${context}${checkLabel}`}>Review fit evidence{checkLabel}</summary>
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
                             <strong>Posting terms found in confirmed facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
@@ -752,7 +763,7 @@ export default function Dashboard() {
                 ))}
                 <div className="timeline-item future">
                   <span className="dot" />
-                  <small>Next update</small>
+                  <small>Expected check frequency</small>
                   <strong>About every 4 hours</strong>
                   <p>Supported sources are checked for new roles.</p>
                 </div>
@@ -1743,7 +1754,7 @@ export default function Dashboard() {
         )}
       </div>
       {dismissJobId && (
-        <WorkspaceDialog labelledBy="dismiss-heading" onClose={() => setDismissJobId(null)}>
+        <WorkspaceDialog labelledBy="dismiss-heading" describedBy="dismiss-role-context" onClose={() => setDismissJobId(null)}>
             <button
               className="modal-close"
               onClick={() => setDismissJobId(null)}
@@ -1752,6 +1763,7 @@ export default function Dashboard() {
               <X size={20} />
             </button>
             <h2 id="dismiss-heading">Add a dismissal reason</h2>
+            <p id="dismiss-role-context" className="dismiss-role-context">{dismissedRole ? `${dismissedRole.title} at ${dismissedRole.company}` : "This role is no longer available."}</p>
             <p>Optional. Choose a reason only if it reflects your decision. It can guide the order of similar future matches.</p>
             <label>
               Reason
@@ -1769,7 +1781,7 @@ export default function Dashboard() {
             </label>
             <button
               className="dark-button"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !dismissedRole}
               onClick={async () => {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
@@ -1804,10 +1816,7 @@ export default function Dashboard() {
                 const added = importedRole(jobs, next.jobs, importFields.url);
                 setImportOpen(false); setImportTouched(false);
                 if (added?.active) {
-                  const previousView = { collection, filter, search, sort };
-                  setCollection("all"); setFilter("all"); setSearch(`${added.company} ${added.title}`);
-                  pendingRoleFocus.current = added.id;
-                  setFeedbackNotice({ message: `Added ${added.title} at ${added.company}. Review the posting details and fit below.`, returnView: previousView });
+                  revealRole(added, `Added ${added.title} at ${added.company}. Review the posting details and fit below.`, next.feedback.some(item => item.jobId === added.id && item.kind === "dismissed"));
                 } else {
                   setFeedbackNotice({ message: added ? `${added.title} at ${added.company} was added, but the posting is closed. Your view is preserved.` : "Link added. Refresh your workspace to locate its posting details.", postingUrl: added?.url });
                 }
@@ -1824,7 +1833,10 @@ export default function Dashboard() {
                 </label>)}
               </fieldset>}
               <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
-              {error && <p role="alert">{displayError} Your entered details are preserved. Correct the link or try again.</p>}
+              {error && <div role="alert"><p>{displayError} {existingImport ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
+                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
+                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
+              </div>}
             </form>
         </WorkspaceDialog>
       )}

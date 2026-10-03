@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { importInput, importedRole } from "@/lib/import-input";
+import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 
 it("distinguishes exact supported postings from board homepages and other employers", () => {
   for (const url of ["https://boards.greenhouse.io/team/jobs/123", "https://job-boards.greenhouse.io/team/jobs/123", "https://jobs.lever.co/team/abc/apply", "https://jobs.ashbyhq.com/team/abc/application"])
@@ -21,4 +21,6 @@ it("finds the actual imported role among concurrent additions and provider alias
   const added = { ...before[0], id: "new", url: "https://job-boards.greenhouse.io/team/jobs/123", importUrl: "https://job-boards.greenhouse.io/team/jobs/123" };
   expect(importedRole(before, [...before, unrelated, added], "https://boards.greenhouse.io/team/jobs/123?utm_source=test#app")?.id).toBe("new");
   expect(importedRole(before, [...before, unrelated], added.url)).toBeUndefined();
+  expect(importedRole([added], [added], added.url)).toBeUndefined();
+  expect(roleForPosting([added], "https://boards.greenhouse.io/team/jobs/123?gh_src=test#app")?.id).toBe("new");
 });

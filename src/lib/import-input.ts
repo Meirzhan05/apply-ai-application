@@ -26,7 +26,7 @@ export function importInput(raw: string) {
 function postingIdentity(raw: string) {
   try {
     const url = new URL(raw.trim());
-    if (url.hostname === "boards.greenhouse.io") url.hostname = "job-boards.greenhouse.io";
+    if (url.protocol === "https:" && url.hostname === "boards.greenhouse.io" && /^\/[^/]+\/jobs\/\d+\/?$/.test(url.pathname)) url.hostname = "job-boards.greenhouse.io";
     if (["jobs.lever.co", "jobs.ashbyhq.com"].includes(url.hostname)) url.pathname = url.pathname.replace(/\/(apply|application)\/?$/, "");
     for (const key of [...url.searchParams.keys()]) {
       if (/^utm_/i.test(key) || ["gh_src", "lever-source"].includes(key.toLowerCase())) url.searchParams.delete(key);
@@ -39,6 +39,10 @@ function postingIdentity(raw: string) {
 
 export function importedRole(before: Job[], after: Job[], submittedUrl: string) {
   const known = new Set(before.map(job => job.id));
+  return roleForPosting(after.filter(job => !known.has(job.id)), submittedUrl);
+}
+
+export function roleForPosting(jobs: Job[], submittedUrl: string) {
   const identity = postingIdentity(submittedUrl);
-  return after.find(job => !known.has(job.id) && [job.importUrl, job.url].some(url => url && postingIdentity(url) === identity));
+  return jobs.find(job => [job.importUrl, job.url].some(url => url && postingIdentity(url) === identity));
 }

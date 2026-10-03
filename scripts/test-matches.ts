@@ -29,6 +29,7 @@ async function main() {
     await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
       if (body.action === "import") {
+        if (fixture.jobs.some(job => job.url === body.payload.url)) return route.fulfill({ status: 409, json: { error: "This link is already in your catalog." } });
         if (failImport) { failImport = false; return route.fulfill({ status: 503, json: { error: "Posting unavailable. Check the link or try later." } }); }
         await new Promise(resolve => setTimeout(resolve, 750));
         const job = { ...intern, id: "synthetic-import", company: body.payload.company, title: body.payload.title, url: body.payload.url, importUrl: body.payload.url, requirements: [], source: "imported" as const, sourceLabel: "Imported link", importCheck: { status: "manual" as const, checkedAt: new Date().toISOString() } };
@@ -48,7 +49,7 @@ async function main() {
       await page.setViewportSize({ width, height });
       fixture = publicState(structuredClone(demoState));
       await page.goto(origin);
-      const strongRole = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Software Engineering Intern", exact: true }) });
+      const strongRole = page.getByRole("article", { name: "Software Engineering Intern Cedar Systems", exact: true });
       await strongRole.waitFor();
       assert.equal(await strongRole.getByText("Strong fit", { exact: true }).isVisible(), true);
       const context = "Software Engineering Intern at Cedar Systems";
@@ -70,7 +71,7 @@ async function main() {
         await page.getByRole("link", { name: "AI usage", exact: true }).waitFor();
         await page.keyboard.press("Escape");
         assert.equal(await morePages.evaluate(element => element === document.activeElement), true, "Closing auxiliary navigation restores focus");
-        await page.getByRole("button", { name: "Any fit · Most relevant", exact: true }).click();
+        await page.getByRole("button", { name: /^Filter and sort/ }).click();
       }
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
@@ -116,6 +117,8 @@ async function main() {
       await reasonLauncher.click();
       const dismissDialog = page.getByRole("dialog", { name: "Add a dismissal reason" });
       await dismissDialog.waitFor();
+      assert.equal(await dismissDialog.getByText(context, { exact: true }).isVisible(), true);
+      assert.equal(await dismissDialog.getAttribute("aria-describedby"), "dismiss-role-context");
       assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "");
       assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).evaluate(element => element === document.activeElement), true);
       await page.keyboard.press("Escape");
@@ -128,7 +131,7 @@ async function main() {
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Location is not right");
       await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
       await strongRole.waitFor();
-      assert.match(await strongRole.locator(".fit-evidence summary").getAttribute("aria-label") ?? "", /3 checks to review/);
+      assert.match(await strongRole.locator(".fit-evidence summary").getAttribute("aria-label") ?? "", /2 things to check/);
       assert.equal(await page.getByRole("button", { name: "Matches", exact: true }).getAttribute("aria-current"), "page");
       assert.equal(await page.getByRole("button", { name: "Any fit 3", exact: true }).getAttribute("aria-pressed"), "true");
       for (const control of await strongRole.locator(".small-actions button, .dark-button, .job-link").all()) {
@@ -227,12 +230,38 @@ async function main() {
       assert.equal(await page.getByRole("button", { name: "Saved 1", exact: true }).getAttribute("aria-pressed"), "true");
       assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).getAttribute("aria-pressed"), "true");
       assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).inputValue(), "newest");
+      await launcher.click();
+      await url.fill("https://company.example/careers/role");
+      await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).fill("Example");
+      await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).fill("Analyst");
+      await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/This role is already in your list/).waitFor();
+      await dialog.getByRole("button", { name: "Review existing role", exact: true }).click();
+      await imported.waitFor();
+      assert.equal(fixture.jobs.length, 4, "Duplicate import recovery must not create another role");
+      await page.getByRole("button", { name: "Return to previous view", exact: true }).click();
+      await strongRole.waitFor();
       fixture = publicState(structuredClone(demoState));
       await page.reload();
       await strongRole.waitFor();
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
       await page.screenshot({ path: `.data/matches-${label}-viewport.png` });
+      fixture.lastRefreshAt = new Date().toISOString();
+      fixture.discovery = { lastRefreshAt: new Date(Date.now() - 2 * 86400000).toISOString(), sources: [{ source: "first", status: "available", checkedAt: new Date().toISOString() }, { source: "second", status: "unavailable", checkedAt: new Date().toISOString() }], events: [] };
+      await page.reload();
+      await page.locator(".source-freshness").getByText("1 of 2 sources unavailable · Sources last checked 2 days ago", { exact: true }).waitFor();
+      fixture.discovery.lastRefreshAt = undefined;
+      await page.reload();
+      await page.locator(".source-freshness").getByText("1 of 2 sources unavailable · Check time not reported", { exact: true }).waitFor();
+      fixture.discovery = { sources: [], events: [] };
+      await page.reload();
+      await page.locator(".source-freshness").getByText("Waiting for the first source check", { exact: true }).waitFor();
+      fixture.discovery = undefined;
+      fixture.profile.demo = false;
+      await page.reload();
+      await page.locator(".source-freshness").getByText("Source check status is unavailable", { exact: true }).waitFor();
+      fixture = publicState(structuredClone(demoState));
       fixture.automation.enabled = true;
       await page.reload();
       await strongRole.getByRole("button", { name: `Apply automatically for ${context}`, exact: true }).waitFor();
