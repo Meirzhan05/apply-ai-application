@@ -19,6 +19,7 @@ async function main() {
   let failFeedback = false;
   let malformedFeedback = false;
   let slowFeedback = false;
+  let failRefresh = false;
   let failImport = false;
   let malformedImport = false;
   let authImport = false;
@@ -29,7 +30,7 @@ async function main() {
     const page = await browser.newPage();
     // Drive the shipped component with invented applicant/jobs. No account,
     // provider calls, application approvals or submissions are involved.
-    await page.route("**/api/state", route => route.fulfill({ json: fixture }));
+    await page.route("**/api/state", route => { if (failRefresh) { failRefresh = false; return route.fulfill({ status: 503, json: { error: "Invented refresh failure" } }); } return route.fulfill({ json: fixture }); });
     await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(fixture)}\n\n` }));
     await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
@@ -216,7 +217,7 @@ async function main() {
       const previousSearch = await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue();
       malformedFeedback = true;
       await jobButton("Save").click();
-      await strongRole.getByRole("alert").getByText("The action response could not be read. Refresh your workspace to check the latest status before trying again.", { exact: true }).waitFor();
+      await strongRole.getByRole("alert").getByText("We couldn’t confirm whether your collection changes were saved. Refresh your workspace to check the latest status before trying again.", { exact: true }).waitFor();
       assert.equal(await jobButton("Save").isVisible(), true);
       assert.equal(await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue(), previousSearch);
       await strongRole.getByRole("button", { name: "Refresh workspace", exact: true }).click();
@@ -339,9 +340,18 @@ async function main() {
       assert.equal(await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).count(), 0, "A known posting failure should guide posting retry rather than status reconciliation");
       malformedImport = true;
       await dialog.getByRole("button", { name: "Try adding again", exact: true }).click();
-      await dialog.getByRole("alert").getByText(/action response could not be read/).waitFor();
+      await dialog.getByRole("alert").getByText(/couldn’t confirm whether this role was added/).waitFor();
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "An uncertain import outcome requires refreshing status before retrying");
       await page.screenshot({ path: `.data/matches-import-uncertain-${label}.png`, fullPage: true });
+      failRefresh = true;
+      await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/Could not refresh your workspace/).waitFor();
+      assert.match(await dialog.getByRole("alert").innerText(), /couldn’t confirm whether this role was added/);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Failed reconciliation must keep repeat import blocked");
+      await page.screenshot({ path: `.data/matches-import-refresh-failed-${label}.png`, fullPage: true });
+      await page.keyboard.press("Escape");
+      await launcher.click();
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Reopening a dialog must not release an unresolved import guard");
       await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
       await dialog.getByRole("alert").waitFor({ state: "hidden" });
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "In-dialog refresh preserves the import link");

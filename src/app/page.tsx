@@ -107,7 +107,11 @@ export default function Dashboard() {
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const needsWorkspaceCheck = actionNeedsWorkspaceCheck(error);
+  const [pendingActionCheck, setPendingActionCheck] = useState<{ owner: string; action: string; message: string } | null>(null);
+  const actionCheck = pendingActionCheck?.owner === data?.profile.id ? pendingActionCheck : null;
+  const activeError = error || actionCheck?.message || "";
+  const needsWorkspaceCheck = Boolean(actionCheck) || actionNeedsWorkspaceCheck(activeError);
+  const requiresSignIn = activeError === "AUTH_REQUIRED" || actionCheck?.message === "AUTH_REQUIRED";
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
   const [essayDraft, setEssayDraft] = useState<{ applicationId: string; answerIndex: number; text: string } | null>(null);
@@ -176,15 +180,20 @@ export default function Dashboard() {
     catch { /* Keep working when browser storage is disabled. */ }
   }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen, dismissDraft, dismissJobId]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (!data) return null;
+    if (actionCheck) { setError(actionCheck.message); return null; }
     const launcher = document.activeElement;
     actionFocus.current = launcher instanceof HTMLElement && launcher.closest(".app-detail") ? launcher : null;
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
     setError("");
     setNotice("");
+    let accepted = false;
     try {
       await postWorkspaceAction(action, payload);
+      accepted = true;
       const next = await reload();
+      setPendingActionCheck(null);
       if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
       if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerEdits(current => current?.applicationId === payload.applicationId ? null : current);
       if (action === "editPacket") setNotice("Your answers are saved.");
@@ -192,7 +201,9 @@ export default function Dashboard() {
       if (action === "confirmEssay") setNotice("Essay confirmed. Your application has not been submitted.");
       return next;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      const message = err instanceof Error ? err.message : "Action failed.";
+      if (accepted || actionNeedsWorkspaceCheck(message)) setPendingActionCheck({ owner: data.profile.id, action, message });
+      setError(message);
       return null;
     } finally {
       setBusy("");
@@ -400,12 +411,14 @@ export default function Dashboard() {
     feedbackReturnFocus.current = job.id;
     setFeedbackNotice({ message, returnView: previousView });
   };
-  const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
-    /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
+  const baseError = activeError === "This link is already in your catalog." ? "This role is already in your list." : activeError === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
+    /failed to fetch|networkerror|load failed/i.test(activeError) ? "Connection lost. Check your internet connection, then refresh your workspace." : activeError;
+  const outcomeUncertainty = actionCheck?.action === "import" ? "We couldn’t confirm whether this role was added." : actionCheck?.action === "feedback" ? "We couldn’t confirm whether your collection changes were saved." : "We couldn’t confirm whether your changes were saved.";
+  const displayError = actionCheck && !requiresSignIn ? activeError !== actionCheck.message ? `${baseError} ${outcomeUncertainty}` : `${outcomeUncertainty} Refresh your workspace to check the latest status before trying again.` : baseError;
   const retryWorkspace = async () => {
     setBusy("reload");
-    try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); }
-    catch { setError("Could not refresh your workspace. Check your connection and try again."); }
+    try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); setPendingActionCheck(null); }
+    catch (err) { setError(err instanceof Error && err.message === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : "Could not refresh your workspace. Check your connection and try again."); }
     finally { setBusy(""); }
   };
 
@@ -702,7 +715,7 @@ export default function Dashboard() {
   ];
   const batchCandidates = filtered.filter(job => feedback.get(job.id)?.kind !== "saved" && feedback.get(job.id)?.kind !== "dismissed").slice(0, 20);
   const saveFilteredRoles = async () => {
-    if (busy || batchActive.current || batchCandidates.length < 2) return;
+    if (busy || batchActive.current || needsWorkspaceCheck || batchCandidates.length < 2) return;
     batchActive.current = true;
     const ids = batchCandidates.map(job => job.id);
     const owner = data.profile.id;
@@ -835,13 +848,13 @@ export default function Dashboard() {
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "saving-view" ? `${batchProgress?.stopping ? "Stopping after the current save" : "Saving this view"}: ${batchProgress?.done ?? 0} of ${batchProgress?.total ?? 0} roles…` : busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}{batchProgress && <button className="text-button" disabled={batchProgress.stopping} onClick={() => { batchCancel.current = true; setBatchProgress(current => current ? { ...current, stopping: true } : null); }}>{batchProgress.stopping ? "Stopping…" : "Stop further saves"}</button>}</p>}
-        {error && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
+        {activeError && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
-            <button onClick={() => setError("")} aria-label="Dismiss error">
+            <div>{displayError}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
+            {!actionCheck && <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
-            </button>
+            </button>}
           </div>
         )}
         {section === "matches" && (
@@ -851,7 +864,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${checkAge(data.personalSearch.completedAt)}` : "Personal search"}</span>
+                    {view.availableCount} roles available{jobs.length !== view.availableCount && <span className="catalog-count"> · {jobs.length} roles tracked</span>}<span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${checkAge(data.personalSearch.completedAt)}` : "Personal search"}</span>
                   </p>
                 </div>
                 <div className="matches-heading-actions">
@@ -919,10 +932,10 @@ export default function Dashboard() {
                   </button>)}
                 </div>
                 <div className="sort-options"><label className="sort-control">Sort <select disabled={Boolean(batchProgress)} aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
-                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy)} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20 unsaved" : batchCandidates.length} roles in this view</button></div>}
+                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20 unsaved" : batchCandidates.length} roles in this view</button></div>}
               </div>
               <div className="matches-subbar">
-              <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
+              <p className={`result-summary ${collection === "all" && filter === "all" && !search.trim() ? "sr-only" : ""}`} role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
               <details className="fit-guide matches-guidance">
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto apply on" : "Fit guide"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
@@ -1176,7 +1189,7 @@ export default function Dashboard() {
                           >
                             View original posting ↗
                           </a>
-                          {error && busyJob === job.id && !dismissJobId && !importOpen && <div className="job-action-error" role="alert">
+                          {activeError && busyJob === job.id && !dismissJobId && !importOpen && <div className="job-action-error" role="alert">
                             <p>{displayError}</p>
                             <p>Refresh to check the latest status for {context}. Your current view is preserved.</p>
                             <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a href="/login">Sign in</a>}
@@ -2141,7 +2154,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <div role="alert"><p>{displayError} Your selection is preserved. {error === "AUTH_REQUIRED" ? "Sign in, then return here to continue." : needsWorkspaceCheck ? "Refresh the workspace to check the latest status before trying again." : ""}</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
+            {activeError && <div role="alert"><p>{displayError} Your selection is preserved. {requiresSignIn ? "Sign in, then return here to continue." : needsWorkspaceCheck ? "Refresh the workspace to check the latest status before trying again." : ""}</p><div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2221,18 +2234,18 @@ export default function Dashboard() {
                   <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
+              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Sign in, then return here to continue."}</p>
+                <div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}
+                {needsWorkspaceCheck && <button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
+                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
+                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
+              </div>}
               {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady || needsWorkspaceCheck}>{busy === "import" ? "Checking and adding…" : error && !needsWorkspaceCheck && !existingImport ? "Try adding again" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
                 <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>
                 <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setConfirmDiscardImport(false); setError(""); setImportOpen(false); }}>Confirm discard</button>
               </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
-              {error && <div role="alert"><p>{displayError} Your entered details are preserved. {error === "AUTH_REQUIRED" && "Sign in, then return here to continue."}</p>
-                <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}
-                {needsWorkspaceCheck && <button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
-                {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
-                {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
-              </div>}
             </form>
         </WorkspaceDialog>
       )}
