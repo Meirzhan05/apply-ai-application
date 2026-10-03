@@ -30,7 +30,7 @@ export function PacketReadiness({ application, dirty, busy, notice, editingEssay
     <h4 id={`readiness-heading-${application.id}`}>{dirty || missing.length || queued || editingEssay || stale ? "Before approving" : "Ready for your approval"}</h4>
     {error && <p className="application-save-error" role="alert" id={`answer-save-error-${application.id}`}>{error} Your answers are still here. Try Save my answers again, or cancel your changes.</p>}
     <div role="status" aria-live="polite">
-      {busy ? <p>Updating this application…</p> : notice && !stale && <p>{notice}</p>}
+      {busy ? <p>Updating this application…</p> : notice && !stale && !dirty && !editingEssay && <p>{notice}</p>}
       {queued && <p>Your request is saved. Approval becomes available after the queued work finishes.</p>}
       <ul>
         {stale && <li><a href={`#materials-update-${application.id}`}>Rebuild required after source changes</a>.</li>}

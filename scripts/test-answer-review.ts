@@ -112,6 +112,10 @@ async function main() {
       await page.waitForFunction(() => !(document.querySelector(".screening-answer button") as HTMLButtonElement)?.disabled);
       assert.equal(edits, 1);
       await page.getByText("Your answers are saved.", { exact: true }).waitFor();
+      await humanInput.fill("A newer unsaved answer");
+      assert.equal(await page.getByText("Your answers are saved.", { exact: true }).count(), 0, "Previous success must not contradict a newer unsaved draft");
+      await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
       assert.equal(await essayInput.inputValue(), essay.answer);
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
