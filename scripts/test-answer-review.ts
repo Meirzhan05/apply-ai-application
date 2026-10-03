@@ -186,6 +186,9 @@ async function main() {
       assert.ok(checkboxWidth >= 16 && checkboxWidth <= 24, "Source confirmation must stay beside its label");
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
+      assert.equal(await page.getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).count(), 1, "Announce the source save once");
+      assert.equal(await page.locator(".packet-orientation span").count(), 0, "The top stale summary should link to the full explanation");
+      await page.locator(".packet-readiness").getByRole("link", { name: "Rebuild required after source changes", exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);

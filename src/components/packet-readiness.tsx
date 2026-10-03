@@ -16,7 +16,7 @@ export function PacketReadiness({ application, dirty, busy, notice, editingEssay
     return <section className="packet-orientation" aria-labelledby={`review-tasks-${application.id}`}>
       <h3 id={`review-tasks-${application.id}`}>{count ? `${count} ${count === 1 ? "thing" : "things"} before approval` : "Review your materials, then approve"}</h3>
       <div className="packet-task-links" aria-live="polite">
-        {stale && <><a href={`#materials-update-${application.id}`}>Rebuild after profile changes</a><span>Then review the new materials and finish your answers.</span></>}
+        {stale && <a href={`#materials-update-${application.id}`}>Rebuild after profile changes</a>}
         {!stale && editingEssay && <a href={`#readiness-${application.id}`}>Finish your essay edit</a>}
         {!stale && dirty && <a href={`#save-answers-${application.id}`}>Save answer changes</a>}
         {!stale && human.length > 0 && <a href={`#screening-${application.id}-${human[0].index}`}>{human.length} personal {human.length === 1 ? "answer" : "answers"}</a>}
@@ -30,10 +30,10 @@ export function PacketReadiness({ application, dirty, busy, notice, editingEssay
     <h4 id={`readiness-heading-${application.id}`}>{dirty || missing.length || queued || editingEssay || stale ? "Before approving" : "Ready for your approval"}</h4>
     {error && <p className="application-save-error" role="alert" id={`answer-save-error-${application.id}`}>{error} Your answers are still here. Try Save my answers again, or cancel your changes.</p>}
     <div role="status" aria-live="polite">
-      {busy ? <p>Updating this application…</p> : notice && <p>{notice}</p>}
+      {busy ? <p>Updating this application…</p> : notice && !stale && <p>{notice}</p>}
       {queued && <p>Your request is saved. Approval becomes available after the queued work finishes.</p>}
       <ul>
-        {stale && <li><a href={`#materials-update-${application.id}`}>Rebuild from your updated profile</a>, then review and confirm the new materials.</li>}
+        {stale && <li><a href={`#materials-update-${application.id}`}>Rebuild required after source changes</a>.</li>}
         {editingEssay && <li>Save or cancel your essay revision before approving.</li>}
         {dirty && <li><a href={`#save-answers-${application.id}`}>Save your changed answers</a> before confirming essays or approving.</li>}
         {!stale && human.length > 0 && <li><a href={`#screening-${application.id}-${human[0].index}`}>Answer {human.length} personal {human.length === 1 ? "question" : "questions"}</a>.</li>}
