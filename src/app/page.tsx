@@ -18,6 +18,7 @@ import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
+import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
@@ -66,7 +67,7 @@ type ViewState = Omit<AppState, "applications"> & {
     settings: NonNullable<Profile["automationSettings"]>;
   };
 };
-type Section = "matches" | "applications" | "profile" | "settings";
+type Section = WorkspaceSection;
 type Filter = MatchFilter;
 
 export default function Dashboard() {
@@ -123,6 +124,11 @@ export default function Dashboard() {
             if (saved) {
               setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
               setImportFields(saved.draft); setImportOpen(saved.importOpen);
+            }
+            const navigation = readWorkspaceNavigation(window.sessionStorage, body.profile.id, body.applications.map(app => app.id));
+            if (navigation) {
+              setSection(navigation.section); setSelected(navigation.applicationId);
+              setApplicationSearch(navigation.search); setAttentionOnly(navigation.attentionOnly);
             }
           } catch { /* Storage can be disabled by browser preferences. */ }
           sessionOwner.current = body.profile.id;
@@ -196,6 +202,12 @@ export default function Dashboard() {
   });
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
+  useEffect(() => {
+    const owner = data?.profile.id;
+    if (!owner || sessionOwner.current !== owner) return;
+    try { writeWorkspaceNavigation(window.sessionStorage, owner, { section, applicationId: activeApp?.id ?? null, search: applicationSearch, attentionOnly }); }
+    catch { /* Browser preferences may disable access to session storage itself. */ }
+  }, [data?.profile.id, section, activeApp?.id, applicationSearch, attentionOnly]);
   const answerDraft = answerEdits && answerEdits.applicationId === activeApp?.id ? answerEdits.answers : [];
   const setAnswerDraft = (answers: ScreeningAnswer[]) => setAnswerEdits(activeApp && answers.length ? { applicationId: activeApp.id, answers } : null);
   const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
