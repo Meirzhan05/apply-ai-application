@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import type { AppState } from "@/lib/types";
 import { preparePilotMutation } from "@/lib/pilot";
+import { selectApplication } from "@/lib/workflow";
 import { POST } from "@/app/api/actions/route";
 
 const mocks = vi.hoisted(() => ({
@@ -42,6 +43,23 @@ describe("onboarding action boundary", () => {
       state.profile.id = userId;
       mocks.memory.set(userId, state);
     }
+  });
+
+  it("withdraws final-form permission only for the authenticated unchanged idle attempt", async () => {
+    const state = mocks.memory.get("owner-a")!;
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "approved_to_submit";
+    app.form = { version: 1, url: "https://example.com", hash: "current", capturedAt: new Date().toISOString(), fields: [], attachments: [] };
+    const post = (formHash: string, applicationId = app.id) => new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "reviewForm", payload: { applicationId, formHash, userId: "owner-b" } }),
+    });
+    expect((await POST(post("stale"))).status).toBe(400);
+    expect(mocks.memory.get("owner-a")!.applications[0].status).toBe("approved_to_submit");
+    expect((await POST(post("current"))).status).toBe(200);
+    expect(mocks.memory.get("owner-a")!.applications[0].status).toBe("final_review");
+    expect(mocks.memory.get("owner-b")!.applications).toEqual([]);
+    expect((await POST(post("current"))).status).toBe(400);
   });
 
   it("saves, dismisses, and clears feedback only for the authenticated owner", async () => {

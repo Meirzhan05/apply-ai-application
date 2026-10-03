@@ -26,7 +26,7 @@ import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
 import { ApplicationPicker } from "@/components/application-picker";
-import { canReturnToMaterials } from "@/lib/material-review-recovery";
+import { canReturnToMaterials, canReturnToFinalReview } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
@@ -190,6 +190,7 @@ export default function Dashboard() {
       const outcomeMessages: Record<string, string> = {
         approveFill: "Materials approved for form filling. Nothing has been submitted.",
         approveSubmit: "Final form approved. Nothing has been submitted; choose Submit application once when ready.",
+        reviewForm: "Submission permission withdrawn. Review the saved final form again; nothing has been submitted.",
         restartBrowser: "Returned to materials review. Earlier permissions are cleared.",
         cancel: "This attempt is cancelled. Your saved materials remain available.",
       };
@@ -1417,6 +1418,8 @@ export default function Dashboard() {
                         >
                           Start browser run
                         </button>
+                        {!activeApp.materialsStale && <button className="outline-action" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review materials again</button>}
+                        <p className="muted">Reviewing again withdraws form-fill permission. Your saved materials remain available.</p>
                       </div>
                     )}
                     {activeApp.status === "awaiting_verification" && (
@@ -1609,6 +1612,7 @@ export default function Dashboard() {
                               >
                                 Submit application once
                               </button>
+                              {!activeApp.materialsStale && <button className="outline-action" disabled={Boolean(busy) || !canReturnToFinalReview(activeApp)} onClick={() => act("reviewForm", { applicationId: activeApp.id, formHash: activeApp.form?.hash })}>Review final form again</button>}
                             </div>
                           )}
                         </div>

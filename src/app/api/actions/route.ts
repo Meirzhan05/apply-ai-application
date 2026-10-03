@@ -13,7 +13,7 @@ import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue"
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
-import { returnToMaterials } from "@/lib/material-review-recovery";
+import { returnToMaterials, returnToFinalReview } from "@/lib/material-review-recovery";
 import { applyFactCorrection } from "@/lib/fact-corrections";
 import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
@@ -622,6 +622,11 @@ async function perform(
     await cancelBrowser(before);
     return;
   }
+  if (action === "reviewForm") return mutateState(userId, (current) => {
+    const target = findApp(current, text(payload.applicationId, 100), userId);
+    returnToFinalReview(target, text(payload.formHash, 200));
+    activity(current, "Submission permission withdrawn", "Review the saved employer form again. Nothing was submitted.");
+  }, ownerContext);
   if (action === "restartBrowser") {
     const appId = text(payload.applicationId, 100);
     const state = await loadState(userId);
