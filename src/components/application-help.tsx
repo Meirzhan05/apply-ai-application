@@ -30,7 +30,7 @@ export function ApplicationHelp() {
       <p role="status">{matches.length} {matches.length === 1 ? "topic" : "topics"}</p>
       {matches.length ? groups.filter(group => matches.some(topic => topic.group === group)).map(group => <details className="help-task-group" key={group} open={Boolean(search.trim())}>
         <summary>{group}</summary>
-        <div>{matches.filter(topic => topic.group === group).map(topic => <details key={topic.title}><summary>{topic.title}</summary><p>{topic.text}</p></details>)}</div>
+        <div>{matches.filter(topic => topic.group === group).map(topic => <details key={topic.title} open={Boolean(search.trim())}><summary>{topic.title}</summary><p>{topic.text}</p></details>)}</div>
       </details>) : <p>No matching topic. <button className="text-button" type="button" onClick={() => setSearch("")}>Show all help</button></p>}
     </div>
   </details>;

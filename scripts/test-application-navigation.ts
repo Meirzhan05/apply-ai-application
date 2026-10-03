@@ -76,10 +76,10 @@ async function main() {
         await helpSearch.fill(query);
         assert.equal(await help.getByText("No matching topic.", { exact: false }).count(), 0, `Suggested query ${query} must find guidance`);
         assert.ok(await help.locator(".help-task-group details").count() > 0);
+        assert.equal(await help.locator(".help-task-group details:not([open])").count(), 0, "Matching instructions should be visible immediately");
       }
       await helpSearch.fill("consent");
       assert.equal(await help.getByText("1 topic", { exact: true }).isVisible(), true);
-      await help.getByText("Answer personal or consent questions", { exact: true }).click();
       await help.getByText(/The agent does not infer work authorization/).waitFor();
       await helpSearch.fill("no-matching-help");
       await help.getByRole("button", { name: "Show all help", exact: true }).click();
