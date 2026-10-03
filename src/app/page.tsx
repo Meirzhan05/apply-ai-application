@@ -102,6 +102,7 @@ export default function Dashboard() {
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
   const [filterOptionsOpen, setFilterOptionsOpen] = useState(false);
+  const [shortcutsEnabled, setShortcutsEnabled] = useState(true);
   const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
@@ -149,6 +150,7 @@ export default function Dashboard() {
             if (saved) {
               setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
               setImportFields(saved.draft); setImportOpen(saved.importOpen);
+              if (typeof saved.shortcutsEnabled === "boolean") setShortcutsEnabled(saved.shortcutsEnabled);
               if (saved.dismissDraft && body.jobs.some(job => job.id === saved.dismissDraft?.jobId) && body.feedback.some(item => item.jobId === saved.dismissDraft?.jobId && item.kind === "dismissed")) {
                 setDismissDraft({ owner: body.profile.id, jobId: saved.dismissDraft.jobId, reason: saved.dismissDraft.reason });
                 if (saved.dismissDraft.open) setDismissJobId(saved.dismissDraft.jobId);
@@ -176,9 +178,9 @@ export default function Dashboard() {
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
-    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen, ...(dismissDraft?.owner === owner ? { dismissDraft: { jobId: dismissDraft.jobId, reason: dismissDraft.reason, open: dismissJobId === dismissDraft.jobId } } : {}) }); }
+    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen, shortcutsEnabled, ...(dismissDraft?.owner === owner ? { dismissDraft: { jobId: dismissDraft.jobId, reason: dismissDraft.reason, open: dismissJobId === dismissDraft.jobId } } : {}) }); }
     catch { /* Keep working when browser storage is disabled. */ }
-  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen, dismissDraft, dismissJobId]);
+  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen, shortcutsEnabled, dismissDraft, dismissJobId]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     if (!data) return null;
     if (actionCheck) { setError(actionCheck.message); return null; }
@@ -307,7 +309,7 @@ export default function Dashboard() {
   }, [section, activeApp?.id]);
 
   useEffect(() => {
-    if (section !== "matches") return;
+    if (section !== "matches" || !shortcutsEnabled) return;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
@@ -333,7 +335,7 @@ export default function Dashboard() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [section]);
+  }, [section, shortcutsEnabled]);
   useEffect(() => {
     const expires = Date.parse(activeApp?.browserSessionExpiresAt ?? "");
     if (!activeApp?.browserSessionId || !Number.isFinite(expires) || expires <= Date.now()) return;
@@ -750,10 +752,10 @@ export default function Dashboard() {
           <div className="brand">
             Apply<span>.</span>
           </div>
-          <p>
+          {section !== "matches" && <p>
             Real opportunities.
             <br />A brighter next step.
-          </p>
+          </p>}
         </div>
         <nav aria-label="Main navigation">
           {nav.map(({ key, label, icon: Icon, count }) => (
@@ -784,13 +786,13 @@ export default function Dashboard() {
           </div>}
         </div>
         {!data.profile.demo && <button className="tablet-signout" disabled={Boolean(busy)} onClick={signOut} title={`Workspace: ${data.profile.name || "Your profile"}`}>{busy === "signout" ? "Signing out…" : "Sign out"}</button>}
-        <div className="sidebar-foot">
-          <div className="foot-icon">
+        {(section !== "matches" || !data.profile.demo) && <div className="sidebar-foot">
+          {section !== "matches" && <div className="foot-icon">
             <Sparkles size={19} />
-          </div>
+          </div>}
           <div>
-            <strong>Built for what’s next.</strong>
-            <small>From campus to career and beyond.</small>
+            {section !== "matches" && <><strong>Built for what’s next.</strong>
+            <small>From campus to career and beyond.</small></>}
             {!data.profile.demo && (
               <button
                 className="signout"
@@ -801,20 +803,18 @@ export default function Dashboard() {
               </button>
             )}
           </div>
-        </div>
+        </div>}
       </aside>
       <div className="body-area">
         <header className="topbar">
-          <div className="top-context">
+          {section !== "matches" && <div className="top-context">
             AI assisted job search <span> / </span>{" "}
-            {section === "matches"
-              ? "Opportunities"
-              : section === "applications"
+            {section === "applications"
                 ? "Applications"
                 : section === "profile"
                   ? "Profile"
                   : "Preferences"}
-          </div>
+          </div>}
           <div className="greeting">
             <span>
               <strong>
@@ -950,7 +950,8 @@ export default function Dashboard() {
                 </dl>
               </details>
               <details id="matches-keyboard-help" className="keyboard-guide matches-guidance">
-                <summary aria-label="Keyboard shortcuts"><span className="desktop-shortcuts-label">Keyboard shortcuts</span><span className="compact-shortcuts-label">Shortcuts</span> <kbd>?</kbd></summary>
+                <summary aria-label={`Keyboard shortcuts${shortcutsEnabled ? "" : ", disabled"}`}><span className="desktop-shortcuts-label">Keyboard shortcuts</span><span className="compact-shortcuts-label">Shortcuts</span> {shortcutsEnabled ? <kbd>?</kbd> : <span>off</span>}</summary>
+                <label className="shortcuts-toggle"><input type="checkbox" checked={shortcutsEnabled} onChange={event => setShortcutsEnabled(event.target.checked)} />Enable keyboard shortcuts</label>
                 <p>Shortcuts pause in text fields, dialogs and menus.</p>
                 <dl className="keyboard-list" aria-label="Navigation shortcuts">
                   <div><dt><kbd>/</kbd></dt><dd>Search roles</dd></div>
@@ -971,7 +972,7 @@ export default function Dashboard() {
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
                 {feedbackNotice.savedGroup && <button className="text-button" disabled={Boolean(batchProgress)} data-match-action="review-saved" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
-                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
+                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;
                   const next = await act("feedback", undo);
@@ -988,7 +989,7 @@ export default function Dashboard() {
                   setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
-                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); if (dismissDraft?.owner !== data.profile.id || dismissDraft.jobId !== feedbackNotice.reasonFor) setDismissDraft(null); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={() => { setError(""); if (dismissDraft?.owner !== data.profile.id || dismissDraft.jobId !== feedbackNotice.reasonFor) setDismissDraft(null); setDismissJobId(feedbackNotice.reasonFor!); }}>Add reason</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
                   <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
                   <div className="feedback-details">
@@ -1091,13 +1092,13 @@ export default function Dashboard() {
                           </details>
                         </div>
                         <div className="job-actions">
-                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
+                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={(Boolean(busy) || needsWorkspaceCheck)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
                             if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${context} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
                           <div className="small-actions">
                             <button
-                              disabled={Boolean(busy)}
+                              disabled={(Boolean(busy) || needsWorkspaceCheck)}
                               aria-label={`${feedback.get(job.id)?.kind === "saved" ? "Unsave" : "Save"} ${context}`}
                               data-match-action="save"
                               aria-keyshortcuts="s"
@@ -1128,7 +1129,7 @@ export default function Dashboard() {
                                 : "Save"}
                             </button>
                             <button
-                              disabled={Boolean(busy)}
+                              disabled={(Boolean(busy) || needsWorkspaceCheck)}
                               data-match-action="dismiss"
                               aria-keyshortcuts="d"
                               aria-label={`Dismiss ${context}`}
@@ -1159,7 +1160,7 @@ export default function Dashboard() {
                               aria-label={`${data.automation.enabled ? (importedPreflight ? "Verify and apply automatically for" : "Apply automatically for") : "Prepare application for"} ${context}`}
                               aria-describedby="application-mode-note"
                               disabled={
-                                Boolean(busy) || match?.category === "excluded"
+                                (Boolean(busy) || needsWorkspaceCheck) || match?.category === "excluded"
                               }
                               onClick={async () => {
                                 const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {

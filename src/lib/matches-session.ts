@@ -4,7 +4,7 @@ export type BrowseView = { collection: MatchCollection; filter: MatchFilter; sea
 export type ImportDraft = { url: string; company: string; title: string; location: string };
 export const emptyImport: ImportDraft = { url: "", company: "", title: "", location: "" };
 export const dismissalReasons = ["", "Wrong role", "Location is not right", "Experience level is not right", "Not interested in this employer", "Other"];
-type MatchesSession = { view: BrowseView; draft: ImportDraft; importOpen: boolean; dismissDraft?: { jobId: string; reason: string; open: boolean } };
+type MatchesSession = { view: BrowseView; draft: ImportDraft; importOpen: boolean; shortcutsEnabled?: boolean; dismissDraft?: { jobId: string; reason: string; open: boolean } };
 type SessionStore = Pick<Storage, "getItem" | "setItem">;
 
 const key = (owner: string) => `apply-ai:matches:${owner}`;
@@ -28,6 +28,7 @@ export function readMatchesSession(storage: SessionStore, owner: string): Matche
       },
       draft: fields,
       importOpen: stored.importOpen === true && Object.values(fields).some(value => value.trim()),
+      ...(typeof stored.shortcutsEnabled === "boolean" ? { shortcutsEnabled: stored.shortcutsEnabled } : {}),
       ...(validReason ? { dismissDraft: { jobId: reason.jobId, reason: reason.reason, open: reason.open === true } } : {}),
     };
   } catch { return null; }
@@ -36,6 +37,6 @@ export function readMatchesSession(storage: SessionStore, owner: string): Matche
 export function writeMatchesSession(storage: SessionStore, owner: string, session: MatchesSession): void {
   try {
     const hasDraft = Object.values(session.draft).some(value => value.trim());
-    storage.setItem(key(owner), JSON.stringify({ version: 1, view: session.view, ...(hasDraft ? { draft: session.draft, importOpen: session.importOpen } : {}), ...(session.dismissDraft ? { dismissDraft: session.dismissDraft } : {}) }));
+    storage.setItem(key(owner), JSON.stringify({ version: 1, view: session.view, ...(hasDraft ? { draft: session.draft, importOpen: session.importOpen } : {}), ...(typeof session.shortcutsEnabled === "boolean" ? { shortcutsEnabled: session.shortcutsEnabled } : {}), ...(session.dismissDraft ? { dismissDraft: session.dismissDraft } : {}) }));
   } catch { /* The interface remains usable when session storage is unavailable. */ }
 }

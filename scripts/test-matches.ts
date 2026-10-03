@@ -276,6 +276,20 @@ async function main() {
       assert.equal(await keyboardHelp.locator("summary").evaluate(element => element === document.activeElement), true);
       assert.equal(await keyboardHelp.getByText("Save or Unsave", { exact: true }).isVisible(), true);
       await page.screenshot({ path: `.data/matches-shortcuts-${label}.png` });
+      await keyboardHelp.getByRole("checkbox", { name: "Enable keyboard shortcuts", exact: true }).uncheck();
+      await keyboardHelp.locator("summary").click();
+      const navMatches = page.getByRole("button", { name: "Matches", exact: true });
+      await navMatches.focus();
+      for (const key of ["/", "?", "j", "k"]) await page.keyboard.press(key);
+      assert.equal(await navMatches.evaluate(element => element === document.activeElement), true, "Disabled global character shortcuts must preserve native focus");
+      assert.equal(await keyboardHelp.getAttribute("open"), null);
+      const requestsBeforeDisabledShortcuts = feedbackRequests;
+      await strongRole.focus();
+      for (const key of ["s", "d", "u"]) await page.keyboard.press(key);
+      assert.equal(feedbackRequests, requestsBeforeDisabledShortcuts, "Disabled action shortcuts must not send mutations");
+      assert.equal(JSON.parse((await page.evaluate(owner => sessionStorage.getItem(`apply-ai:matches:${owner}`), fixture.profile.id))!).shortcutsEnabled, false);
+      await keyboardHelp.locator("summary").click();
+      await keyboardHelp.getByRole("checkbox", { name: "Enable keyboard shortcuts", exact: true }).check();
       await keyboardHelp.locator("summary").click();
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("j");
@@ -350,6 +364,7 @@ async function main() {
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Failed reconciliation must keep repeat import blocked");
       await page.screenshot({ path: `.data/matches-import-refresh-failed-${label}.png`, fullPage: true });
       await page.keyboard.press("Escape");
+      for (const name of ["Save", "Dismiss", "Prepare application for"]) assert.equal(await jobButton(name).isDisabled(), true, "Role action availability must match the reconciliation guard");
       await launcher.click();
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Reopening a dialog must not release an unresolved import guard");
       await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();

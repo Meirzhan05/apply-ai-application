@@ -1750,6 +1750,9 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .correction-facts .checkline input { width: 18px; height: 18px; flex: none; margin: 0; }
 .workspace-dialog .text-button { display: inline-flex; align-items: center; min-height: 44px; }
 .workspace-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.matches-workspace .greeting { margin-left: auto; }
+.shortcuts-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.shortcuts-toggle input { width: 18px; height: 18px; accent-color: var(--forest); }
 .workspace-recovery-actions .dark-button { display: inline-flex; align-items: center; min-height: 44px; }
 @media (min-width: 651px) {
   .matches-panel .page-heading { margin-bottom: 16px; }

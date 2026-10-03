@@ -8,7 +8,7 @@ const store = () => {
 
 it("restores an interrupted import and view only for the same applicant", () => {
   const storage = store();
-  const session = { view: { collection: "saved" as const, filter: "strong" as const, search: "Cedar", sort: "newest" as const }, draft: { ...emptyImport, url: "https://company.example/role", company: "Example" }, importOpen: true };
+  const session = { view: { collection: "saved" as const, filter: "strong" as const, search: "Cedar", sort: "newest" as const }, draft: { ...emptyImport, url: "https://company.example/role", company: "Example" }, importOpen: true, shortcutsEnabled: false };
   writeMatchesSession(storage, "alice", session);
   expect(readMatchesSession(storage, "alice")).toEqual(session);
   expect(readMatchesSession(storage, "bob")).toBeNull();
