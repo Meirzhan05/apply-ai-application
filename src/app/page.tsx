@@ -240,7 +240,7 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
-        <div style={{ display: "flex", gap: 18, padding: "16px 24px" }}><a href="/usage" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>AI usage</a><a href="/pilot" style={{ color: "var(--forest)", textUnderlineOffset: "4px" }}>Autonomy pilot</a></div>
+        <div className="sidebar-tools"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -639,7 +639,7 @@ export default function Dashboard() {
                               {data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
                             </button>
                           )}
-                          {!application && <p className="preparation-note">Opens an application workspace. You approve materials and the filled form before submission.</p>}
+                          {!application && <p className="preparation-note">{data.automation.enabled ? "Automation can prepare and submit this application using your saved settings. Review the fit checks and your authorization before starting." : "Opens an application workspace. You approve materials and the filled form before submission."}</p>}
                           </>}
                           <a
                             className="job-link"
