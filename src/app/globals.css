@@ -1752,3 +1752,10 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .packet-task-links a { display: inline-flex; align-items: center; min-height: 44px; text-underline-offset: 4px; }
 .packet-task-links span { padding: 12px 0; }
 [id^="screening-"], [id^="resume-review-"], [id^="save-answers-"], [id^="packet-approval-"] { scroll-margin-top: 100px; }
+
+.screening-answer small { font-size: 13px; }
+@media (max-width: 650px), (pointer: coarse) {
+  .app-detail .text-button, .questions-dialog .text-button, .packet-readiness a { display: inline-flex; align-items: center; min-height: 44px; }
+  .app-detail summary, .questions-dialog summary { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
+  .app-detail .outline-action, .questions-dialog .outline-action { min-height: 44px; }
+}

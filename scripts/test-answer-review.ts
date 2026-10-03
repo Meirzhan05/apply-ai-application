@@ -79,6 +79,11 @@ async function main() {
       await page.getByText("Before approving", { exact: true }).waitFor();
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Answer 1 personal question" }).count(), 1);
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Review and confirm 1 essay" }).count(), 1);
+      if (label === "mobile") {
+        for (const control of [page.getByRole("button", { name: "Edit wording", exact: true }), page.locator(".essay-evidence > summary"), page.locator(".packet-readiness").getByRole("link", { name: "Answer 1 personal question", exact: true })]) {
+          const box = await control.boundingBox(); assert.ok(box && box.height >= 44, "Essential phone review controls need a44px hit area");
+        }
+      }
       await page.getByText("Facts used in this essay", { exact: true }).click();
       await page.locator(".screening-answer details li").first().waitFor();
       assert.equal(await page.locator(".screening-answer details li").first().innerText(), fact.text);

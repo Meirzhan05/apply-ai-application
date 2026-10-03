@@ -4,7 +4,7 @@ export function ResumeReview({ profile, document, applicationId, pdfHash, onCorr
   const base = `/api/applications/${applicationId}/files`;
   const claim = (field: ResumeField) => field.text ? <div className="resume-claim">
     <span>{field.text}</span>
-    <details className="resume-sources"><summary>Source facts</summary>
+    <details className="resume-sources"><summary aria-label={`Source facts for: ${field.text}`}>Source facts</summary>
       {field.factIds.map((id) => <p key={id}>{profile.facts.find((fact) => fact.id === id)?.text ?? "Source unavailable; rebuild the resume."}</p>)}
       {onCorrectClaim && <button type="button" className="text-button" onClick={() => onCorrectClaim(field.factIds, field.text)}>Correct or unconfirm these facts</button>}
     </details>
