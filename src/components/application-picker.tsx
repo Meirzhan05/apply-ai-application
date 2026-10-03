@@ -4,6 +4,7 @@ export function ApplicationPicker({ options, selected, blocked, onSelect }: {
   options: Array<{ id: string; label: string }>; selected: string; blocked: boolean; onSelect: (id: string) => void;
 }) {
   const index = options.findIndex(option => option.id === selected);
+  if (!options.length) return null;
   return <div className="application-picker">
     <div className="application-picker-heading">
       <span>Application {index + 1} of {options.length}</span>

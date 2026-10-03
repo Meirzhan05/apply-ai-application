@@ -20,6 +20,7 @@ import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-v
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
+import { ApplicationHelp } from "@/components/application-help";
 import { ApplicationPicker } from "@/components/application-picker";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
@@ -68,6 +69,9 @@ export default function Dashboard() {
   const router = useRouter();
   const [data, setData] = useState<ViewState | null>(null);
   const [section, setSection] = useState<Section>("matches");
+  const [applicationSearch, setApplicationSearch] = useState("");
+  const [attentionOnly, setAttentionOnly] = useState(false);
+  const applicationSearchInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [collection, setCollection] = useState<MatchCollection>("all");
   const searchInput = useRef<HTMLInputElement>(null);
@@ -168,8 +172,12 @@ export default function Dashboard() {
   filtered.sort((a, b) => sort === "newest"
     ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
     : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
-  const activeApp =
-    applications.find((app) => app.id === selected) ?? applications[0];
+  const displayedApplications = applications.filter(app => {
+    const job = jobs.find(item => item.id === app.jobId);
+    return (!attentionOnly || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(applicationSearch.trim().toLowerCase());
+  });
+  const currentCollection = section === "applications" ? displayedApplications : applications;
+  const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
   const answerDraft = answerEdits && answerEdits.applicationId === activeApp?.id ? answerEdits.answers : [];
   const setAnswerDraft = (answers: ScreeningAnswer[]) => setAnswerEdits(activeApp && answers.length ? { applicationId: activeApp.id, answers } : null);
   const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
@@ -185,11 +193,7 @@ export default function Dashboard() {
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
   ).length;
-  const needsAction = applications.filter((app) =>
-    ["draft_review", "final_review", "needs_user_action", "awaiting_verification", "uncertain"].includes(
-      app.status,
-    ),
-  );
+  const needsAction = applications.filter(needsApplicationReview);
   const discoveryEvents = (data?.discovery?.events ?? [])
     .filter((event) => event.kind === "arrived" || event.kind === "matched" || event.kind === "queued")
     .slice(-3)
@@ -244,6 +248,42 @@ export default function Dashboard() {
     return () => window.removeEventListener("beforeunload", protectDraft);
   }, [answersDirty, editingEssay]);
 
+  const requestNavigation = useCallback((run: () => void) => {
+    if (busy) return;
+    if (section === "applications" && (answersDirty || editingEssay !== null)) setPendingNavigation({ run });
+    else run();
+  }, [busy, section, answersDirty, editingEssay]);
+  const navigateSection = (next: Section) => {
+    if (next !== section) requestNavigation(() => setSection(next));
+  };
+  const openApplication = useCallback((id: string, resetCollection = true) => requestNavigation(() => {
+    if (resetCollection) { setApplicationSearch(""); setAttentionOnly(false); }
+    setSelected(id);
+    setAnswerEdits(null);
+    setEditingEssay(null);
+    setEssayDraft(null);
+    setNotice("");
+    setError("");
+    setSection("applications");
+  }), [requestNavigation]);
+  const switchApplication = (id: string) => { if (id !== activeApp?.id) openApplication(id, false); };
+  useEffect(() => {
+    if (section !== "applications") return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
+      if (event.key === "/") { event.preventDefault(); const tools = document.getElementById("application-collection-tools") as HTMLDetailsElement | null; if (tools) tools.open = true; applicationSearchInput.current?.focus(); }
+      if (event.key === "?") { event.preventDefault(); const help = document.getElementById("applications-help") as HTMLDetailsElement | null; if (help) { help.open = true; help.querySelector<HTMLInputElement>("input")?.focus(); } }
+      if (event.key === "j" || event.key === "k") {
+        const current = displayedApplications.findIndex(app => app.id === activeApp?.id);
+        const next = current + (event.key === "j" ? 1 : -1);
+        if (next >= 0 && next < displayedApplications.length) { event.preventDefault(); openApplication(displayedApplications[next].id, false); }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [section, displayedApplications, activeApp?.id, openApplication]);
+
   const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
     /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
   const retryWorkspace = async () => {
@@ -297,24 +337,6 @@ export default function Dashboard() {
     });
   };
 
-  const requestNavigation = (run: () => void) => {
-    if (busy) return;
-    if (section === "applications" && (answersDirty || editingEssay !== null)) setPendingNavigation({ run });
-    else run();
-  };
-  const navigateSection = (next: Section) => {
-    if (next !== section) requestNavigation(() => setSection(next));
-  };
-  const openApplication = (id: string) => requestNavigation(() => {
-    setSelected(id);
-    setAnswerEdits(null);
-    setEditingEssay(null);
-    setEssayDraft(null);
-    setNotice("");
-    setError("");
-    setSection("applications");
-  });
-  const switchApplication = (id: string) => { if (id !== activeApp?.id) openApplication(id); };
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
                       [
@@ -523,6 +545,7 @@ export default function Dashboard() {
             <button
               key={key}
               aria-label={label}
+              aria-describedby={key === "applications" && count ? "application-attention-count" : undefined}
               aria-current={section === key ? "page" : undefined}
               title={label}
               className={`navitem ${section === key ? "active" : ""}`}
@@ -530,7 +553,8 @@ export default function Dashboard() {
             >
               <Icon size={21} strokeWidth={1.8} />
               <span className="nav-label">{key === "settings" ? "Settings" : label}</span>
-              {Boolean(count) && <b>{count}</b>}
+              {Boolean(count) && <b aria-hidden="true">{count}</b>}
+              {key === "applications" && Boolean(count) && <span className="sr-only" id="application-attention-count">{count} applications need your attention</span>}
             </button>
           ))}
         </nav>
@@ -1013,6 +1037,15 @@ export default function Dashboard() {
             <p className="subheading">
               {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
+            <ApplicationHelp />
+            {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
+              <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => setApplicationSearch(event.target.value)} /></label>
+              <div className="application-filters" role="group" aria-label="Application collection">
+                <button type="button" aria-pressed={!attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(false)}>All applications ({applications.length})</button>
+                <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(true)}>Needs your review ({needsAction.length})</button>
+              </div>
+              <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
+            </div></details>}
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">
                 <div className="next-icon"><CircleHelp size={20} /></div>
@@ -1050,12 +1083,12 @@ export default function Dashboard() {
             )}
             <div className="app-layout">
               <div className="application-collection" hidden={!applications.length}>
-                <h2 className="application-count">{applications.length} {applications.length === 1 ? "application" : "applications"}</h2>
+                <h2 className="application-count" role="status">{displayedApplications.length} of {applications.length} applications</h2>
                 {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
-                <ApplicationPicker options={applications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${job?.title ?? "Application"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
-              <div className="app-list" ref={applicationList} hidden={!applications.length} aria-label="Your application list">
-                {applications.length ? (
-                  applications.map((app) => {
+                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${job?.title ?? "Application"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
+              <div className="app-list" ref={applicationList} hidden={!displayedApplications.length} aria-label="Your application list">
+                {displayedApplications.length ? (
+                  displayedApplications.map((app) => {
                     const job = jobs.find((item) => item.id === app.jobId);
                     return (
                       <button
@@ -1103,7 +1136,7 @@ export default function Dashboard() {
                           {appJob.location} · {appJob.sourceLabel}
                         </p>
                       </div>
-                    <span className="status-pill">
+                    <span className="status-pill" role="status" aria-live="polite">
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
@@ -1437,10 +1470,10 @@ export default function Dashboard() {
                     ) : null}
                   </>
                 ) : (
-                  <div className="empty">
-                    <h2>Start with a role you want</h2>
-                    <p>Choose a match to prepare your first application. You review the materials and the employer form before submission.</p>
-                    <button className="dark-button" onClick={() => navigateSection("matches")}>Browse matches <ArrowRight size={16} /></button>
+                  <div className="empty" role="status">
+                    <h2>{applications.length ? "No applications match this view" : "Start with a role you want"}</h2>
+                    <p>{applications.length ? "Try another employer or role, or return to all applications." : "Choose a match to prepare your first application. You review the materials and the employer form before submission."}</p>
+                    {applications.length ? <button className="outline-action" onClick={() => { setApplicationSearch(""); setAttentionOnly(false); }}>Show all applications</button> : <button className="dark-button" onClick={() => navigateSection("matches")}>Browse matches <ArrowRight size={16} /></button>}
                   </div>
                 )}
               </div>
@@ -1936,6 +1969,10 @@ function formatDelay(milliseconds: number) {
   const hours = Math.round(minutes / 60);
   return `${hours}h`;
 }
+function needsApplicationReview(application: Application) {
+  return ["draft_review", "final_review", "needs_user_action", "awaiting_verification", "uncertain"].includes(application.status) || Boolean(application.blockers?.some(blocker => blocker.progress === "blocked"));
+}
+
 function statusLabel(status: Application["status"]) {
   return {
     selected: "Selected",
