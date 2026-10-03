@@ -84,7 +84,7 @@ export default function Dashboard() {
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
-  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; compactMessage?: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
   const [importFields, setImportFields] = useState(emptyImport);
   const sessionOwner = useRef<string | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
@@ -532,8 +532,8 @@ export default function Dashboard() {
               </div>
               </div>
               {feedbackNotice && <div className="feedback-notice" role="status">
-                <span>{feedbackNotice.message}</span>
-                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
+                <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
+                {feedbackNotice.undo && <button className="text-button" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;
                   const next = await act("feedback", undo);
@@ -542,14 +542,21 @@ export default function Dashboard() {
                     else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
                     setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
                   }
-                }}>Undo dismissal</button>}
-                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
-                {feedbackNotice.returnView && <button className="text-button" onClick={() => {
+                }}>Undo</button>}
+                {feedbackNotice.returnView && <button className="text-button" aria-label="Return to previous view" onClick={() => {
                   const previous = feedbackNotice.returnView!;
                   setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
                   document.getElementById("matches-heading")?.focus();
-                }}>Return to previous view</button>}
-                {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
+                }}>Previous view</button>}
+                <details className="feedback-options" key={feedbackNotice.message}>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /></summary>
+                  <div className="feedback-details">
+                    {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
+                    {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
+                    {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
+                    {!feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
+                  </div>
+                </details>
                 <button aria-label="Close feedback message" onClick={() => { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice(null); }}><X size={18} /></button>
               </div>}
               <div className="job-list" ref={jobList}>
@@ -686,7 +693,7 @@ export default function Dashboard() {
                                 const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
                                 if (next) {
                                   continueAfterRemoval(job.id);
-                                  setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                  setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, compactMessage: `${job.title} dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
                                 }
                               }}
                             >

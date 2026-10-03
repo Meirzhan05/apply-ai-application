@@ -85,7 +85,7 @@ async function main() {
       await page.evaluate(() => window.scrollTo(0, 0));
       const firstRoleBox = await page.getByRole("article").first().boundingBox();
       assert.ok(firstRoleBox && firstRoleBox.y < height, "The first role must begin in the initial viewport");
-      assert.equal(await strongRole.locator(".fit-highlight").innerText(), "Posting mentions: React · Confirmed fact: Built a React portfolio project");
+      assert.equal(await strongRole.locator(".fit-highlight").innerText(), "Posting: React · Your confirmed experience: Built a React portfolio project");
       if (label === "mobile") {
         const prepareBox = await jobButton("Prepare application for").boundingBox();
         assert.ok(prepareBox && prepareBox.y + prepareBox.height <= height, "One complete opportunity and its preparation action should fit in the opening phone viewport");
@@ -146,6 +146,7 @@ async function main() {
       await dismissLauncher.click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, undefined, "Quick dismissal must not invent a reason");
+      await page.locator(".feedback-options summary").click();
       const reasonLauncher = page.getByRole("button", { name: "Add a reason (optional)", exact: true });
       await reasonLauncher.click();
       const dismissDialog = page.getByRole("dialog", { name: "Add a dismissal reason" });
@@ -277,7 +278,7 @@ async function main() {
       await imported.waitFor();
       assert.equal(await page.getByRole("article").count(), 1, "Import reveals its specific opportunity, rather than the full list");
       assert.equal(await imported.evaluate(element => element === document.activeElement), true, "Import moves focus to its role");
-      assert.equal(await page.getByText("Added Analyst at Example. Review the posting details and fit below.", { exact: true }).isVisible(), true);
+      assert.equal(await page.locator(".feedback-summary").getByText("Added Analyst at Example. Review the posting details and fit below.", { exact: true }).isVisible(), true);
       await page.getByRole("button", { name: "Return to previous view", exact: true }).click();
       await strongRole.waitFor();
       assert.equal(await query.inputValue(), "Cedar");
