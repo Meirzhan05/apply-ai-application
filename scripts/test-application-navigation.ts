@@ -101,6 +101,7 @@ async function main() {
         await page.getByRole("heading", { name: "Application role 5", exact: true }).waitFor();
         await picker.selectOption(first.id);
       } else {
+        await page.locator(".application-stage-group > summary").filter({ hasText: "Completed attempts" }).click();
         await page.locator(".app-list-item").nth(5).click();
         await page.getByRole("heading", { name: "Application role 6", exact: true }).waitFor();
         assert.equal(await page.locator('.app-list-item[aria-pressed="true"]').count(), 1);
@@ -108,6 +109,7 @@ async function main() {
         assert.equal(await page.locator('.progress [aria-current="step"]').count(), 0);
         assert.equal(await page.locator('.progress-desktop').getByText("Submission confirmed", { exact: true }).isVisible(), true);
 
+        await page.locator(".application-stage-group > summary").filter({ hasText: "Materials" }).click();
         await page.locator(".app-list-item").first().click();
       }
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Unsaved applicant answer");
@@ -144,4 +146,4 @@ async function main() {
     }
   } finally { await browser.close(); }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => { console.error(error); process.exitCode = 1; });

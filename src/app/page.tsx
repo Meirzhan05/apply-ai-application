@@ -25,6 +25,7 @@ import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
+import { applicationStages, applicationStage } from "@/lib/application-stage";
 import { ApplicationPicker } from "@/components/application-picker";
 import { canReturnToMaterials, canReturnToFinalReview } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
@@ -232,7 +233,7 @@ export default function Dashboard() {
     return (!attentionOnly || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(applicationSearch.trim().toLowerCase());
   };
   const retainedApplication = applications.find(app => app.id === selected && !matchesApplicationView(app));
-  const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id);
+  const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id).sort((a, b) => applicationStages.indexOf(applicationStage(a.status)) - applicationStages.indexOf(applicationStage(b.status)));
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
   const nextMatchingApplication = displayedApplications.find(app => app.id !== activeApp?.id && matchesApplicationView(app));
@@ -1269,10 +1270,12 @@ export default function Dashboard() {
               <div className="application-collection" hidden={!applications.length}>
                 <h2 className="application-count" role="status">{displayedApplications.length} of {applications.length} applications</h2>
                 {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
-                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.title ?? "Application"} · ${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
+                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, stage: applicationStage(app.status), label: `${job?.title ?? "Application"} · ${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
               <div className="app-list" ref={applicationList} hidden={!displayedApplications.length} aria-label="Your application list">
                 {displayedApplications.length ? (
-                  displayedApplications.map((app) => {
+                  applicationStages.filter(stage => displayedApplications.some(app => applicationStage(app.status) === stage)).map(stage => <details className="application-stage-group" key={stage} open={activeApp && applicationStage(activeApp.status) === stage}>
+                    <summary>{stage} <span>{displayedApplications.filter(app => applicationStage(app.status) === stage).length}</span></summary>
+                    {displayedApplications.filter(app => applicationStage(app.status) === stage).map((app) => {
                     const job = jobs.find((item) => item.id === app.jobId);
                     return (
                       <button
@@ -1294,7 +1297,7 @@ export default function Dashboard() {
                         <ArrowRight size={16} />
                       </button>
                     );
-                  })
+                  })}</details>)
                 ) : (
                   <div className="empty compact">
                     <BriefcaseBusiness size={26} />

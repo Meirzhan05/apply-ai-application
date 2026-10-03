@@ -1881,3 +1881,15 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .application-outcome { padding: 12px 0; margin: 12px 0; color: var(--forest); line-height: 1.6; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 
 .application-save-error { color: #75402f; line-height: 1.6; padding: 12px 0; }
+
+.application-stage-group > summary {
+  min-height: 48px;
+  padding: 14px 15px;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.application-stage-group > summary span { font-variant-numeric: tabular-nums; color: var(--muted); margin-left: 8px; }
+.application-stage-group .app-list-item:last-child { border-bottom: 0; }
