@@ -29,6 +29,7 @@ import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
 import { applicationStages, applicationStage } from "@/lib/application-stage";
+import { compareApplications, type ApplicationOrder } from "@/lib/application-order";
 import { ApplicationPicker } from "@/components/application-picker";
 import { canReturnToMaterials, canReturnToFinalReview } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
@@ -85,6 +86,7 @@ export default function Dashboard() {
   const [connection, setConnection] = useState<WorkspaceConnection>("current");
   const [section, setSection] = useState<Section>("matches");
   const [applicationSearch, setApplicationSearch] = useState("");
+  const [applicationOrder, setApplicationOrder] = useState<ApplicationOrder>("stage");
   const [attentionOnly, setAttentionOnly] = useState(false);
   const applicationSearchInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -149,7 +151,7 @@ export default function Dashboard() {
             const navigation = readWorkspaceNavigation(window.sessionStorage, body.profile.id, body.applications.map(app => app.id));
             if (navigation) {
               setSection(navigation.section); setSelected(navigation.applicationId);
-              setApplicationSearch(navigation.search); setAttentionOnly(navigation.attentionOnly);
+              setApplicationSearch(navigation.search); setAttentionOnly(navigation.attentionOnly); setApplicationOrder(navigation.applicationOrder ?? "stage");
             }
           } catch { /* Storage can be disabled by browser preferences. */ }
           sessionOwner.current = body.profile.id;
@@ -240,7 +242,7 @@ export default function Dashboard() {
     return (!onlyReview || needsApplicationReview(app)) && `${job?.company ?? ""} ${job?.title ?? ""} ${statusLabel(app.status)}`.toLowerCase().includes(query.trim().toLowerCase());
   };
   const retainedApplication = applications.find(app => app.id === selected && !matchesApplicationView(app));
-  const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id).sort((a, b) => applicationStages.indexOf(applicationStage(a.status)) - applicationStages.indexOf(applicationStage(b.status)));
+  const displayedApplications = applications.filter(app => matchesApplicationView(app) || app.id === retainedApplication?.id).sort((a, b) => compareApplications(a, b, applicationOrder));
   const currentCollection = section === "applications" ? displayedApplications : applications;
   const activeApp = currentCollection.find(app => app.id === selected) ?? currentCollection[0];
   const nextMatchingApplication = displayedApplications.find(app => app.id !== activeApp?.id && matchesApplicationView(app));
@@ -271,9 +273,9 @@ export default function Dashboard() {
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
-    try { writeWorkspaceNavigation(window.sessionStorage, owner, { section, applicationId: activeApp?.id ?? null, search: applicationSearch, attentionOnly }); }
+    try { writeWorkspaceNavigation(window.sessionStorage, owner, { section, applicationId: activeApp?.id ?? null, search: applicationSearch, attentionOnly, applicationOrder }); }
     catch { /* Browser preferences may disable access to session storage itself. */ }
-  }, [data?.profile.id, section, activeApp?.id, applicationSearch, attentionOnly]);
+  }, [data?.profile.id, section, activeApp?.id, applicationSearch, attentionOnly, applicationOrder]);
   useEffect(() => {
     const owner = data?.profile.id;
     if (!owner || sessionOwner.current !== owner) return;
@@ -1290,6 +1292,7 @@ export default function Dashboard() {
             <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
               <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { const query = event.target.value; setSelected(activeApp && matchesApplicationView(activeApp, query) ? activeApp.id : null); setApplicationOutcome(null); setApplicationSearch(query); }} /></label>
+              <label htmlFor="application-order">Order within stages<select id="application-order" value={applicationOrder} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { setSelected(activeApp?.id ?? null); setApplicationOrder(event.target.value === "recent" ? "recent" : "stage"); }}><option value="stage">Original order</option><option value="recent">Recent activity</option></select></label>
               <div className="application-filters" role="group" aria-label="Application collection">
                 <button type="button" aria-pressed={!attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(activeApp?.id ?? null); setApplicationOutcome(null); setAttentionOnly(false); }}>All applications ({applications.length})</button>
                 <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => { setSelected(activeApp && matchesApplicationView(activeApp, applicationSearch, true) ? activeApp.id : null); setApplicationOutcome(null); setAttentionOnly(true); }}>Needs your review ({needsAction.length})</button>

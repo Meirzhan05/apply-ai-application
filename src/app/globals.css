@@ -1836,7 +1836,8 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .collection-tools { margin: 0 0 16px; color: var(--forest); font-size: 14px; }
 .collection-tools > summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
 .application-tools > label { display: flex; flex: 1 1 240px; flex-direction: column; gap: 6px; min-width: 0; font-size: 14px; }
-.application-tools input { width: 100%; min-height: 44px; margin: 0; }
+.application-tools input, .application-tools select { width: 100%; min-height: 44px; margin: 0; }
+.application-tools select { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; color: var(--ink); background: var(--paper); }
 .application-active-view { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 4px 0 16px; font-size: 14px; }
 .application-active-view span { min-width: 0; overflow-wrap: anywhere; }
 .application-active-view button { min-height: 44px; }

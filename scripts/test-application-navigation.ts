@@ -18,6 +18,7 @@ async function main() {
   setPacket(state, first, { schemaVersion: 1, files: [{ kind: "resume", filename: "tailored-resume.pdf", mimeType: "application/pdf", sha256: "a".repeat(64), size: 1, factIds: [fact.id] }], version: 1, createdAt: new Date().toISOString(), model: "fixture", summary: "Navigation verification", profileHash: packetProfileHash(state.profile), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [{ question: "Are you legally authorized to work in the United States?", answer: "", author: "human", factIds: [], requiresUserInput: true }] });
   const other = state.applications[1];
   setPacket(state, other, { ...structuredClone(first.packet!), answers: [{ ...first.packet!.answers[0], answer: "Other employer answer", userProvided: true, requiresUserInput: false }] });
+  other.updatedAt = new Date(Date.now() + 60_000).toISOString();
   assert.equal(applyHumanAnswerEdits(other.packet!.answers, [{ ...first.packet!.answers[0], answer: "Misplaced answer" }])[0].answer, "Misplaced answer", "Matching questions alone cannot establish application ownership");
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
@@ -51,6 +52,15 @@ async function main() {
       assert.equal(await page.locator(".application-collection option").count(), 6);
       await page.getByText("Find or filter applications", { exact: true }).click();
       assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
+      const order = page.getByRole("combobox", { name: "Order within stages", exact: true });
+      assert.ok((await order.boundingBox())!.height >= 44, "Application ordering needs a usable touch target");
+      await order.selectOption("recent");
+      assert.equal(await page.locator("#application-choice option").first().getAttribute("value"), other.id, "Recent activity orders applications within their stage");
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "Changing order must retain the selected employer");
+      await page.reload();
+      await page.getByText("Find or filter applications", { exact: true }).click();
+      assert.equal(await order.inputValue(), "recent", "Application order survives reload");
+      await order.selectOption("stage");
       await appSearch.fill("Employer 2");
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
       await appSearch.fill("");
