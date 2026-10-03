@@ -1767,8 +1767,10 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 [id^="screening-"], [id^="resume-review-"], [id^="save-answers-"], [id^="packet-approval-"] { scroll-margin-top: 100px; }
 
 .screening-answer small { font-size: 13px; }
-@media (max-width: 650px), (pointer: coarse) {
-  .app-detail .text-button, .questions-dialog .text-button, .packet-readiness a { display: inline-flex; align-items: center; min-height: 44px; }
-  .app-detail summary, .questions-dialog summary { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
-  .app-detail .outline-action, .questions-dialog .outline-action { min-height: 44px; }
-}
+.target-url a { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; text-underline-offset: 4px; }
+.progress-desktop .progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.progress-desktop .progress li { align-items: flex-start; padding: 10px 8px; line-height: 1.4; }
+.progress-desktop .progress li > span:last-child { text-wrap: balance; }
+.app-detail .text-button, .questions-dialog .text-button, .packet-readiness a { display: inline-flex; align-items: center; min-height: 44px; }
+.app-detail summary, .questions-dialog summary { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
+.app-detail .outline-action, .questions-dialog .outline-action { min-height: 44px; }
