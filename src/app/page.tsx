@@ -25,6 +25,7 @@ import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
 import { FactCorrectionDialog } from "@/components/fact-correction-dialog";
 import { ApplicationHelp } from "@/components/application-help";
 import { ApplicationPicker } from "@/components/application-picker";
+import { canReturnToMaterials } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
@@ -1326,10 +1327,10 @@ export default function Dashboard() {
                         }
                       }}>Undo source fact changes</button>
                     </section>}
-                    {activeApp.status === "draft_review" && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
+                    {!activeAppIsAutomatic && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
                       <h3>Your profile changed</h3>
                       <p>The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
-                      <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button>
+                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
                       {notice && <p>{notice}</p>}
                     </section>}
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
@@ -1343,7 +1344,7 @@ export default function Dashboard() {
                         </p>
                         <button
                           className="dark-button"
-                          disabled={Boolean(busy)}
+                          disabled={Boolean(busy) || Boolean(activeApp.materialsStale)}
                           onClick={() =>
                             act("startBrowser", { applicationId: activeApp.id })
                           }
@@ -1382,7 +1383,7 @@ export default function Dashboard() {
                         <h3>Update the form questions</h3>
                         <p>The employer’s question headings need to be read again before you answer. Your browser session and materials are saved.</p>
                         <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.browserQuestionRun)} onClick={() => act("resumeBrowser", { applicationId: activeApp.id })}>Refresh questions</button>
-                      </div> : hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
+                      </div> : !activeApp.materialsStale && hasCurrentBrowser && browserQuestions(activeApp.form).length > 0 && <BrowserQuestionsDialog key={`${activeApp.id}-${activeApp.browserSessionId}-${activeApp.form?.hash}`} application={activeApp} busy={busy} error={error} facts={data?.profile.facts ?? []} act={act} />}
                       <div className="step-card">
                         <h3>{!hasCurrentBrowser ? activeApp.browserSessionId ? "Your browser session ended" : "Start a fresh browser session" : browserTakeoverReasons(activeApp.form).length ? "Browser help needed" : "Your browser is saved"}</h3>
                         {hasCurrentBrowser && browserTakeoverReasons(activeApp.form).map((blocker) => <p key={blocker}>{blocker}</p>)}
@@ -1515,7 +1516,7 @@ export default function Dashboard() {
                               </button>
                               <button
                                 className="dark-button"
-                                disabled={Boolean(busy) || activeApp.form?.readyToSubmit === false}
+                                disabled={Boolean(busy) || Boolean(activeApp.materialsStale) || activeApp.form?.readyToSubmit === false}
                                 onClick={() =>
                                   act("approveSubmit", {
                                     applicationId: activeApp.id,
@@ -1535,7 +1536,7 @@ export default function Dashboard() {
                               </p>
                               <button
                                 className="dark-button"
-                                disabled={Boolean(busy)}
+                                disabled={Boolean(busy) || Boolean(activeApp.materialsStale)}
                                 onClick={() =>
                                   act("submit", { applicationId: activeApp.id })
                                 }

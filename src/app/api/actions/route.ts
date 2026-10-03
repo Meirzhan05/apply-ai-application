@@ -13,6 +13,7 @@ import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue"
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
+import { returnToMaterials } from "@/lib/material-review-recovery";
 import { applyFactCorrection } from "@/lib/fact-corrections";
 import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
@@ -625,11 +626,7 @@ async function perform(
     const app = findApp(state, appId, userId);
     await mutateState(userId, (current) => {
       const target = findApp(current, appId, userId);
-      transition(target, ["needs_user_action", "final_review"], "draft_review");
-      target.approvals = [];
-      target.form = undefined;
-      target.browserSessionId = target.browserConnectUrl = target.browserLiveUrl = undefined;
-      target.error = undefined;
+      returnToMaterials(target);
       activity(current, "Browser closed", "Review and approve the packet again to start a new session.");
     }, ownerContext);
     await cancelBrowser(app);

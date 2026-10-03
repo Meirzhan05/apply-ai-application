@@ -101,3 +101,13 @@ it("applies a narrow fact correction and undo without replacing unrelated facts"
   expect((await POST(post("profile", { factPatch: { expected: [updated], updated: [original] } }))).status).toBe(200);
   expect(mocks.state!.profile.facts).toEqual([original, ...unrelated]);
 });
+
+it("returns an idle approved attempt to materials review and rejects a started submission", async () => {
+  const app = mocks.state!.applications[0]; app.status = "approved_to_submit";
+  expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(200);
+  expect(mocks.state!.applications[0].status).toBe("draft_review");
+  mocks.state!.applications[0].status = "final_review";
+  mocks.state!.applications[0].submissionAttemptedAt = new Date().toISOString();
+  expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(400);
+  expect(mocks.state!.applications[0].status).toBe("final_review");
+});
