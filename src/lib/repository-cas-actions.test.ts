@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   conflicts: 0,
   writes: [] as Array<{ revision: number; data: string }>,
   user: vi.fn(),
+  search: vi.fn(),
   catalog: vi.fn(),
 }));
 
@@ -55,6 +56,7 @@ const db = {
 };
 
 vi.mock("@/lib/demo-mode", () => ({ isDemo: () => false }));
+vi.mock("@/lib/personal-search", () => ({ queuePersonalSearch: mocks.search }));
 vi.mock("@/lib/catalog", () => ({ readActiveCatalogRows: mocks.catalog }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => db }));
 vi.mock("@/lib/supabase", () => ({ serverSupabase: async () => ({ auth: { async getUser() { return { data: { user: { id: "owner-a", email: "owner@example.com" } }, error: null }; } } }) }));
@@ -68,6 +70,7 @@ function post(action: string, payload: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "false");
   mocks.catalog.mockResolvedValue([]);
+  mocks.search.mockReset().mockResolvedValue(false);
   mocks.revision = 1;
   mocks.conflicts = 0;
   mocks.writes.length = 0;
@@ -120,4 +123,19 @@ it("returns an idle approved attempt to materials review and rejects a started s
   mocks.state!.applications[0].submissionAttemptedAt = new Date().toISOString();
   expect((await POST(post("restartBrowser", { applicationId: app.id }))).status).toBe(400);
   expect(mocks.state!.applications[0].status).toBe("final_review");
+});
+
+it("automatically dispatches the authenticated student's search after saving explicit preferences", async () => {
+  const response = await POST(post("profile", { preferredTitles: [], preferredLocations: [], remoteOnly: false, userId: "other-student", searchPreferencesConfirmedAt: "untrusted" }));
+  expect(response.status).toBe(200);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toMatch(/^\d{4}-/);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).not.toBe("untrusted");
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
+});
+
+it("rechecks personal search readiness when the student confirms experience or updates search settings", async () => {
+  expect((await POST(post("onboarding", { facts: initialDemoState().profile.facts }))).status).toBe(200);
+  expect((await POST(post("automationSettings", { preferredTitles: ["Analyst"] }))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledTimes(2);
+  expect(mocks.state?.profile.searchPreferencesConfirmedAt).toBeTruthy();
 });

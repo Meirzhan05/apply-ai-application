@@ -1,7 +1,7 @@
 "use client";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createWorkspaceRefresh } from "@/lib/workspace-refresh";
+import { createWorkspaceRefresh, type WorkspaceConnection } from "@/lib/workspace-refresh";
 import Image from "next/image";
 import { ApplicationProgress } from "@/components/application-progress";
 import { EssayReview } from "@/components/essay-review";
@@ -20,6 +20,8 @@ import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
+import { PersonalSearchStatus } from "@/components/personal-search-status";
+import { personalSearchReadiness } from "@/lib/personal-search-policy";
 import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
@@ -76,6 +78,7 @@ type Filter = MatchFilter;
 export default function Dashboard() {
   const router = useRouter();
   const [data, setData] = useState<ViewState | null>(null);
+  const [connection, setConnection] = useState<WorkspaceConnection>("current");
   const [section, setSection] = useState<Section>("matches");
   const [applicationSearch, setApplicationSearch] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -121,7 +124,7 @@ export default function Dashboard() {
 
   useEffect(() => { if (confirmDiscardImport) keepImportEditing.current?.focus(); }, [confirmDiscardImport]);
 
-  const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData), []);
+  const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData, setConnection), []);
   const reload = useCallback(() => refresh.reload(), [refresh]);
   useEffect(() => {
     let live = true;
@@ -283,6 +286,13 @@ export default function Dashboard() {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
       if (event.key === "/") { event.preventDefault(); searchInput.current?.focus(); }
+      if (!event.repeat && ["s", "d", "u"].includes(event.key)) {
+        const role = target.closest("article");
+        const action = event.key === "u"
+          ? target.closest(".matches-panel")?.querySelector<HTMLButtonElement>('[data-match-action="undo"]')
+          : role?.querySelector<HTMLButtonElement>(event.key === "s" ? '[data-match-action="save"]' : '[data-match-action="dismiss"], [data-match-action="restore"]');
+        if (action && !action.disabled) { event.preventDefault(); action.click(); }
+      }
       if (event.key === "j" || event.key === "k") {
         const roles = Array.from(jobList.current?.querySelectorAll<HTMLElement>("article") ?? []);
         const index = roles.findIndex(role => role.contains(document.activeElement));
@@ -702,7 +712,6 @@ export default function Dashboard() {
           <a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a>
           {!data.profile.demo && <div className="responsive-account">
             <p>Workspace: {data.profile.name || "Your profile"}</p>
-            <button onClick={() => { document.getElementById("more-pages")?.hidePopover(); navigateSection("settings"); }}>Account settings</button>
             <button disabled={Boolean(busy)} onClick={signOut}>{busy === "signout" ? "Signing out…" : "Sign out"}</button>
           </div>}
         </div>
@@ -766,6 +775,10 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+        {connection !== "current" && <div className="workspace-connection" role="status">
+          <p>{connection === "auth-required" ? "Sign in to resume workspace updates. Showing the last received list." : "Workspace updates are paused. Showing the last received list; we’ll keep trying."}</p>
+          {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
+        </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
         {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
@@ -783,7 +796,7 @@ export default function Dashboard() {
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{sourceFreshness}</span>
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{data.profile.demo ? sourceFreshness : data.personalSearch?.completedAt ? `Your search checked ${relative(data.personalSearch.completedAt)}` : "Personal search"}</span>
                   </p>
                 </div>
                 <div className="matches-heading-actions">
@@ -797,6 +810,7 @@ export default function Dashboard() {
                 </button>
                 </div>
               </div>
+              {!data.profile.demo && <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => navigateSection("profile")} />}
               {!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
                 <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
@@ -854,7 +868,8 @@ export default function Dashboard() {
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
                 <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
-                <p>Press <kbd>/</kbd> to search, <kbd>j</kbd> for the next role, or <kbd>k</kbd> for the previous role. Shortcuts pause while you type or use a dialog.</p>
+                <p>Navigation: <kbd>/</kbd> search · <kbd>j</kbd> next role · <kbd>k</kbd> previous role.</p>
+                <p>With a role focused: <kbd>s</kbd> Save or Unsave · <kbd>d</kbd> Dismiss or Restore. Within Matches: <kbd>u</kbd> Undo dismissal. Shortcuts pause in text fields, dialogs and menus.</p>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
                 <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
                 <dl>
@@ -868,7 +883,7 @@ export default function Dashboard() {
               </div>
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
-                {feedbackNotice.undo && <button className="text-button" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
+                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;
                   const next = await act("feedback", undo);
@@ -884,7 +899,7 @@ export default function Dashboard() {
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
-                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>{feedbackNotice.reasonFor ? "Add reason" : "Details"}</span></summary>
                   <div className="feedback-details">
                     {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
                     {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
@@ -986,7 +1001,7 @@ export default function Dashboard() {
                           </details>
                         </div>
                         <div className="job-actions">
-                          {collection === "dismissed" ? <button className="outline-action" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
+                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
                             if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${job.title} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
@@ -994,6 +1009,8 @@ export default function Dashboard() {
                             <button
                               disabled={Boolean(busy)}
                               aria-label={`${feedback.get(job.id)?.kind === "saved" ? "Unsave" : "Save"} ${context}`}
+                              data-match-action="save"
+                              aria-keyshortcuts="s"
                               aria-pressed={feedback.get(job.id)?.kind === "saved"}
                               onClick={async () => {
                                 const saved = feedback.get(job.id)?.kind === "saved";
@@ -1022,6 +1039,8 @@ export default function Dashboard() {
                             </button>
                             <button
                               disabled={Boolean(busy)}
+                              data-match-action="dismiss"
+                              aria-keyshortcuts="d"
                               aria-label={`Dismiss ${context}`}
                               onClick={async () => {
                                 const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
@@ -1093,8 +1112,8 @@ export default function Dashboard() {
                 ) : (
                   <div className="empty">
                     <Search size={28} />
-                    <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
-                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
+                    <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Your personal search starts here" : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Finding opportunities for you" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Confirm your experience and save your search preferences. Your agent will start automatically." : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Your agent is searching employer job boards using your profile and preferences. Results appear after the postings are verified." : !data.profile.demo && data.personalSearch?.status === "complete" ? "Your last search found no verified openings in this view. Your agent will search again every four hours. You can update your preferences or import a specific job link." : "Try another filter or import a job link."}</p>
                     {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
                     {filter !== "all" && <button className="outline-action" onClick={() => setFilter("all")}>Show any fit in this collection</button>}
                     {!search.trim() && (collection === "saved" || collection === "dismissed") && <button className="outline-action" onClick={() => { setCollection("all"); setFilter("all"); }}>Browse matches</button>}
@@ -1110,14 +1129,14 @@ export default function Dashboard() {
                 </div>
                 <button className="text-button" onClick={() => navigateSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
-              {data.discovery && (
+              {data.discovery && (data.profile.demo || data.personalSearch?.status === "complete") && (
                 <section className="discovery-pulse" aria-label="Discovery freshness">
                   <div className="discovery-pulse-head">
                     <div>
-                      <strong>Public opportunity monitor</strong>
-                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for the first public catalog check."}</p>
+                      <strong>{data.profile.demo ? "Public opportunity monitor" : "Your personal search"}</strong>
+                      <p>{data.discovery.lastRefreshAt ? `Last checked ${relative(data.discovery.lastRefreshAt)}.` : "Waiting for your first personal search."}</p>
                     </div>
-                    <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>
+                    {data.profile.demo && <span>{data.discovery.sources.filter((source) => source.status === "available").length}/{data.discovery.sources.length || 0} sources available</span>}
                   </div>
                   <div className="discovery-sources">
                     {data.discovery.sources.map((source) => (
@@ -1743,6 +1762,7 @@ export default function Dashboard() {
                   Show only remote roles
                 </label>
                 <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
+                <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
                 {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
@@ -2100,8 +2120,8 @@ export default function Dashboard() {
             </button>
             <h2 id="import-heading">Import a job link</h2>
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
-            <form onSubmit={async event => {
-              event.preventDefault(); setConfirmDiscardImport(false); setImportTouched(true);
+            <form className="job-import-form" onSubmit={async event => {
+              event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
               if (!importReady || busy) return;
               const next = await act("import", importFields);
               if (next) {
@@ -2124,7 +2144,7 @@ export default function Dashboard() {
                   <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
+              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
                 <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>

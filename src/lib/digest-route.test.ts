@@ -3,10 +3,10 @@ import { initialDemoState } from "@/lib/demo-data";
 import type { AppState } from "@/lib/types";
 import { POST } from "@/app/api/internal/digest/route";
 
-const mocks = vi.hoisted(() => ({ rows: [] as Array<{ user_id: string; data: AppState }>, stateError: null as unknown, demo: false, catalog: vi.fn(), send: vi.fn(), mutate: vi.fn(), from: vi.fn() }));
+const mocks = vi.hoisted(() => ({ rows: [] as Array<{ user_id: string; data: AppState }>, stateError: null as unknown, demo: false, catalog: vi.fn(), load: vi.fn(), send: vi.fn(), mutate: vi.fn(), from: vi.fn() }));
 vi.mock("@/lib/catalog", () => ({ readActiveCatalogRows: mocks.catalog }));
 vi.mock("@/lib/email", () => ({ sendDigest: mocks.send }));
-vi.mock("@/lib/repository", () => ({ isDemo: () => mocks.demo, mutateState: mocks.mutate }));
+vi.mock("@/lib/repository", () => ({ isDemo: () => mocks.demo, loadState: mocks.load, mutateState: mocks.mutate }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => ({ from: mocks.from }) }));
 
 beforeEach(() => {
@@ -17,7 +17,9 @@ beforeEach(() => {
   mocks.stateError = null;
   const state = initialDemoState();
   state.profile = { ...state.profile, id: "owner", email: "owner@example.com", demo: false };
+  state.jobs[0].discoveredAt = "2026-09-30T12:00:00Z";
   mocks.rows = [{ user_id: "owner", data: state }];
+  mocks.load.mockImplementation(async (id: string) => mocks.rows.find((row) => row.user_id === id)!.data);
   mocks.catalog.mockResolvedValue([{ id: "job", data: mocks.rows[0].data.jobs[0], discovered_at: "2026-09-30T12:00:00Z" }]);
   mocks.from.mockImplementation(() => ({ select: () => ({ limit: async () => ({ data: mocks.rows, error: mocks.stateError }) }) }));
   mocks.send.mockResolvedValue(true);
@@ -39,11 +41,12 @@ describe("daily digest dispatch and checkpoint", () => {
     expect(mocks.from).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
   });
-  it("uses the complete catalog and records the query watermark only after delivery", async () => {
+  it("uses the owner’s private jobs and records the watermark only after delivery", async () => {
     mocks.send.mockImplementation(async () => { vi.advanceTimersByTime(5000); return true; });
     const response = await POST(request());
     expect(await response.json()).toEqual({ sent: 1, errors: [] });
-    expect(mocks.catalog).toHaveBeenCalledOnce();
+    expect(mocks.catalog).not.toHaveBeenCalled();
+    expect(mocks.load).toHaveBeenCalledWith("owner");
     expect(mocks.send.mock.calls[0][1][0].discoveredAt).toBe("2026-09-30T12:00:00Z");
     expect(mocks.send.mock.calls[0][2].toISOString()).toBe("2026-09-30T13:00:00.000Z");
     expect(mocks.rows[0].data.lastDigestAt).toBe("2026-09-30T13:00:00.000Z");
@@ -79,4 +82,13 @@ describe("daily digest dispatch and checkpoint", () => {
     expect((await POST(request())).status).toBe(500);
     expect(mocks.send).not.toHaveBeenCalled();
   });
+});
+
+
+it("does not put one student's discoveries into another student's digest", async () => {
+  const empty = initialDemoState(); empty.profile.id = "new-student"; empty.profile.demo = false; empty.jobs = [];
+  mocks.rows.push({ user_id: "new-student", data: empty });
+  await POST(request());
+  expect(mocks.send.mock.calls.find(([state]) => state.profile.id === "new-student")?.[1]).toEqual([]);
+  expect(mocks.catalog).not.toHaveBeenCalled();
 });

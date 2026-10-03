@@ -17,6 +17,7 @@ async function invoke(path: string) {
 }
 
 export const refreshJobs = schedules.task({
+  // Keep the deployed schedule identity; this now dispatches personal searches.
   id: "refresh-public-job-boards",
   cron: { pattern: "0 */4 * * *", timezone: "America/New_York" },
   run: async () => invoke("/api/internal/refresh"),

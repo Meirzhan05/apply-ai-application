@@ -136,3 +136,15 @@ it("preserves a fuller completed report across older and newer same-id partial r
   expect(report.estimatedUsd).toBeCloseTo(.09, 8);
   expect(report.records[0].tokens).toMatchObject({ input: 1000, cachedInput: 200, cacheWrite: 100, output: 999, reasoningOutput: 60 });
 });
+
+it("includes hosted web-search tool fees alongside token usage", async () => {
+  const userId = randomUUID();
+  await meterModelResponse({ userId }, "personal-job-search", "gpt-6-luna", async () => ({
+    id: randomUUID(), model: "gpt-6-luna", service_tier: "default",
+    output: [{ type: "web_search_call" }, { type: "web_search_call" }, { type: "message" }],
+    usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 100 },
+  }));
+  const record = (await readModelUsage(userId)).records[0];
+  expect(record.webSearchCalls).toBe(2); expect(record.webSearchUsd).toBe(0.02);
+  expect(record.estimatedUsd).toBeCloseTo(0.02015, 8);
+});

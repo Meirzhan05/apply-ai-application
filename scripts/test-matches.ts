@@ -21,6 +21,7 @@ async function main() {
   let failImport = false;
   let authImport = false;
   let authFeedback = false;
+  let feedbackRequests = 0;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -40,6 +41,7 @@ async function main() {
         fixture.matches.push({ jobId: job.id, assessment: assessMatchLocally(fixture.profile, job) });
         return route.fulfill({ json: { ok: true } });
       }
+      feedbackRequests++;
       assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
       if (authFeedback) { authFeedback = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
@@ -230,9 +232,36 @@ async function main() {
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("j");
       assert.equal(await page.getByRole("article").first().evaluate(element => element === document.activeElement), true);
+      slowFeedback = true;
+      const beforeShortcut = feedbackRequests;
+      await page.keyboard.down("s"); await page.keyboard.down("s"); await page.keyboard.up("s");
+      await jobButton("Unsave").waitFor();
+      assert.equal(feedbackRequests, beforeShortcut + 1, "Holding Save must produce one feedback action");
+      await page.keyboard.press("d");
+      await strongRole.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Undo dismissal", exact: true }).waitFor();
+      await page.keyboard.press("u");
+      await strongRole.waitFor();
+      await jobButton("Unsave").waitFor();
+      assert.equal(await strongRole.evaluate(element => element === document.activeElement), true, "Keyboard Undo restores role focus and saved state");
+      await page.keyboard.press("d");
+      await strongRole.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
+      await strongRole.waitFor(); await strongRole.focus(); await page.keyboard.press("d");
+      await page.getByRole("heading", { name: "No dismissed roles", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      await strongRole.focus(); await page.keyboard.press("s"); await jobButton("Unsave").waitFor();
+      await page.keyboard.press("s"); await jobButton("Save").waitFor();
+      const beforeTyping = feedbackRequests;
+      await query.focus(); await page.keyboard.type("sdu");
+      assert.equal(await query.inputValue(), "sdu");
+      assert.equal(feedbackRequests, beforeTyping, "Typing must not invoke triage shortcuts");
+      await query.fill("");
       await launcher.click();
       const url = page.getByRole("textbox", { name: "Job URL (required)", exact: true });
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true);
+      assert.ok(await url.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+      assert.ok((await url.boundingBox())!.height >= 44, "Import inputs retain touch sizing");
       await url.fill("http://company.example/role");
       await url.blur();
       assert.equal(await dialog.getByText("Use an HTTPS job link.", { exact: true }).isVisible(), true);
@@ -299,6 +328,7 @@ async function main() {
       await launcher.click();
       await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "Requesting discard preserves draft until confirmed");
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).count(), 0, "Discard confirmation presents only its two choices");
       await page.screenshot({ path: `.data/matches-import-discard-${label}.png` });
       assert.equal(await dialog.getByRole("button", { name: "Keep editing", exact: true }).evaluate(element => element === document.activeElement), true, "Discard confirmation focuses its safe choice");
       await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
@@ -417,6 +447,35 @@ async function main() {
       }
       console.log(`PASS responsive ${width}x${height}: long content, visible navigation, no horizontal overflow`);
     }
+    const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const connectionFixture = publicState(structuredClone(demoState));
+    let failedUpdates = false; let expiredUpdates = false;
+    let failedChecks = 0;
+    await connectionPage.route("**/api/state", route => {
+      if (failedUpdates) failedChecks++;
+      return route.fulfill(failedUpdates ? { status: 503, json: { error: "Temporary connection failure" } } : expiredUpdates ? { status: 401, json: { error: "AUTH_REQUIRED" } } : { json: connectionFixture });
+    });
+    await connectionPage.route("**/api/actions", () => assert.fail("Connection checks must not write workspace data"));
+    await connectionPage.bringToFront();
+    await connectionPage.goto(origin); await connectionPage.getByRole("article").first().waitFor();
+    assert.equal(await connectionPage.evaluate(() => document.hidden), false, "Connection checks require a visible workspace");
+    failedUpdates = true;
+    const connectionNotice = connectionPage.locator(".workspace-connection");
+    try { await connectionNotice.waitFor({ timeout: 60_000 }); }
+    catch (error) { console.error("Connection test diagnostics", { failedChecks, hidden: await connectionPage.evaluate(() => document.hidden) }); throw error; }
+    assert.match((await connectionNotice.textContent()) ?? "", /updates are paused/);
+    assert.equal(await connectionPage.getByRole("article").count(), 3, "Interrupted updates retain the last received list");
+    await connectionPage.screenshot({ path: ".data/matches-connection-mobile.png" });
+    failedUpdates = false;
+    await connectionNotice.getByRole("button", { name: "Retry updates", exact: true }).click();
+    await connectionNotice.waitFor({ state: "hidden" });
+    expiredUpdates = true;
+    await connectionPage.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await connectionNotice.getByRole("link", { name: "Sign in", exact: true }).waitFor();
+    assert.equal(await connectionNotice.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
+    assert.equal(await connectionPage.getByRole("article").count(), 3);
+    await connectionPage.close();
+    console.log("PASS connection recovery: persistent failure notice, retained roles, Retry updates and expired-session sign-in");
   } finally { await browser.close(); }
 }
 

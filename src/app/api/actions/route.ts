@@ -3,6 +3,7 @@ import { tasks } from "@trigger.dev/sdk";
 import type {
   submitApplicationForm,
 } from "../../../../trigger/browser";
+import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
@@ -187,6 +188,7 @@ async function perform(
         })
         .parse(payload.settings ?? payload);
       updateAutomationSettings(state.profile, settings);
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in settings)) state.profile.searchPreferencesConfirmedAt = new Date().toISOString();
       state.profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(state, "Automation settings updated", "Your saved filters and material preferences were updated.");
@@ -269,6 +271,7 @@ async function perform(
       if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
       if (settings) updateAutomationSettings(profile, settings);
       if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
@@ -648,11 +651,14 @@ export async function POST(request: Request) {
     return await withAccountOperation(userId, "request", async () => {
     const { action, payload } = Input.parse(await request.json());
     await perform(userId, action, payload);
+    if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action)) {
+      await queuePersonalSearch(userId);
+    }
     if (
       !isDemo() &&
       process.env.OPENAI_API_KEY &&
       process.env.TRIGGER_SECRET_KEY &&
-      ["profile", "import"].includes(action)
+      ["import"].includes(action)
     ) {
       await queueMatchAssessment(userId).catch(() => undefined);
     }
