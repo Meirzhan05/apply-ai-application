@@ -1745,3 +1745,10 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .application-picker label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 6px; }
   .application-picker select { width: 100%; min-width: 0; max-width: 100%; min-height: 48px; padding: 10px 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
 }
+
+.packet-orientation { margin: 18px 0; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
+.packet-orientation h3 { margin: 0 0 6px; font-size: 17px; color: var(--forest); }
+.packet-task-links { display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: center; font-size: 14px; color: var(--forest); }
+.packet-task-links a { display: inline-flex; align-items: center; min-height: 44px; text-underline-offset: 4px; }
+.packet-task-links span { padding: 12px 0; }
+[id^="screening-"], [id^="resume-review-"], [id^="save-answers-"], [id^="packet-approval-"] { scroll-margin-top: 100px; }

@@ -65,6 +65,13 @@ async function main() {
       const essayInput = page.getByLabel(essay.question, { exact: true });
       const humanInput = page.getByLabel(human.question, { exact: true });
       await essayInput.waitFor();
+      const orientation = page.locator(".packet-orientation");
+      await orientation.getByRole("heading", { name: "2 things before approval", exact: true }).waitFor();
+      assert.equal(await orientation.getByRole("link", { name: "1 personal answer", exact: true }).count(), 1);
+      assert.equal(await orientation.getByRole("link", { name: "1 essay to confirm", exact: true }).count(), 1);
+      const summaryBox = await orientation.boundingBox(); const resumeBox = await page.locator(".resume-preview").boundingBox();
+      assert.ok(summaryBox && resumeBox && summaryBox.y < resumeBox.y, "Remaining tasks must precede the document review");
+      assert.ok(summaryBox.y < height, "The task summary must begin in the first viewport");
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
       assert.equal(await humanInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await humanInput.inputValue(), "");
@@ -78,6 +85,8 @@ async function main() {
       await page.screenshot({ path: `.data/answer-review-${label}.png`, fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "No horizontal overflow");
       await humanInput.fill("My own verified answer");
+      await orientation.getByRole("link", { name: "Save answer changes", exact: true }).waitFor();
+      assert.equal(await orientation.getByRole("link", { name: "1 personal answer", exact: true }).count(), 0, "An entered answer needs saving rather than answering again");
       await page.getByRole("link", { name: "Save your changed answers" }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Confirm essay", exact: true }).isDisabled(), true, "Unsaved answers must be saved first");
       await page.getByRole("button", { name: "Save my answers", exact: true }).click();

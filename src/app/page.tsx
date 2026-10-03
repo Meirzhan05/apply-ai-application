@@ -313,6 +313,7 @@ export default function Dashboard() {
                             <h3>Application packet</h3>
                             <span>Version {activeApp.packet.version}</span>
                           </div>
+                          <div id={`resume-review-${activeApp.id}`}>
                           {activeApp.packet.resumeMode === "original" ? (
                             <OriginalResumeInspection packet={activeApp.packet} applicationId={activeApp.id} />
                           ) : hasSourcePreservingResume(activeApp.packet) ? (
@@ -363,6 +364,7 @@ export default function Dashboard() {
                             Open tailored resume PDF ↗
                           </a>
                           </>}
+                          </div>
                           {activeApp.packet.coverLetter && (
                             <div className="cover-letter">
                               <h4>Cover letter</h4>
@@ -377,7 +379,7 @@ export default function Dashboard() {
                               </a>
                             </div>
                           )}
-                          <div className="answers">
+                          <div className="answers" id={`screening-answers-${activeApp.id}`}>
                             <h4>Screening answers</h4>
                             <p className="muted">Review AI drafts, edit wording if needed, then confirm each essay. Personal and consent answers come from you.</p>
                             {activeApp.packet.answers.map((answer, i) => (
@@ -409,7 +411,7 @@ export default function Dashboard() {
                           </div>
                           {activeApp.status === "draft_review" && (
                             <>
-                            <PacketReadiness application={activeApp} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} />
+                            <PacketReadiness application={activeApp} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} />
                             <div className="action-row">
                               <button
                                 id={`save-answers-${activeApp.id}`}
@@ -444,6 +446,7 @@ export default function Dashboard() {
                                 </a>
                               </p>
                               <button
+                                id={`packet-approval-${activeApp.id}`}
                                 className="dark-button"
                                 disabled={
                                   Boolean(busy) || Boolean(activeApp.queuedRun) ||
@@ -1130,7 +1133,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                     )}
-                    {activeApp.status === "draft_review" && applicationMaterials}
+                    {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
                     {!activeAppIsAutomatic && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Ready to fill the employer form</h3>
