@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
-import { answerNeedsAction, answerOwner, applyHumanAnswerEdits, confirmAiEssay, essayContentHash, essayEvidenceHash, validateAiEssay } from "@/lib/answer-policy";
+import { answerNeedsAction, answerOwner, applyHumanAnswerEdits, confirmAiEssay, confirmReviewedEssay, reviseEssay, validateUserEssay, essayContentHash, essayEvidenceHash, validateAiEssay } from "@/lib/answer-policy";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
 import { withPacketFiles } from "@/lib/packet-files";
 import { packetProfileHash } from "@/lib/drafting";
@@ -15,6 +15,35 @@ function fixtureEssay(profile: Profile): ScreeningAnswer {
 }
 
 describe("answer responsibility and confirmation", () => {
+  it("keeps applicant revisions separate from AI evidence and requires fresh confirmation after every edit", async () => {
+    const state = initialDemoState();
+    const facts = structuredClone(state.profile.facts);
+    const original = confirmAiEssay(state.profile, fixtureEssay(state.profile));
+    const revised = reviseEssay(state.profile, original, "I would like to use my survey project experience on this team.");
+    expect(revised).toMatchObject({ author: "human", userProvided: true, factIds: [], requiresUserInput: true });
+    expect(revised.aiDraft).toBeUndefined();
+    expect(revised.confirmedAt).toBeUndefined();
+    expect(revised.userRevision).toMatchObject({ originalAnswer: original.answer, originalDraftHash: original.aiDraft!.contentHash, originalFactIds: original.factIds });
+    expect(answerNeedsAction(revised)).toBe(true);
+    expect(() => validateAiEssay(state.profile, revised)).toThrow();
+    expect(() => validateUserEssay({ ...revised, answer: "Changed without saving" })).toThrow(/changed/);
+    expect(() => reviseEssay(state.profile, original, " ")).toThrow(/between/);
+    expect(() => reviseEssay(state.profile, original, "x".repeat(4001))).toThrow(/between/);
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    const packet = await withPacketFiles(state.profile, { schemaVersion: 1, version: 1, model: "fixture", summary: "fixture", createdAt: new Date().toISOString(), profileHash: packetProfileHash(state.profile), resumeLines: [{ text: facts[0].text, factIds: [facts[0].id] }], answers: [revised] });
+    setPacket(state, app, packet);
+    expect(() => approveFill(app, state.profile.id, app.packetHash!, state.jobs[0].applyUrl)).toThrow(/confirm/);
+    const confirmed = confirmReviewedEssay(state.profile, revised);
+    expect(answerNeedsAction(confirmed)).toBe(false);
+    setPacket(state, app, await withPacketFiles(state.profile, { ...packet, version: 2, answers: [confirmed] }));
+    approveFill(app, state.profile.id, app.packetHash!, state.jobs[0].applyUrl);
+    const next = reviseEssay(state.profile, confirmed, "I want to bring my survey analysis experience to this role.");
+    expect(next.confirmedAt).toBeUndefined();
+    expect(next.userRevision?.originalAnswer).toBe(original.answer);
+    expect(next.userRevision?.contentHash).not.toBe(revised.userRevision?.contentHash);
+    expect(state.profile.facts).toEqual(facts);
+    expect(app.approvals.some((approval) => approval.kind === "submit")).toBe(false);
+  });
   it.each([
     "Are you legally authorized to work in the United States?",
     "Will you now or in the future require visa sponsorship?",

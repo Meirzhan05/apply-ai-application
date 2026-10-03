@@ -8,6 +8,7 @@ import { loadState, mutateState } from "../src/lib/repository";
 import { appendDiscoveryEvent, enqueueStrongMatch } from "../src/lib/discovery";
 import { queueMatchAssessment } from "../src/lib/match-queue";
 import { controlledFixtureAllowsJob } from "../src/lib/controlled-tests";
+import { withAccountOperation } from "../src/lib/account-lifecycle";
 
 class MatchingContextChanged extends Error {
   constructor(readonly reason: "profile_changed" | "authorization_changed" | "job_closed" | "job_changed" | "controlled_scope_changed") {
@@ -34,7 +35,7 @@ export const assessUserMatches = task({
   retry: { maxAttempts: 1 },
   queue: { concurrencyLimit: 1 },
   maxDuration: 300,
-  run: async ({ userId, continuationToken }: { userId: string; continuationToken?: string }, options) => {
+  run: async ({ userId, continuationToken }: { userId: string; continuationToken?: string }, options) => withAccountOperation(userId, "worker", async () => {
     const runId = options?.ctx.run.id ?? newId();
     if (!process.env.OPENAI_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
@@ -145,5 +146,5 @@ export const assessUserMatches = task({
       }
     });
     return { assessed };
-  },
+  }, options?.ctx.run.id),
 });

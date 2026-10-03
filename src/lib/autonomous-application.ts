@@ -6,6 +6,7 @@ import { canonicalJobUrl } from "@/lib/sources";
 import { assertAutomationEnabled, assertAutonomous, authorizeKnownAnswerApplication } from "@/lib/autonomous-policy";
 import type { AppState, Application } from "@/lib/types";
 import type { PilotMutationContext } from "@/lib/pilot";
+import { withAccountOperation } from "@/lib/account-lifecycle";
 
 /** Save the continuation in the same transaction as the ready snapshot. */
 export function saveAutonomousSubmission(state: AppState, app: Application): void {
@@ -59,7 +60,7 @@ export async function dispatchAutonomousSubmissions(userId: string): Promise<num
     const token = app.submissionDispatch.token;
     try {
       if (isDemo()) await (await import("@/lib/application-submission")).runSubmission({ userId, applicationId: app.id, submissionToken: token });
-      else await tasks.trigger("submit-application-form", { userId, applicationId: app.id, submissionToken: token }, { idempotencyKey: token });
+      else await withAccountOperation(userId, "dispatch", () => tasks.trigger("submit-application-form", { userId, applicationId: app.id, submissionToken: token }, { idempotencyKey: token, tags: [`owner:${userId}`] }), `submission:${app.id}:${token}`);
       await mutateState(userId, (state) => { const target = state.applications.find((item) => item.id === app.id); if (target?.submissionDispatch?.token === token) { target.submissionDispatch.confirmedAt = new Date().toISOString(); if (target.status === "submitting" && !target.submissionWorkerClaimedAt) target.error = undefined; } });
       count++;
     } catch {

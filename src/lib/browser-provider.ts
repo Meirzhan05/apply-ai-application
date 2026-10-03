@@ -38,6 +38,13 @@ function browserbaseReport(session: unknown): BrowserProviderReport {
   return { status, startedAt: date("startedAt"), finishedAt: date("endedAt"), expiresAt: date("expiresAt"), proxyUsedMb: bytes };
 }
 
+function providerStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as { status?: unknown; response?: { status?: unknown } };
+  const status = typeof value.status === "number" ? value.status : value.response?.status;
+  return typeof status === "number" && Number.isInteger(status) ? status : undefined;
+}
+
 export function configuredBrowserProvider(): BrowserProvider {
   const selected = process.env.BROWSER_PROVIDER || "browser-use";
   if (selected !== "browser-use" && selected !== "browserbase") throw new Error("Invalid browser provider configuration.");
@@ -49,7 +56,7 @@ export function applicationBrowserProvider(app: Pick<Application, "browserProvid
   return app.browserProvider || "browserbase";
 }
 
-async function browserUseRequest(method: string, suffix = "", body?: unknown) {
+async function browserUseRequest(method: string, suffix = "", body?: unknown, allocationResponse = false) {
   const key = process.env.BROWSER_USE_API_KEY;
   if (!key) throw new Error("Browser Use Cloud is not configured. Add BROWSER_USE_API_KEY on the server.");
   let response: Response;
@@ -59,9 +66,9 @@ async function browserUseRequest(method: string, suffix = "", body?: unknown) {
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(25_000), cache: "no-store",
     });
-  } catch {
+    } catch {
     // Never automatically repeat a session allocation after a transport timeout.
-    throw new Error("Browser Use Cloud could not be reached. No automatic session retry was made.");
+      throw new Error("Browser Use Cloud could not be reached. No automatic session retry was made.");
   }
   if (!response.ok) {
     if (response.status === 402) throw new Error("Browser Use Cloud has insufficient credits. Restore the provider balance before starting a new run.");
@@ -69,7 +76,19 @@ async function browserUseRequest(method: string, suffix = "", body?: unknown) {
     if (response.status === 429) throw new Error("Browser Use Cloud is at capacity. Wait for the current sessions to finish.");
     throw new Error(`Browser Use Cloud request failed (${response.status}).`);
   }
-  return CloudBrowser.parse(await response.json());
+  try {
+    return CloudBrowser.parse(await response.json());
+  } catch (error) {
+    // A successful allocation response may have created a remote browser even
+    // when its body is truncated or does not match the expected schema. Keep
+    // the allocation marker unresolved so account erasure cannot miss it.
+    if (!allocationResponse) throw error;
+    const uncertain = error instanceof Error
+      ? error
+      : new Error("Browser Use Cloud returned an unreadable session response.");
+    Object.assign(uncertain, { allocationUncertain: true });
+    throw uncertain;
+  }
 }
 
 function sessionPath(sessionId: string) {
@@ -79,6 +98,12 @@ function sessionPath(sessionId: string) {
 
 export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrowserSession> {
   const provider = configuredBrowserProvider();
+  if (provider === "browser-use" && !process.env.BROWSER_USE_API_KEY) throw new Error("Browser Use Cloud is not configured. Add BROWSER_USE_API_KEY on the server.");
+  if (provider === "browserbase" && !process.env.BROWSERBASE_API_KEY) throw new Error("Browserbase is not configured.");
+  const bb = provider === "browserbase" ? new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY! }) : undefined;
+  const browserbaseAllowedDomain = provider === "browserbase" ? new URL(targetUrl).hostname : undefined;
+  const allocationOwner = browserUsageContext();
+  if (allocationOwner) await recordBrowserUsageEvent({ ...allocationOwner, provider, sessionId: null, event: "allocation_started", report: null, failure: null, orphanedSessionId: null });
   if (provider === "browser-use") {
     const captchaSolving = process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false";
     let session: Awaited<ReturnType<typeof browserUseRequest>>;
@@ -86,49 +111,56 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
       session = await browserUseRequest("POST", "", {
         timeout: 30, proxyCountryCode: "us", solveCaptchas: captchaSolving,
         enableRecording: false, allowResizing: false,
-      });
+      }, true);
     } catch (error) {
-      const ambiguous = error instanceof Error && error.message.includes("No automatic session retry");
+      const message = error instanceof Error ? error.message : "";
+      const ambiguous = Boolean(error && typeof error === "object" && "allocationUncertain" in error)
+        || message.includes("No automatic session retry")
+        || /^Browser Use Cloud request failed \(5\d\d\)\.$/.test(message)
+        || error instanceof z.ZodError;
       if (ambiguous && error instanceof Error) Object.assign(error, { allocationUncertain: true });
       const owner = browserUsageContext();
       if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: null, event: ambiguous ? "ambiguous" : "failed", report: null, failure: ambiguous ? "ambiguous_allocation" : "allocation_failed", orphanedSessionId: null }).catch(() => undefined);
       throw error;
     }
     try {
+      const report = providerReport(session);
+      const owner = browserUsageContext();
+      if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: session.id, event: "created", report, failure: null, orphanedSessionId: null });
       const connection = new URL(session.cdpUrl || "");
       const viewer = new URL(session.liveUrl || "");
       if (!["wss:", "https:"].includes(connection.protocol) || !connection.hostname.endsWith(".browser-use.com") ||
         viewer.protocol !== "https:" || viewer.hostname !== "live.browser-use.com" || session.status !== "active")
         throw new Error("Browser Use Cloud returned an invalid session connection.");
-      const report = providerReport(session);
       const result = { provider, sessionId: session.id, connectUrl: connection.href, liveUrl: viewer.href, expiresAt: session.timeoutAt, captchaSolving, providerReport: report };
-      const owner = browserUsageContext();
-      if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: session.id, event: "created", report, failure: null, orphanedSessionId: null });
       return result;
     } catch (error) {
       await releaseRemoteBrowser({ browserSessionId: session.id, browserProvider: provider }).catch(() => undefined);
       throw error;
     }
   }
-  if (!process.env.BROWSERBASE_API_KEY) throw new Error("Browserbase is not configured.");
-  const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY });
+  if (!bb || !browserbaseAllowedDomain) throw new Error("Browserbase is not configured.");
   let session: Awaited<ReturnType<typeof bb.sessions.create>>;
   try {
     session = await bb.sessions.create({
       projectId: process.env.BROWSERBASE_PROJECT_ID, keepAlive: true, api_timeout: 1800,
-      browserSettings: { allowedDomains: [new URL(targetUrl).hostname], solveCaptchas: false },
+      browserSettings: { allowedDomains: [browserbaseAllowedDomain], solveCaptchas: false },
     });
   } catch (error) {
+    const status = providerStatus(error);
+    const rejected = status !== undefined && status >= 400 && status < 500;
     const owner = browserUsageContext();
-    if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: null, event: "failed", report: null, failure: "allocation_failed", orphanedSessionId: null }).catch(() => undefined);
+    if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: null, event: rejected ? "failed" : "ambiguous", report: null, failure: rejected ? "allocation_failed" : "ambiguous_allocation", orphanedSessionId: null }).catch(() => undefined);
     throw error;
   }
+  const owner = browserUsageContext();
   try {
+    const initialReport: BrowserProviderReport = { status: "active", startedAt: session.startedAt };
+    if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: session.id, event: "created", report: initialReport, failure: null, orphanedSessionId: null });
     const debug = await bb.sessions.debug(session.id);
     const report: BrowserProviderReport = { status: "active", expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() };
     const result = { provider, sessionId: session.id, connectUrl: session.connectUrl,
       liveUrl: debug.debuggerFullscreenUrl, expiresAt: report.expiresAt, providerReport: report };
-    const owner = browserUsageContext();
     if (owner) await recordBrowserUsageEvent({ ...owner, provider, sessionId: session.id, event: "created", report, failure: null, orphanedSessionId: null });
     return result;
   } catch (error) {

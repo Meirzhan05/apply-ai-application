@@ -6,6 +6,7 @@ import type { AppState, Job } from "@/lib/types";
 import { readActiveCatalogRows } from "@/lib/catalog";
 import { dedupeJobs } from "@/lib/sources";
 import { preparePilotMutation, type PilotMutationContext } from "@/lib/pilot";
+import { AccountDeletionInProgressError } from "@/lib/account-lifecycle";
 
 export { isDemo } from "@/lib/demo-mode";
 
@@ -97,26 +98,16 @@ export async function mutateState<T>(
     preparePilotMutation(previous, state, context);
     const saved: Partial<AppState> = { ...state };
     delete saved.jobs;
-    if (current) {
-      const { data, error } = await client
-        .from("app_states")
-        .update({
-          data: saved,
-          revision: current.revision + 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("user_id", userId)
-        .eq("revision", current.revision)
-        .select("revision");
-      if (error) throw error;
-      if (data && data.length > 0) return result;
-    } else {
-      const { error } = await client
-        .from("app_states")
-        .insert({ user_id: userId, data: saved, revision: 1 });
-      if (!error) return result;
-      if (error.code !== "23505") throw error;
+    const { data: revision, error } = await client.rpc("save_account_state", {
+      p_owner_id: userId,
+      p_expected_revision: current?.revision ?? null,
+      p_data: saved,
+    });
+    if (error) {
+      if (error.message.includes("ACCOUNT_DELETION_IN_PROGRESS")) throw new AccountDeletionInProgressError();
+      throw error;
     }
+    if (revision !== null) return result;
   }
   throw new Error("The application changed concurrently. Please retry.");
 }

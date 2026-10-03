@@ -32,7 +32,8 @@ export async function reserveServiceBudget(
       state.budgetReservations[reservationId] = projectedUsd;
       return true;
     });
-  const { data, error } = await adminSupabase().rpc("reserve_service_budget", {
+  const { data, error } = await adminSupabase().rpc("reserve_account_service_budget", {
+    p_owner_id: userId,
     p_reservation_id: `${month}:${reservationId}`,
     p_month: month,
     p_amount: projectedUsd,

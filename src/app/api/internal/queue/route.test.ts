@@ -65,8 +65,14 @@ describe("internal queue owner scan", () => {
     expect(application.status).toBe("drafting");
     expect(application.runDispatch?.confirmedAt).toBeTruthy();
     expect(fixture.transport!.rpcCalls.map((call) => call.name)).toEqual([
+      "acquire_account_operation",
       "reserve_queued_service_budget",
+      "save_account_state",
       "claim_queued_service_budget",
+      "acquire_account_operation",
+      "release_account_operation",
+      "save_account_state",
+      "release_account_operation",
     ]);
   });
 

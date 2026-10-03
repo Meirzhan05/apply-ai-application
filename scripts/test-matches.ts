@@ -298,6 +298,17 @@ async function main() {
       await strongRole.waitFor();
       await launcher.click();
       await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
+      assert.equal(await url.inputValue(), "https://company.example/careers/role", "Requesting discard preserves draft until confirmed");
+      await page.screenshot({ path: `.data/matches-import-discard-${label}.png` });
+      assert.equal(await dialog.getByRole("button", { name: "Keep editing", exact: true }).evaluate(element => element === document.activeElement), true, "Discard confirmation focuses its safe choice");
+      await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
+      assert.equal(await url.inputValue(), "https://company.example/careers/role");
+      await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
+      await page.keyboard.press("Escape");
+      await launcher.click();
+      assert.equal(await dialog.getByRole("button", { name: "Confirm discard", exact: true }).count(), 0, "Reopening starts without stale discard confirmation");
+      await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
+      await dialog.getByRole("button", { name: "Confirm discard", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
       await page.reload();
       await strongRole.waitFor();
@@ -376,6 +387,8 @@ async function main() {
     for (const [width, height] of [[320, 740], [820, 900], [720, 500]]) {
       await page.setViewportSize({ width, height });
       fixture = publicState(structuredClone(demoState));
+      fixture.profile.demo = false;
+      fixture.profile.name = "Invented QA applicant";
       fixture.jobs[0].title = "Early career software engineering and analytics opportunity — international product development team";
       fixture.jobs[0].company = "International technology research and development company";
       await page.goto(origin);
@@ -387,6 +400,16 @@ async function main() {
         assert.equal(await activityLauncher.evaluate(element => element === document.activeElement), true, "Tablet retains activity access and focus restoration");
       }
       await page.getByRole("article").first().waitFor();
+      if (width <= 650) {
+        await page.getByRole("button", { name: "More pages", exact: true }).click();
+        assert.equal(await page.locator("#more-pages").getByRole("button", { name: "Sign out", exact: true }).isVisible(), true);
+        assert.equal(await page.locator("#more-pages").getByText("Workspace: Invented QA applicant", { exact: true }).isVisible(), true);
+        await page.screenshot({ path: ".data/matches-account-mobile.png" });
+        await page.keyboard.press("Escape");
+      } else {
+        assert.equal(await page.locator(".tablet-signout").isVisible(), true, "Tablet retains account exit");
+        if (width === 820) await page.screenshot({ path: ".data/matches-account-tablet.png" });
+      }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Long-content layout must not overflow at ${width}px`);
       for (const name of ["Matches", "Applications", "Profile", "Search settings"]) {
         const navigation = page.getByRole("button", { name, exact: true });

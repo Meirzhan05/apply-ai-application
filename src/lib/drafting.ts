@@ -6,9 +6,11 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
+import { packetProfileHash } from "@/lib/packet-profile";
+export { packetProfileHash } from "@/lib/packet-profile";
 import { validateResumeArtifact, withPacketFiles } from "@/lib/packet-files";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
-import { validateAiEssay } from "@/lib/answer-policy";
+import { validateAiEssay, validateUserEssay } from "@/lib/answer-policy";
 import { draftResumeDocument, resumeFields, resumeFactIds } from "@/lib/resume-document";
 import { assertSourceInformationComplete, draftResumeSourcePlan, sourceProfileHash } from "@/lib/resume-source-draft";
 import { prepareDocxResumeBaseline, renderDocxResume, type PreparedDocxResumeBaseline } from "@/lib/docx-renderer";
@@ -33,10 +35,6 @@ const DraftSchema = z.object({
     }),
   ),
 });
-
-export function packetProfileHash(profile: Profile): string {
-  return hashJson({ name: profile.name, email: profile.email, phone: profile.phone, school: profile.school, graduationYear: profile.graduationYear, skills: profile.skills, facts: profile.facts.filter((fact) => fact.verified), sensitiveAnswers: profile.sensitiveAnswers, automationVersion: profile.automationVersion, automationSettings: profile.automationSettings, resumeSource: profile.resumeSource, resumeFileName: profile.resumeFileName });
-}
 
 function relevantFacts(profile: Profile, job: Job): VerifiedFact[] {
   const terms =
@@ -281,6 +279,10 @@ export function validatePacket(
       );
   }
   for (const answer of packet.answers) {
+    if (answer.userRevision) {
+      validateUserEssay(answer);
+      continue;
+    }
     if (answer.aiDraft) {
       validateAiEssay(profile, answer);
       if (!answer.requiresUserInput && !answer.confirmedAt) throw new Error("Confirm the AI essay before approving it.");

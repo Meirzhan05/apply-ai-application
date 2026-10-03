@@ -114,6 +114,17 @@ describe("service cost ledger", () => {
     expect(csv).toContain('"summary"');
   });
 
+  it("does not treat a definite rejected allocation and its start marker as billable uncertainty", async () => {
+    fixtures.browsers = [
+      { ...browser("owner-a", null, null, "application"), id: "allocation-start", event: "allocation_started", failure: null, report: null, runId: "definite-rejection" },
+      { ...browser("owner-a", null, null, "application"), id: "allocation-rejected", event: "failed", failure: "allocation_failed", report: null, runId: "definite-rejection" },
+    ];
+    fixtures.states.set("owner-a", { applications: [] });
+    const report = await costReport("owner-a");
+    expect(report.unknownComponents).toBe(0);
+    expect(report.evidence).toEqual([]);
+  });
+
   it("counts cancelled, failed, and matching-only attempts as active users", async () => {
     fixtures.models = [model("owner-matching", "matching-only", 0.2), model("owner-cancelled", "cancelled-attempt", null), model("owner-failed", "failed-attempt", null)];
     fixtures.states.set("owner-cancelled", { applications: [{ id: "cancelled", userId: "owner-cancelled", status: "cancelled", createdAt: "2026-10-01", runs: [] }] });

@@ -6,6 +6,8 @@ import { approveBrowserAnswers, assertQuestionSession, type BrowserAnswerInput }
 import { fillApprovedBrowserAnswers } from "@/lib/browser-runner";
 import { draftEssayAnswers } from "@/lib/essay-drafting";
 import { packetProfileHash } from "@/lib/drafting";
+import { reviseEssay } from "@/lib/answer-policy";
+import { answerReviewHash } from "@/lib/answer-responsibility";
 import { reserveServiceBudget } from "@/lib/budget";
 import { setFormSnapshot, transition } from "@/lib/workflow";
 import type { AppState } from "@/lib/types";
@@ -107,4 +109,23 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
     }, context);
     throw error;
   }
+}
+
+export async function reviseBrowserEssay(userId: string, applicationId: string, formHash: string, questionId: string,
+  expectedAnswerHash: string, text: string, bindings: { sessionId: string; packetHash: string }, context?: PilotMutationContext) {
+  return mutateState(userId, (state) => {
+    const app = find(state, userId, applicationId);
+    assertQuestionSession(app, state.profile, formHash);
+    if (app.browserSessionId !== bindings.sessionId || app.packetHash !== bindings.packetHash)
+      throw new Error("The browser session or packet changed. Review the current essay before editing.");
+    const question = browserQuestions(app.form).find((item) => item.id === questionId && item.owner === "ai");
+    const drafts = app.browserQuestionDrafts;
+    const answer = drafts?.answers[questionId];
+    if (!question || !drafts || !answer || answer.question !== question.label || drafts.formHash !== formHash ||
+      drafts.sessionId !== app.browserSessionId || drafts.packetHash !== app.packetHash ||
+      !answerReviewHash(answer) || answerReviewHash(answer) !== expectedAnswerHash)
+      throw new Error("The browser essay changed. Review its latest wording before editing.");
+    drafts.answers[questionId] = reviseEssay(state.profile, answer, text);
+    app.updatedAt = new Date().toISOString();
+  }, context);
 }

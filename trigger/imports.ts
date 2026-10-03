@@ -2,11 +2,12 @@ import { task } from "@trigger.dev/sdk";
 import { loadState, mutateState } from "../src/lib/repository";
 import { applyImportedRefresh, refreshImportedJobs } from "../src/lib/import-jobs";
 import { queueMatchAssessment } from "../src/lib/match-queue";
+import { withAccountOperation } from "../src/lib/account-lifecycle";
 
 export const refreshUserImports = task({
   id: "refresh-user-imported-jobs",
   retry: { maxAttempts: 1 }, queue: { concurrencyLimit: 1 }, maxDuration: 600,
-  run: async ({ userId }: { userId: string }) => {
+  run: async ({ userId }: { userId: string }, { ctx }) => withAccountOperation(userId, "worker", async () => {
     const state = await loadState(userId);
     const before = state.importedJobs ?? [];
     if (!before.length) return { checked: 0 };
@@ -23,5 +24,5 @@ export const refreshUserImports = task({
         return { checked: 0, stopped: "owner_removed" };
       throw error;
     }
-  },
+  }, ctx.run.id),
 });

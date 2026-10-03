@@ -1,5 +1,6 @@
 import { browserQuestions, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
-import { confirmAiEssay } from "@/lib/answer-policy";
+import { confirmReviewedEssay } from "@/lib/answer-policy";
+import { answerReviewHash } from "@/lib/answer-responsibility";
 import { hasFillApproval } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
 import type { Application, BrowserAnswerApproval, Profile } from "@/lib/types";
@@ -30,9 +31,9 @@ export function approveBrowserAnswers(app: Application, profile: Profile, formHa
       const drafts = app.browserQuestionDrafts;
       if (!input.confirmEssay || input.value !== undefined || drafts?.formHash !== formHash ||
         drafts.sessionId !== app.browserSessionId || drafts.packetHash !== app.packetHash || !drafts.answers[question.id] ||
-        drafts.answers[question.id].question !== question.label || input.answerHash !== drafts.answers[question.id].aiDraft?.contentHash)
+        drafts.answers[question.id].question !== question.label || !answerReviewHash(drafts.answers[question.id]) || input.answerHash !== answerReviewHash(drafts.answers[question.id]))
         throw new Error("Review and confirm the current AI essay before continuing.");
-      answer = confirmAiEssay(profile, drafts.answers[question.id]);
+      answer = confirmReviewedEssay(profile, drafts.answers[question.id]);
     } else {
       const value = input.value?.trim();
       if (!value || value.length > 4000 || (question.kind === "checkbox" && value !== "Yes") || (question.options.length && !question.options.includes(value)))

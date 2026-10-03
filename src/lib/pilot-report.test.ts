@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { saveOnboarding } from "@/lib/onboarding";
 import { appendPilotReview, enrollPilot, pilotEvidenceDigest, preparePilotMutation } from "@/lib/pilot";
-import { buildPilotReportSnapshot, pilotReportDigest, pilotReportIdentity } from "@/lib/pilot-report";
+import { buildPilotReportSnapshot, pilotReportDigest, pilotReportIdentity, redactPilotReportOwner } from "@/lib/pilot-report";
 import { selectApplication } from "@/lib/workflow";
 
 function reportWith(count: number) {
@@ -109,4 +109,34 @@ it("keeps a replay of one input snapshot idempotent despite capture timestamps",
   replay.sourceManifest.stateRows[0].readAt = replay.sourceManifest.stateReadAt;
   expect(pilotReportIdentity(first)).toBe(pilotReportIdentity(replay));
   expect(pilotReportDigest(first)).toBe(pilotReportDigest(replay));
+});
+
+it("erases one owner's shared pilot evidence while preserving other owners and their invoice evidence", () => {
+  const ownerA = "owner-a";
+  const ownerB = "owner-b";
+  const report = buildPilotReportSnapshot(reportWith(0), { kind: "operator", userId: ownerA }, { stateOwnerIds: [ownerA, ownerB] });
+  const attemptA = structuredClone(report.attempts[0]);
+  attemptA.costEvidence.evidenceIds = ["model-a"];
+  attemptA.costEvidence.estimatedEvidenceIds = ["model-a"];
+  const attemptB = structuredClone(attemptA);
+  attemptB.id = "attempt-b";
+  attemptB.ownerId = ownerB;
+  attemptB.applicationId = "application-b";
+  attemptB.costEvidence.evidenceIds = ["model-b"];
+  attemptB.costEvidence.estimatedEvidenceIds = ["model-b"];
+  report.attempts = [attemptA, attemptB];
+  report.sourceManifest.cost = { scope: "service", evidenceIds: ["model-a", "model-b"], unknownComponents: 0, complete: true, capturedAt: new Date().toISOString() };
+  report.sourceManifest.stateRows = [
+    { ownerId: ownerA, readAt: report.sourceManifest.stateReadAt, eventPrefixes: [] },
+    { ownerId: ownerB, readAt: report.sourceManifest.stateReadAt, eventPrefixes: [] },
+  ];
+
+  const redacted = redactPilotReportOwner(report, ownerA, ["browser:event:a-only"]);
+  expect(report.attempts).toHaveLength(2);
+  expect(redacted.attempts.map((attempt) => attempt.ownerId)).toEqual([ownerB]);
+  expect(redacted.attempts[0].costEvidence.evidenceIds).toEqual(["model-b"]);
+  expect(redacted.sourceManifest.cost?.evidenceIds).toEqual(["model-b"]);
+  expect(redacted.sourceManifest.stateOwnerIds).toEqual([ownerB]);
+  expect(redacted.sourceManifest.stateRows.map((row) => row.ownerId)).toEqual([ownerB]);
+  expect(redacted.createdBy).toEqual({ kind: "service" });
 });

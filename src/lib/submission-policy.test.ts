@@ -13,7 +13,8 @@ vi.mock("@/lib/browser-runner", () => ({ submitBrowser: mocks.submit, cancelBrow
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn() }));
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs(); });
 
-const run = (submitApplicationForm as unknown as { run: (payload: { userId: string; applicationId: string }) => Promise<Record<string, unknown>> }).run;
+const taskRun = (submitApplicationForm as unknown as { run: (payload: { userId: string; applicationId: string }, options: { ctx: { run: { id: string } } }) => Promise<Record<string, unknown>> }).run;
+const run = (payload: { userId: string; applicationId: string }) => taskRun(payload, { ctx: { run: { id: "synthetic-submit-run" } } });
 
 describe("eligibility changes after form review", () => {
   it("persists a post-click challenge as awaiting verification and skips duplicate workers", async () => {

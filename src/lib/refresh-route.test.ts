@@ -1,17 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/internal/refresh/route";
-const mocks = vi.hoisted(() => ({ catalog: vi.fn(), admin: vi.fn(), match: vi.fn(), mutate: vi.fn(), trigger: vi.fn(), owners: [] as Array<{ user_id: string; data: Record<string, unknown> }> }));
+const mocks = vi.hoisted(() => ({ catalog: vi.fn(), admin: vi.fn(), match: vi.fn(), mutate: vi.fn(), trigger: vi.fn(), leases: [] as Array<{ ownerId: string; operation: string; reference?: string }>, owners: [] as Array<{ user_id: string; data: Record<string, unknown> }> }));
 vi.mock("@/lib/catalog-refresh", () => ({ refreshCatalog: mocks.catalog }));
 vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: mocks.admin }));
 vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: mocks.match }));
 vi.mock("@/lib/repository", () => ({ mutateState: mocks.mutate }));
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: mocks.trigger } }));
+vi.mock("@/lib/account-lifecycle", () => ({ withAccountOperation: async (ownerId: string, operation: string, callback: () => Promise<unknown>, reference?: string) => {
+  mocks.leases.push({ ownerId, operation, reference });
+  return callback();
+} }));
 beforeEach(() => {
   vi.stubEnv("DEMO_MODE", "false"); vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic");
   vi.stubEnv("TRIGGER_SECRET_KEY", "synthetic"); vi.stubEnv("OPENAI_API_KEY", "synthetic");
   mocks.catalog.mockResolvedValue({ sources: 3, jobs: 5, closed: 0, errors: [] });
   mocks.mutate.mockResolvedValue(undefined);
   mocks.trigger.mockResolvedValue({ id: "fixture" }); mocks.match.mockResolvedValue({ id: "fixture" });
+  mocks.leases = [];
   mocks.owners = [
     { user_id: "owner-import", data: { importedJobs: [{}] } }, { user_id: "owner-catalog", data: {} },
   ];
@@ -30,8 +35,11 @@ describe("scheduled discovery refresh", () => {
   });
   it("queues private import refresh first and matches other owners directly", async () => {
     expect((await POST(request())).status).toBe(200);
-    expect(mocks.trigger).toHaveBeenCalledExactlyOnceWith("refresh-user-imported-jobs", { userId: "owner-import" }, { concurrencyKey: "owner-import" });
+    expect(mocks.trigger).toHaveBeenCalledExactlyOnceWith("refresh-user-imported-jobs", { userId: "owner-import" }, { concurrencyKey: "owner-import", tags: ["owner:owner-import"] });
     expect(mocks.match).toHaveBeenCalledExactlyOnceWith("owner-catalog");
+    expect(mocks.leases).toContainEqual({ ownerId: "owner-import", operation: "maintenance", reference: "internal/refresh" });
+    expect(mocks.leases).toContainEqual({ ownerId: "owner-import", operation: "dispatch", reference: "refresh-imports" });
+    expect(mocks.leases).toContainEqual({ ownerId: "owner-catalog", operation: "maintenance", reference: "internal/refresh" });
   });
   it("monitors imports even when matching is unavailable", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
