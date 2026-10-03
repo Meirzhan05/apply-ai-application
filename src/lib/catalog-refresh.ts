@@ -6,21 +6,33 @@ import {
   fetchBoard,
 } from "@/lib/sources";
 import { isDemo, saveCatalog } from "@/lib/repository";
-import { updateState } from "@/lib/store";
+import { readState, updateState } from "@/lib/store";
 import type { Job } from "@/lib/types";
 import { readActiveCatalogRows } from "@/lib/catalog";
+import { recordDiscoveryRefresh, type DiscoveryRefreshReport } from "@/lib/discovery";
 
-export async function refreshCatalog(): Promise<{
-  sources: number;
-  jobs: number;
-  closed: number;
-  errors: string[];
-}> {
+export async function refreshCatalog(): Promise<DiscoveryRefreshReport & { sources: number; jobs: number; closed: number; errors: string[] }> {
+  const refreshedAt = new Date().toISOString();
   const boards = configuredBoards();
+  const previousIds = new Set<string>();
+  let catalogRows: Array<{ id: string; data: Job }> = [];
+  if (isDemo()) {
+    const state = await readState();
+    for (const job of state.jobs.filter((item) => item.active)) previousIds.add(job.id);
+  } else {
+    catalogRows = await readActiveCatalogRows();
+    for (const row of catalogRows) previousIds.add(String(row.id));
+  }
   const results = await Promise.allSettled(
     boards.map((board) => fetchBoard(board)),
   );
   const errors: string[] = [];
+  const sourceStatus = boards.map((board, index) => {
+    const result = results[index];
+    return result.status === "fulfilled"
+      ? { source: `${board.source}:${board.slug}`, status: "available" as const, checkedAt: refreshedAt }
+      : { source: `${board.source}:${board.slug}`, status: "unavailable" as const, checkedAt: refreshedAt, error: String(result.reason) };
+  });
   const activeBoards = boards.filter(
     (_, i) => results[i].status === "fulfilled",
   );
@@ -46,7 +58,7 @@ export async function refreshCatalog(): Promise<{
     });
   } else if (activeBoards.length) {
     const client = adminSupabase();
-    const data = await readActiveCatalogRows();
+    const data = catalogRows;
     const stale = data.filter(
       (row) =>
         activeBoards.some((board) =>
@@ -64,10 +76,18 @@ export async function refreshCatalog(): Promise<{
     }
   }
   await saveCatalog(incoming);
+  if (isDemo()) await updateState((state) => recordDiscoveryRefresh(state, {
+    refreshedAt,
+    sourceStatus,
+    arrivals: incoming.filter((job) => !previousIds.has(job.id)).map((job) => ({ jobId: job.id, source: job.source, discoveredAt: job.discoveredAt })),
+  }));
   return {
-    sources: activeBoards.length,
+    refreshedAt,
+    sourceStatus,
+    sources: sourceStatus.filter((source) => source.status === "available").length,
     jobs: dedupeJobs(incoming).length,
     closed,
     errors,
+    arrivals: incoming.filter((job) => !previousIds.has(job.id)).map((job) => ({ jobId: job.id, source: job.source, discoveredAt: job.discoveredAt })),
   };
 }

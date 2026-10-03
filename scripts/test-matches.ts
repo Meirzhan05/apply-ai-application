@@ -4,11 +4,17 @@ import { chromium } from "playwright-core";
 import { initialDemoState } from "../src/lib/demo-data";
 import { publicState } from "../src/lib/public-state";
 import { updateJobFeedback } from "../src/lib/job-feedback";
+import { matchKey } from "../src/lib/match-cache";
+import { assessMatchLocally } from "../src/lib/matching";
 
 async function main() {
   const origin = process.env.TEST_MATCHES_URL || "http://localhost:3008";
   const demoState = initialDemoState();
   demoState.jobs.forEach((job, index) => { job.postedAt = new Date(Date.now() - index * 86400000).toISOString(); });
+  const intern = demoState.jobs.find(job => job.id === "demo-engineering-intern")!;
+  // Deliberately exercise a high-fit assessment with unresolved eligibility;
+  // ranking policy changes must not remove this presentation regression case.
+  demoState.matchCache = { [matchKey(demoState.profile, intern)]: { ...assessMatchLocally(demoState.profile, intern), category: "strong" } };
   let fixture = publicState(demoState);
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
@@ -114,6 +120,11 @@ async function main() {
       assert.equal(await page.getByRole("article").count(), 3);
       await page.getByRole("button", { name: "Close feedback message", exact: true }).click();
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
+      fixture.automation.enabled = true;
+      await page.reload();
+      await strongRole.getByRole("button", { name: "Apply automatically", exact: true }).waitFor();
+      assert.match(await strongRole.locator(".preparation-note").innerText(), /can prepare and submit/);
+      assert.doesNotMatch(await strongRole.locator(".preparation-note").innerText(), /You approve materials/);
       console.log(`PASS ${label}: fit/search/counts/sort/disclosure, dialog keyboard behavior, touch targets, save/unsave, dismissal undo and restore`);
     }
   } finally { await browser.close(); }

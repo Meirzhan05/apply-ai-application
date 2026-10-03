@@ -1,10 +1,13 @@
 import { assessMatchLocally } from "@/lib/matching";
 import { matchKey } from "@/lib/match-cache";
+import { automationStatus, onboardingCompleteness } from "@/lib/onboarding";
 import type { AppState } from "@/lib/types";
 
 export function publicState(state: AppState) {
   return {
     ...state,
+    onboarding: onboardingCompleteness(state.profile),
+    automation: automationStatus(state.profile),
     applications: state.applications.map((application) => {
       const safe = { ...application };
       delete safe.browserConnectUrl;

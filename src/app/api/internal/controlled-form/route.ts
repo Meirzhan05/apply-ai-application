@@ -3,6 +3,15 @@ import { verifyControlledTestGrant } from "@/lib/controlled-tests";
 import { loadState, mutateState } from "@/lib/repository";
 import { hasSubmissionApproval } from "@/lib/workflow";
 import { sameOrigin } from "@/lib/request-security";
+import { hasBoundSubmissionAttempt } from "@/lib/autonomous-policy";
+import type { AppState, Application } from "@/lib/types";
+
+function authorizedAttempt(state: AppState, app: Application) {
+  if (app.autonomousAuthorization) return hasBoundSubmissionAttempt(app, state.profile, state.jobs.find((job) => job.id === app.jobId));
+  // Existing review approvals remain required. The durable attempt marker does
+  // not invalidate the receiver's check of the approvals that authorized it.
+  return hasSubmissionApproval({ ...app, submissionAttemptedAt: undefined }) && app.status === "submitting" && Boolean(app.submissionWorkerClaimedAt);
+}
 
 export const runtime = "nodejs";
 
@@ -27,9 +36,11 @@ export async function GET(request: Request) {
     if (!context.app.controlledTest?.verification || context.app.controlledTest.submissions !== 1) return new Response("Not found", { status: 404 });
     return html("<h1>Synthetic verification challenge</h1><p>This is a controlled test, not a CAPTCHA provider.</p>", true);
   }
-  const questions = context.app.controlledTest?.questions ? '<fieldset><legend>Will you now or in the future require visa sponsorship?</legend><label><input type="radio" name="sponsorship" value="Yes" required>Yes</label><label><input type="radio" name="sponsorship" value="No" required>No</label></fieldset><label>Favorite snack<select name="snack" required><option value="">Choose an option</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label>' : "";
+  const factualQuestions = context.app.controlledTest?.factualOnly ? '<fieldset><legend>Will you now or in the future require visa sponsorship?</legend><label><input type="radio" name="sponsorship" value="Yes" required>Yes</label><label><input type="radio" name="sponsorship" value="No" required>No</label></fieldset><label>Favorite snack<select name="snack" required><option value="">Choose an option</option><option>Chips</option><option>Fruit</option></select></label>' : "";
+  const questions = factualQuestions || (context.app.controlledTest?.questions ? '<fieldset><legend>Will you now or in the future require visa sponsorship?</legend><label><input type="radio" name="sponsorship" value="Yes" required>Yes</label><label><input type="radio" name="sponsorship" value="No" required>No</label></fieldset><label>Favorite snack<select name="snack" required><option value="">Choose an option</option><option>Chips</option><option>Fruit</option></select></label><label>Why are you excited to join us?<textarea name="why" required></textarea></label>' : "");
+  const automaticEssay = context.app.controlledTest?.essayOnly && !context.app.controlledTest.questions ? '<label>Why this role?<textarea name="why" required></textarea></label>' : "";
   // Token characters are restricted to base64url and a separator by signing.
-  return html(`<p>Controlled cloud test · no employer receives this application</p><h1>Synthetic test application</h1><form action="/api/internal/controlled-form?token=${token}" method="post" enctype="multipart/form-data" style="display:grid;gap:18px"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" accept=".pdf" required></label>${questions}<button type="submit">Submit application</button></form>`);
+  return html(`<p>Controlled cloud test · no employer receives this application</p><h1>Synthetic test application</h1><form action="/api/internal/controlled-form?token=${token}" method="post" enctype="multipart/form-data" style="display:grid;gap:18px"><label>First name<input name="firstName" required></label><label>Last name<input name="lastName" required></label><label>Email<input name="email" type="email" required></label><label>Resume<input name="resume" type="file" accept=".pdf" required></label>${questions}${automaticEssay}<button type="submit">Submit application</button></form>`);
 }
 
 export async function POST(request: Request) {
@@ -46,7 +57,7 @@ export async function POST(request: Request) {
     });
     return verified ? html("<h1>Application received</h1><p>The existing synthetic attempt was verified. No employer was contacted.</p>") : new Response("Verification already handled", { status: 409 });
   }
-  if (!context || !hasSubmissionApproval(context.app) || context.app.status !== "submitting" || !context.app.submissionWorkerClaimedAt) return new Response("Approved test run required", { status: 403 });
+  if (!context || !authorizedAttempt(context.state, context.app)) return new Response("Authorized test attempt required", { status: 403 });
   const size = Number(request.headers.get("content-length") || "0");
   if (size > 2_000_000) return new Response("Test file too large", { status: 413 });
   const data = await request.formData();
@@ -55,13 +66,14 @@ export async function POST(request: Request) {
   const bytes = Buffer.from(await resume.arrayBuffer());
   const fileHash = `${resume.name}:${resume.size}:${createHash("sha256").update(bytes).digest("hex")}`;
   if (!context.app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes?.includes(fileHash)) return new Response("The reviewed attachment changed", { status: 409 });
-  for (const identifier of ["firstName", "lastName", "email", ...(context.app.controlledTest?.questions ? ["sponsorship", "snack", "why"] : [])]) {
+  const factualIdentifiers = context.app.controlledTest?.factualOnly ? ["sponsorship", "snack"] : context.app.controlledTest?.questions ? ["sponsorship", "snack", "why"] : context.app.controlledTest?.essayOnly ? ["why"] : [];
+  for (const identifier of ["firstName", "lastName", "email", ...factualIdentifiers]) {
     const reviewed = context.app.form.fields.find((field) => field.identifier === identifier && (field.kind !== "radio" || field.checked));
     if (!reviewed?.value || reviewed.value !== String(data.get(identifier) || "")) return new Response("The reviewed fields changed", { status: 409 });
   }
   const accepted = await mutateState(context.grant.userId, (state) => {
     const app = state.applications.find((item) => item.id === context.grant.applicationId);
-    if (!app?.controlledTest || app.controlledTest.submissions !== 0 || !hasSubmissionApproval(app) || app.status !== "submitting") return false;
+    if (!app?.controlledTest || app.controlledTest.submissions !== 0 || !authorizedAttempt(state, app)) return false;
     app.controlledTest.submissions = 1;
     return true;
   });

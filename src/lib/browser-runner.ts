@@ -1,7 +1,10 @@
+import { meterModelResponse } from "@/lib/model-usage";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isIP } from "node:net";
 import { hashJson } from "@/lib/crypto";
+import { canonicalJobUrl } from "@/lib/sources";
 import { createRemoteBrowser, releaseRemoteBrowser, type RemoteBrowserSession } from "@/lib/browser-provider";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -11,10 +14,14 @@ import { reviewedPacketFile } from "@/lib/packet-files";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
+import { assertAutonomous, autonomyProfileHash, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
+import { reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
+import { automaticEssayQuestions, hasBoundAutonomousEssayControl } from "@/lib/autonomous-essays";
 import { browserQuestions } from "@/lib/browser-questions";
 import { answerOwner } from "@/lib/answer-responsibility";
+import { browserUsageContext, recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
 import type {
   Application,
   FormFieldSnapshot,
@@ -32,6 +39,28 @@ const localBrowsers = (globalRuntime.applyAiLocalBrowsers ??= new Map<
   string,
   Runtime
 >());
+
+async function browserUsageEvent(application: Application, event: Parameters<typeof recordBrowserUsageEvent>[0]["event"], sessionId = application.browserSessionId, report: Parameters<typeof recordBrowserUsageEvent>[0]["report"] = null, failure: Parameters<typeof recordBrowserUsageEvent>[0]["failure"] = null, orphanedSessionId: string | null = null) {
+  if ((!sessionId && !["failed", "ambiguous"].includes(event)) || sessionId?.startsWith("local-")) return;
+  const owner = { userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.runToken ?? application.browserQuestionRun?.token ?? application.id };
+  const provider = application.browserProvider ?? (process.env.BROWSER_PROVIDER === "browser-use" ? "browser-use" : "browserbase");
+  const write = () => recordBrowserUsageEvent({ ...owner, provider, sessionId: sessionId ?? null, event, report, failure, orphanedSessionId });
+  await (browserUsageContext() ? write() : withBrowserUsageContext(owner, write));
+}
+
+async function disconnectBrowser(application: Application, browser: Browser, sessionId = application.browserSessionId) {
+  await browser.close().catch(() => undefined);
+  await browserUsageEvent(application, "disconnected", sessionId).catch(() => undefined);
+}
+
+async function releaseStrictSession(sessionId: string, provider: RemoteBrowserSession["provider"] | undefined) {
+  const report = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+  if (!report || report.status !== "stopped") throw new Error("The browser provider did not confirm the session stopped.");
+}
+
+function annotatePreflightError(error: unknown, sessionId: string, provider: RemoteBrowserSession["provider"] | undefined, releaseConfirmed: boolean): void {
+  if (error instanceof Error) Object.assign(error, { browserSessionId: sessionId, browserProvider: provider, browserReleaseConfirmed: releaseConfirmed });
+}
 
 interface InspectedField {
   index: number;
@@ -292,17 +321,18 @@ function allowedValues(
     email: profile.email,
     phone: profile.phone,
     school: profile.school,
-    graduation_date: profile.graduationYear,
+    graduation_date: profile.onboarding?.questionnaire.graduationYear || profile.graduationYear,
+    availability: profile.onboarding?.questionnaire.availability || "",
     cover_letter: application.packet?.coverLetter || "",
   };
   application.packet?.answers.forEach((answer, index) => {
     if (
-      (!answer.requiresUserInput || answer.userProvided) &&
+      (!answer.requiresUserInput || answer.userProvided || (application.autonomousAuthorization && answer.autonomousEssayAuthorization)) &&
       answer.answer.trim()
     )
       values[`answer_${index}`] = answer.answer;
   });
-  Object.entries(profile.sensitiveAnswers).forEach(([key, value]) => {
+  Object.entries(reusableFactualAnswers(profile)).forEach(([key, value]) => {
     values[`saved_${key}`] = value;
   });
   return values;
@@ -313,6 +343,8 @@ function deterministicKey(
   application: Application,
 ): string | undefined {
   const label = field.label.toLowerCase().trim().replace(/\s+/g, " ");
+  const boundIndex = application.autonomousAuthorization ? application.packet?.answers.findIndex((answer) => answer.autonomousEssayAuthorization?.control?.identifier === field.identifier && answer.autonomousEssayAuthorization.control.kind === field.kind && answer.autonomousEssayAuthorization.control.label === field.label) : undefined;
+  if (boundIndex !== undefined && boundIndex >= 0) return `answer_${boundIndex}`;
   const answerIndex = application.packet?.answers.findIndex(
     (answer) => answer.question.toLowerCase().trim().replace(/\s+/g, " ") === label,
   );
@@ -324,6 +356,7 @@ function deterministicKey(
   if (/e.?mail/.test(label) || field.kind === "email") return "email";
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
   if (/school|university|college/.test(label)) return "school";
+  if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
   if (/sponsor/.test(label)) return "saved_requiresSponsorship";
   if (/authorized.*work|work.*authoriz/.test(label)) return "saved_workAuthorization";
@@ -338,6 +371,28 @@ function deterministicKey(
 
 function sensitiveQuestion(label: string): boolean {
   return /authoriz|sponsor|visa|citizenship|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
+}
+
+// Owner-confirmed screening values are separate from AI essay authorization.
+// They may only be applied when the fresh page exposes the same control and
+// option set at the same authorized destination.
+function humanAnswerForField(field: InspectedField, fields: InspectedField[], application: Application, profile: Profile, targetUrl: string) {
+  const group = field.kind === "radio"
+    ? fields.filter((candidate) => candidate.kind === "radio" && candidate.identifier === field.identifier && candidate.label === field.label)
+    : [];
+  const currentOptions = field.kind === "radio" ? group.map((candidate) => candidate.value) : field.options;
+  const currentLabels = field.kind === "radio" ? group.map((candidate) => candidate.optionLabel) : field.options;
+  return application.autonomousHumanAnswers?.find((answer) => {
+    if (answer.userId !== application.userId || answer.applicationId !== application.id || answer.profileHash !== autonomyProfileHash(profile) ||
+      answer.targetUrl !== targetUrl || answer.question.identifier !== field.identifier || answer.question.kind !== field.kind || answer.question.label !== field.label)
+      return false;
+    if (field.kind !== "radio") return answer.question.options.length === currentOptions.length && answer.question.options.every((option, index) => option === currentOptions[index]);
+    if (!answer.question.optionValues || answer.question.options.length !== currentLabels.length || answer.question.optionValues.length !== currentOptions.length ||
+      !answer.question.options.every((option, index) => option === currentLabels[index]) || !answer.question.optionValues.every((option, index) => option === currentOptions[index]) ||
+      new Set(currentLabels).size !== currentLabels.length || new Set(currentOptions).size !== currentOptions.length) return false;
+    const matchingCandidates = group.filter((candidate) => candidate.value === answer.value || candidate.optionLabel === answer.value);
+    return matchingCandidates.length === 1;
+  });
 }
 
 function matchingOption(label: string, value: string, options: string[]): string | undefined {
@@ -404,8 +459,9 @@ async function aiMappings(
   if (!fields.length || !process.env.OPENAI_API_KEY) return new Map();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 0 });
   try {
-    const response = await client.responses.parse({
-      model: "gpt-6-astra",
+    const response = await meterModelResponse({ userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.browserQuestionRun?.token ?? application.runToken }, "browser-field-mapping", DEFAULT_AI_MODEL, () => client.responses.parse({
+      model: DEFAULT_AI_MODEL,
+      service_tier: "default",
       store: false,
       input: [
         {
@@ -431,7 +487,7 @@ async function aiMappings(
         },
       ],
       text: { format: zodTextFormat(BrowserMapping, "browser_field_mapping") },
-    });
+    }));
     return new Map(
       (response.output_parsed?.mappings ?? [])
         .filter(
@@ -465,6 +521,7 @@ async function snapshot(
         field.kind === "file"
           ? field.value.split(/[\\/]/).pop() || ""
           : ["radio", "checkbox"].includes(field.kind) ? field.optionLabel : field.value,
+      optionValue: field.kind === "radio" ? field.value : undefined,
       kind: field.kind,
       required: field.required,
       checked: ["checkbox", "radio"].includes(field.kind) ? field.checked : undefined,
@@ -521,6 +578,147 @@ async function snapshot(
   };
 }
 
+export async function preflightBrowser(
+  application: Application,
+  job: Job,
+  onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
+): Promise<{
+  form: Omit<FormSnapshot, "hash">;
+  contextHash: string;
+  postingContext: { title?: string; company?: string; location?: string; text: string };
+  postingEvidence: { postingUrl: string; postingIdentityHash: string; title?: string; company?: string; markers: string[]; identityHash: string };
+  sessionId: string;
+  provider?: RemoteBrowserSession["provider"];
+  expiresAt?: string;
+}> {
+  if (!canAutomate(job.url) || !canAutomate(job.applyUrl)) throw new Error("This site requires a manual application handoff.");
+  let runtime: Runtime;
+  let sessionId: string;
+  let provider: RemoteBrowserSession["provider"] | undefined;
+  let expiresAt: string | undefined;
+  let remote = false;
+  if (!isDemo()) {
+    const session = await createRemoteBrowser(job.applyUrl);
+    sessionId = session.sessionId;
+    provider = session.provider;
+    expiresAt = session.expiresAt;
+    remote = true;
+    application.browserSessionId = sessionId;
+    application.browserProvider = provider;
+    try {
+      if (onSession && !(await onSession({ sessionId, provider, expiresAt }))) throw new Error("The browser preflight was cancelled before observation.");
+    } catch (error) {
+      try {
+        const released = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!released || released.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        application.browserSessionId = undefined;
+        application.browserProvider = undefined;
+        annotatePreflightError(error, sessionId, provider, true);
+      } catch (releaseError) {
+        annotatePreflightError(releaseError, sessionId, provider, false);
+        throw releaseError;
+      }
+      throw error;
+    }
+    try {
+      const browser = await chromium.connectOverCDP(session.connectUrl);
+      const context = browser.contexts()[0];
+      const page = context.pages()[0] ?? await context.newPage();
+      runtime = { browser, page };
+      await restrictNavigation(page, job.url);
+    } catch (error) {
+      try {
+        const released = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!released || released.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        application.browserSessionId = undefined;
+        application.browserProvider = undefined;
+        annotatePreflightError(error, sessionId, provider, true);
+      } catch (releaseError) {
+        annotatePreflightError(releaseError, sessionId, provider, false);
+        throw releaseError;
+      }
+      throw error;
+    }
+  } else {
+    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
+    const page = await browser.newPage();
+    sessionId = `local-preflight-${application.id}`;
+    runtime = { browser, page };
+    localBrowsers.set(sessionId, runtime);
+  }
+  application.browserSessionId = sessionId;
+  application.browserProvider = provider;
+  let bodyError: unknown;
+  try {
+    if (!remote && onSession && !(await onSession({ sessionId, provider, expiresAt })))
+      throw new Error("The browser preflight was cancelled before observation.");
+    if (remote) await browserUsageEvent(application, "connected", sessionId);
+    await runtime.page.goto(job.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    if (!canAutomate(runtime.page.url())) throw new Error("The posting redirected to a site that is not enabled for automation.");
+    const postingUrl = canonicalJobUrl(runtime.page.url());
+    const postingTitle = (await runtime.page.locator("h1, h2").first().innerText().catch(() => "") || await runtime.page.title().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingCompany = (await runtime.page.locator('[data-company], [class*="company" i], meta[property="og:site_name"]').first().getAttribute("content").catch(() => null) || await runtime.page.locator('[data-company], [class*="company" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingText = (await runtime.page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 4000);
+    const location = (await runtime.page.locator('[data-location], [class*="location" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const postingMarkers = [postingTitle, postingCompany, postingText].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+    const postingIdentityHash = hashJson({ postingUrl, title: postingTitle, company: postingCompany });
+    await waitForForm(runtime.page);
+    const initial = new URL(runtime.page.url());
+    const initialFields = await inspectFields(runtime.page);
+    if (!initialFields.length) {
+      const shortcut = runtime.page.locator("a[href]").filter({ hasText: /apply|application/i }).first();
+      const href = await shortcut.getAttribute("href").catch(() => null);
+      if (href) {
+        const target = new URL(href, runtime.page.url());
+        if (target.origin !== initial.origin) throw new Error("The posting's application link leaves the verified employer site.");
+        await runtime.page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await waitForForm(runtime.page);
+      }
+    }
+    const form = await snapshot(runtime.page, application);
+    const visibleText = await runtime.page.locator("body").innerText().catch(() => "");
+    const pageTitle = (await runtime.page.title().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240);
+    const heading = (await runtime.page.locator("h1, h2").first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240);
+    const company = (await runtime.page.locator('[data-company], [class*="company" i], meta[property="og:site_name"]').first().getAttribute("content").catch(() => null) ||
+      await runtime.page.locator('[data-company], [class*="company" i]').first().innerText().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 240) || undefined;
+    const markers = [pageTitle, heading, company, visibleText.replace(/\s+/g, " ").trim().slice(0, 1600)].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).slice(0, 4);
+    const postingEvidence = { postingUrl, postingIdentityHash, title: postingTitle || heading || pageTitle || undefined, company: postingCompany || company, markers: [...new Set([...postingMarkers, ...markers])].slice(0, 6), identityHash: hashJson(markers) };
+    const postingContext = { title: postingEvidence.title, company: postingEvidence.company, location, text: postingText };
+    const contextHash = hashJson({
+      posting: canonicalJobUrl(job.url),
+      observedUrl: runtime.page.url(),
+      title: pageTitle,
+      text: visibleText.replace(/\s+/g, " ").trim().slice(0, 4000),
+    });
+    return { form, contextHash, postingContext, postingEvidence, sessionId, provider, expiresAt };
+  } catch (error) {
+    bodyError = error;
+    throw error;
+  } finally {
+    let released = !remote;
+    try {
+      if (remote) {
+        await disconnectBrowser(application, runtime!.browser, sessionId);
+        const report = await releaseRemoteBrowser({ browserSessionId: sessionId, browserProvider: provider });
+        if (!report || report.status !== "stopped") throw new Error("The browser provider did not confirm the preflight session stopped.");
+        released = true;
+      } else {
+        await runtime!.browser.close().catch(() => undefined);
+        localBrowsers.delete(sessionId);
+      }
+    } catch (releaseError) {
+      annotatePreflightError(releaseError, sessionId, provider, false);
+      if (bodyError) annotatePreflightError(bodyError, sessionId, provider, false);
+      throw releaseError;
+    }
+    if (bodyError) annotatePreflightError(bodyError, sessionId, provider, released);
+    if (released) {
+      application.browserSessionId = undefined;
+      application.browserProvider = undefined;
+    }
+  }
+}
+
 async function restrictNavigation(page: Page, targetUrl: string) {
   const origin = new URL(targetUrl).origin;
   await page.context().route("**/*", async (route) => {
@@ -541,8 +739,9 @@ async function getPage(application: Application): Promise<Runtime> {
   const browser = await chromium.connectOverCDP(application.browserConnectUrl);
   const context = browser.contexts()[0];
   const page = context.pages()[0];
-  if (!page) { await browser.close().catch(() => undefined); throw new Error("The application page is no longer open."); }
+  if (!page) { await disconnectBrowser(application, browser); throw new Error("The application page is no longer open."); }
   await restrictNavigation(page, application.jobSnapshot?.applyUrl || application.form?.url || page.url());
+  await browserUsageEvent(application, "connected");
   return { browser, page };
 }
 
@@ -552,6 +751,8 @@ export async function prepareBrowser(
   profile: Profile,
   onSession?: (session: Partial<RemoteBrowserSession> & { sessionId: string }) => Promise<boolean>,
   onAction?: (label: string) => Promise<boolean>,
+  onRequiredCoverLetter?: (form: Omit<FormSnapshot, "hash">) => Promise<NonNullable<Application["packet"]>>,
+  onAutomaticEssays?: (form: Omit<FormSnapshot, "hash">) => Promise<NonNullable<Application["packet"]>>,
 ): Promise<{
   form: Omit<FormSnapshot, "hash">;
   provider?: RemoteBrowserSession["provider"];
@@ -566,14 +767,21 @@ export async function prepareBrowser(
   if (!application.packet)
     throw new Error("Prepare and review an application packet first.");
   validatePacket(profile, application.packet);
-  if (!hasFillApproval(application, profile.id, job.applyUrl))
+  if (application.autonomousAuthorization) assertAutonomous(application, profile, job, "fill");
+  else if (!hasFillApproval(application, profile.id, job.applyUrl))
     throw new Error("The current packet requires fill approval.");
   // Verify before opening a billable session or entering any applicant data.
   const resume = await reviewedPacketFile(profile, application.packet, "resume");
-  const coverLetter = application.packet.coverLetter
+  let coverLetter = application.packet.coverLetter
     ? await reviewedPacketFile(profile, application.packet, "cover-letter") : undefined;
-  if (!canAutomate(job.applyUrl))
+  const browserTargetUrl = application.autonomousAuthorization?.expectedFormUrl || job.applyUrl;
+  if (!canAutomate(browserTargetUrl))
     throw new Error("This site requires a manual application handoff.");
+  const action = async (label: string) => {
+    if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
+  };
+  if (application.autonomousAuthorization && !onAction) throw new Error("A fresh persisted permission check is required before automatic browser allocation.");
+  await action("Starting the authorized browser session");
   let runtime: Runtime;
   let sessionId: string;
   let connectUrl: string | undefined;
@@ -582,20 +790,51 @@ export async function prepareBrowser(
   let expiresAt: string | undefined;
   let captchaSolving = application.browserCaptchaSolving;
   if (!isDemo()) {
-    const session = await createRemoteBrowser(job.applyUrl);
+    const session = await createRemoteBrowser(browserTargetUrl);
     sessionId = session.sessionId;
     provider = session.provider;
     expiresAt = session.expiresAt;
     captchaSolving = session.captchaSolving;
     connectUrl = session.connectUrl;
     liveUrl = session.liveUrl;
+    application.browserSessionId = sessionId;
+    application.browserProvider = provider;
+    application.browserSessionExpiresAt = expiresAt;
+    application.browserConnectUrl = connectUrl;
+    application.browserLiveUrl = liveUrl;
+    try {
+      if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving })))
+        throw new Error("The browser run was cancelled before filling.");
+    } catch (error) {
+      try {
+        await releaseStrictSession(sessionId, provider);
+        application.browserSessionId = application.browserConnectUrl = application.browserLiveUrl = undefined;
+        application.browserProvider = undefined;
+      } catch (releaseError) {
+        application.browserSessionId = sessionId;
+        application.browserProvider = provider;
+        throw releaseError;
+      }
+      throw error;
+    }
     try {
       const browser = await chromium.connectOverCDP(connectUrl);
       const context = browser.contexts()[0];
       const page = context.pages()[0] ?? (await context.newPage());
       runtime = { browser, page };
-      await restrictNavigation(page, job.applyUrl);
-    } catch (error) { await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider }); throw error; }
+      await restrictNavigation(page, browserTargetUrl);
+    } catch (error) {
+      try {
+        await releaseStrictSession(sessionId, provider);
+        application.browserSessionId = application.browserConnectUrl = application.browserLiveUrl = undefined;
+        application.browserProvider = undefined;
+      } catch (releaseError) {
+        application.browserSessionId = sessionId;
+        application.browserProvider = provider;
+        throw releaseError;
+      }
+      throw error;
+    }
   } else {
     const browser = await chromium.launch({
       headless: true,
@@ -609,13 +848,15 @@ export async function prepareBrowser(
 
   const { browser, page } = runtime;
   application.browserCaptchaSolving = captchaSolving;
-  const action = async (label: string) => {
-    if (onAction && !(await onAction(label))) throw new Error("The browser run was cancelled.");
-  };
   try {
-    if (onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
+    application.browserSessionId = sessionId;
+    if (!connectUrl && onSession && !(await onSession({ sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving }))) throw new Error("The browser run was cancelled before filling.");
+    // The provider connection is billable lifecycle state. Record it only
+    // after the owner/application/session reference has been persisted by the
+    // session callback; any ledger failure stays inside this cleanup boundary.
+    await browserUsageEvent(application, "connected", sessionId);
     await action("Opening the employer form");
-    await page.goto(job.applyUrl, {
+    await page.goto(browserTargetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 20000,
     });
@@ -624,13 +865,15 @@ export async function prepareBrowser(
         "The application redirected to a site that is not enabled for automation.",
       );
     await waitForForm(page);
+    if (application.autonomousAuthorization && exactApplicationUrl(page.url()) !== exactApplicationUrl(application.autonomousAuthorization.expectedFormUrl || ""))
+      throw new Error("The employer redirected to a different application URL. This automatic workflow cannot fill another posting.");
     const fields = await inspectFields(page);
     await action("Checking the form questions");
     if (new URL(page.url()).origin !== new URL(job.applyUrl).origin) {
       const form = await snapshot(page, application);
       form.readyToSubmit = false;
       form.blockers = ["The posting redirected to a different site. Review the destination and import its application link before allowing an automatic fill."];
-      if (connectUrl) await browser.close();
+      if (connectUrl) await disconnectBrowser(application, browser, sessionId);
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true, needsCoverLetter: false };
     }
     const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
@@ -643,11 +886,32 @@ export async function prepareBrowser(
       ])];
       // Disconnect from a remote session without releasing it. The applicant
       // needs the same open page for takeover and a fresh final review.
-      if (connectUrl) await browser.close();
+      if (connectUrl) await disconnectBrowser(application, browser, sessionId);
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true,
         needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
     }
-    const values = allowedValues(profile, application);
+    if (application.autonomousAuthorization && !application.packet.coverLetter && fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label)) && profile.automationSettings?.coverLetterMode !== "disabled") {
+      if (!onRequiredCoverLetter) throw new Error("An authorized required cover-letter continuation is unavailable.");
+      await action("Preparing the required cover letter under your saved settings");
+      application.packet = await onRequiredCoverLetter(await snapshot(page, application));
+      coverLetter = await reviewedPacketFile(profile, application.packet, "cover-letter");
+      await action("Verifying the required cover-letter attachment");
+    }
+    let essayRounds = 0;
+    const ensureEssays = async () => {
+      if (!application.autonomousAuthorization) return;
+      const observed = await snapshot(page, application);
+      const questions = automaticEssayQuestions(application, observed);
+      if (!questions.some((question) => !hasBoundAutonomousEssayControl(application, observed.fields.find((field) => field.identifier === question.identifier)!, observed.fields))) return;
+      if (!onAutomaticEssays || ++essayRounds > 5) throw new Error("This form requires an unsupported automatic essay continuation.");
+      await action("Preparing truthful answers to the observed essay controls");
+      application.packet = await onAutomaticEssays({ ...observed, readyToSubmit: false });
+      await action("Verifying the authorized essay answers");
+      const fresh = await inspectFields(page);
+      for (const field of fresh) if (!fields.some((item) => item.identifier === field.identifier && item.kind === field.kind && item.label === field.label)) fields.push(field);
+    };
+    await ensureEssays();
+    let values = allowedValues(profile, application);
     await action("Mapping questions to approved answers");
     const ai = await aiMappings(fields, values, application);
     let needsAction = false;
@@ -655,6 +919,9 @@ export async function prepareBrowser(
     const handledRadioGroups = new Set<string>();
     const fillBlockers: string[] = [];
     for (const field of fields) {
+      // The persisted authorization check completes before each consequential control action.
+      await action(`Checking permission: ${field.label}`);
+      if (application.autonomousAuthorization && exactApplicationUrl(page.url()) !== exactApplicationUrl(application.autonomousAuthorization.expectedFormUrl || "")) throw new Error("The application destination changed before filling.");
       if (new URL(page.url()).origin !== new URL(job.applyUrl).origin || !canAutomate(page.url())) throw new Error("The form changed destination during filling. Review its application link before starting again.");
       if (
         /cover\s*letter/i.test(field.label) &&
@@ -668,6 +935,10 @@ export async function prepareBrowser(
       if (field.kind === "file" && /resume|cv|curriculum/i.test(field.label)) {
         const attachment = await currentFieldLocator(page, field);
         if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        const accepted = (await attachment.getAttribute("accept") || "").toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
+        if (accepted.length && !accepted.some((value) => value === resume.mimeType || value === `.${resume.filename.split(".").pop()?.toLowerCase()}` || value === `${resume.mimeType.split("/")[0]}/*`)) {
+          fillBlockers.push(`The employer résumé control does not accept ${resume.mimeType}. Your selected résumé will not be converted or replaced.`); continue;
+        }
         await attachment.setInputFiles({
             name: resume.filename,
             mimeType: resume.mimeType,
@@ -675,6 +946,7 @@ export async function prepareBrowser(
           });
         await waitForUploads(page);
         await action(`Uploaded: ${field.label}`);
+        await ensureEssays(); values = allowedValues(profile, application);
         continue;
       }
       if (
@@ -684,6 +956,10 @@ export async function prepareBrowser(
       ) {
         const attachment = await currentFieldLocator(page, field);
         if (!attachment) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+        const accepted = (await attachment.getAttribute("accept") || "").toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
+        if (accepted.length && !accepted.some((value) => value === coverLetter!.mimeType || value === `.${coverLetter!.filename.split(".").pop()?.toLowerCase()}` || value === `${coverLetter!.mimeType.split("/")[0]}/*`)) {
+          fillBlockers.push(`The employer cover-letter control does not accept ${coverLetter!.mimeType}. Your grounded letter will not be converted or replaced.`); continue;
+        }
         await attachment.setInputFiles({
             name: coverLetter!.filename,
             mimeType: coverLetter!.mimeType,
@@ -691,6 +967,7 @@ export async function prepareBrowser(
           });
         await waitForUploads(page);
         await action(`Uploaded: ${field.label}`);
+        await ensureEssays(); values = allowedValues(profile, application);
         continue;
       }
       if (
@@ -701,14 +978,24 @@ export async function prepareBrowser(
         if (field.required && !field.valid) needsAction = true;
         continue;
       }
+      if (application.autonomousAuthorization && answerOwner(field.label) === "ai" && !hasBoundAutonomousEssayControl(application, field, (await snapshot(page, application)).fields)) {
+        if (!field.required && !field.value.trim()) continue;
+        throw new Error("The authorized essay control changed before writing.");
+      }
+      const humanAnswer = application.autonomousAuthorization
+        ? humanAnswerForField(field, fields, application, profile, page.url())
+        : undefined;
       const key = deterministicKey(field, application) ?? ai.get(field.index);
-      const value = key ? values[key] : undefined;
+      const value = humanAnswer?.value ?? (key ? values[key] : undefined);
       if (field.kind === "radio") {
         if (handledRadioGroups.has(field.identifier)) continue;
         handledRadioGroups.add(field.identifier);
         const group = fields.filter((candidate) => candidate.kind === "radio" && candidate.identifier === field.identifier);
         const option = value ? matchingOption(field.label, value, group.map((candidate) => candidate.optionLabel)) : undefined;
-        const chosen = group.find((candidate) => candidate.optionLabel === option);
+        const humanMatches = humanAnswer ? group.filter((candidate) => candidate.value === value || candidate.optionLabel === value) : [];
+        const chosen = humanAnswer
+          ? humanMatches.length === 1 ? humanMatches[0] : undefined
+          : group.find((candidate) => candidate.optionLabel === option);
         if (chosen) {
           const choice = await currentFieldLocator(page, chosen);
           if (choice) { await choice.check(); await action(`Filled: ${field.label}`); }
@@ -732,6 +1019,7 @@ export async function prepareBrowser(
         if (!filled && field.required) fillBlockers.push(`Select and confirm the option for: ${field.label}`);
       } else await locator.fill(value);
       await action(`Checked: ${field.label}`);
+      await ensureEssays(); values = allowedValues(profile, application);
     }
     if (!canAutomate(page.url()))
       throw new Error(
@@ -742,7 +1030,7 @@ export async function prepareBrowser(
     await action(form.readyToSubmit === false ? "Paused for your input" : "Paused before submission for your review");
     if (fillBlockers.length) { form.blockers = [...new Set([...(form.blockers ?? []), ...fillBlockers])]; form.readyToSubmit = false; }
     needsAction ||= form.readyToSubmit === false;
-    if (connectUrl) await browser.close();
+    if (connectUrl) await disconnectBrowser(application, browser, sessionId);
     return {
       form,
       provider,
@@ -755,7 +1043,7 @@ export async function prepareBrowser(
       needsCoverLetter,
     };
   } catch (error) {
-    await browser.close().catch(() => undefined);
+    await disconnectBrowser(application, browser, sessionId);
     if (sessionId.startsWith("local-")) localBrowsers.delete(sessionId);
     else await cancelBrowser({ ...application, browserSessionId: sessionId, browserProvider: provider });
     throw error;
@@ -769,7 +1057,7 @@ export async function refreshBrowserSnapshot(
   try {
     if (!canAutomate(runtime.page.url())) throw new Error("This site requires a manual application handoff.");
     return await snapshot(runtime.page, application);
-  } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, runtime.browser); }
 }
 
 // Resume only the exact controls approved in Apply. Never navigate, upload a
@@ -819,7 +1107,7 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
       } else await locator.fill(value, { timeout: 5000 });
     }
     return await snapshot(page, application);
-  } finally { if (application.browserConnectUrl) await browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, browser); }
 }
 
 // Repair supported blank education questions in the existing approved session.
@@ -866,7 +1154,7 @@ export async function repairEducationFields(application: Application, job: Job, 
     const form = await snapshot(page, application);
     if (blockers.length) { form.blockers = [...new Set([...form.blockers ?? [], ...blockers])]; form.readyToSubmit = false; }
     return form;
-  } finally { if (application.browserConnectUrl) await runtime.browser.close(); }
+  } finally { if (application.browserConnectUrl) await disconnectBrowser(application, runtime.browser); }
 }
 
 export type BrowserSubmissionResult = {
@@ -936,9 +1224,12 @@ async function observeSubmission(page: Page, application: Application, baseline:
   };
 }
 
-export async function submitBrowser(application: Application): Promise<BrowserSubmissionResult> {
+export async function submitBrowser(application: Application, options?: { profile?: Profile; job?: Job; beforeAttempt: (baseline: NonNullable<Application["submissionVerification"]>) => Promise<boolean> }): Promise<BrowserSubmissionResult> {
   if (!application.form) throw new Error("There is no reviewed form.");
-  if (!hasSubmissionApproval(application)) throw new Error("The exact form needs both approvals before submission.");
+  if (application.autonomousAuthorization) {
+    if (!options?.profile || !options.beforeAttempt) throw new Error("A durable current authorization check is required before automatic submission.");
+    assertAutonomous(application, options.profile, options.job, "submit");
+  } else if (!hasSubmissionApproval(application)) throw new Error("The exact form needs both approvals before submission.");
   const { browser, page } = await getPage(application);
   let clicked = false;
   let keepSession = false;
@@ -949,12 +1240,14 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     const button = (await finalSubmitButton(page)).first();
     if ((await button.count()) === 0) throw new Error("The final submit button needs user takeover.");
     const before = await submissionText(page);
-    clicked = true;
-    application.submissionAttemptedAt = new Date().toISOString();
     const baseline: NonNullable<Application["submissionVerification"]> = {
       version: 1, kind: "captcha", sessionId: application.browserSessionId!, targetUrl: application.form.url,
-      attemptedAt: application.submissionAttemptedAt, beforeHash: hashJson(before), beforeHadConfirmation: confirmationPattern.test(before),
+      attemptedAt: new Date().toISOString(), beforeHash: hashJson(before), beforeHadConfirmation: confirmationPattern.test(before),
     };
+    if (options?.beforeAttempt && !(await options.beforeAttempt(baseline))) throw new Error("The application changed before submission. No click was attempted.");
+    application.submissionAttemptedAt = baseline.attemptedAt;
+    application.submissionVerification = baseline;
+    clicked = true;
     // A timeout can follow a dispatched click. Observe; never click again.
     await button.click({ timeout: 10000 }).catch(() => undefined);
     await page.waitForLoadState("domcontentloaded", { timeout: 12000 }).catch(() => undefined);
@@ -962,13 +1255,12 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
     keepSession = Boolean(result.verification);
     return result;
   } catch (error) {
-    if (clicked) throw new Error("SUBMISSION_UNCERTAIN");
+    if (clicked) { keepSession = true; throw new Error("SUBMISSION_UNCERTAIN"); }
     throw error;
   } finally {
-    if ((clicked && !keepSession) || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if ((clicked && !keepSession) || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (clicked && !keepSession) {
-      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await releaseRemoteBrowser(application).catch(() => undefined);
+      await finalizeBrowserRelease(application);
     }
   }
 }
@@ -977,7 +1269,7 @@ export async function submitBrowser(application: Application): Promise<BrowserSu
 // observes only the existing, owner-bound attempt after human verification.
 export async function checkBrowserSubmission(application: Application): Promise<BrowserSubmissionResult> {
   const verification = application.submissionVerification;
-  if (application.status !== "awaiting_verification" || !verification || verification.version !== 1 ||
+  if (!["awaiting_verification", "uncertain"].includes(application.status) || !verification || verification.version !== 1 ||
     verification.sessionId !== application.browserSessionId || verification.attemptedAt !== application.submissionAttemptedAt ||
     verification.targetUrl !== application.form?.url || application.submittedAt)
     throw new Error("There is no active verification for this submission attempt.");
@@ -987,23 +1279,43 @@ export async function checkBrowserSubmission(application: Application): Promise<
   let finished = false;
   try {
     const result = await observeSubmission(page, application, verification, 5000);
-    finished = result.confirmed;
+    finished = result.confirmed || !result.verification;
     return result;
   } finally {
-    if (finished || application.browserConnectUrl) await browser.close().catch(() => undefined);
+    if (finished || application.browserConnectUrl) await disconnectBrowser(application, browser);
     if (finished) {
-      if (application.browserSessionId?.startsWith("local-")) localBrowsers.delete(application.browserSessionId);
-      await releaseRemoteBrowser(application).catch(() => undefined);
+      await finalizeBrowserRelease(application);
     }
   }
 }
 
-export async function cancelBrowser(application: Application): Promise<void> {
+async function finalizeBrowserRelease(application: Application): Promise<void> {
+  if (!application.browserSessionId) return;
+  try {
+    await cancelBrowser(application, { strict: true });
+  } catch (error) {
+    application.browserReleasePending = {
+      sessionId: application.browserSessionId,
+      requestedAt: new Date().toISOString(),
+      attempts: (application.browserReleasePending?.attempts ?? 0) + 1,
+      lastError: error instanceof Error ? error.message : "The provider did not confirm the browser release.",
+    };
+  }
+}
+
+export async function cancelBrowser(application: Application, options?: { strict?: boolean }): Promise<void> {
   if (!application.browserSessionId) return;
   const local = localBrowsers.get(application.browserSessionId);
   if (local) {
     await local.browser.close().catch(() => undefined);
     localBrowsers.delete(application.browserSessionId);
   }
-  await releaseRemoteBrowser(application).catch(() => undefined);
+  const owner = { userId: application.userId, applicationId: application.id, jobId: application.jobId, runId: application.runToken ?? application.browserQuestionRun?.token ?? application.id };
+  const release = () => releaseRemoteBrowser(application);
+  try {
+    const report = await (browserUsageContext() ? release() : withBrowserUsageContext(owner, release));
+    if (options?.strict && report && report.status !== "stopped") throw new Error("The browser provider did not confirm the session stopped.");
+  } catch (error) {
+    if (options?.strict) throw error;
+  }
 }

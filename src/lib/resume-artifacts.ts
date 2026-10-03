@@ -7,7 +7,7 @@ import { isDemo } from "@/lib/demo-mode";
 export const bytesHash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const bucket = "application-files";
 function assertOwnerKey(userId: string, key: string) {
-  if (!/^[a-zA-Z0-9-]+$/.test(userId) || !new RegExp(`^${userId}/[a-f0-9]{64}/[a-f0-9]{64}\\.(pdf|tex)$`).test(key)) throw new Error("The application artifact does not belong to this profile.");
+  if (!/^[a-zA-Z0-9-]+$/.test(userId) || !new RegExp(`^${userId}/[a-f0-9]{64}/[a-f0-9]{64}\\.(pdf|tex|docx)$`).test(key)) throw new Error("The application artifact does not belong to this profile.");
 }
 const localPath = (key: string) => path.join(process.cwd(), ".data", bucket, key);
 export async function readArtifact(userId: string, key: string, sha256: string, size: number): Promise<Buffer> {
@@ -22,7 +22,7 @@ export async function readArtifact(userId: string, key: string, sha256: string, 
   if (bytes.length !== size || bytesHash(bytes) !== sha256) throw new Error("The application file changed. Rebuild and review the packet before filling.");
   return bytes;
 }
-export async function saveArtifact(userId: string, inputHash: string, bytes: Buffer, extension: "pdf" | "tex") {
+export async function saveArtifact(userId: string, inputHash: string, bytes: Buffer, extension: "pdf" | "tex" | "docx") {
   const sha256 = bytesHash(bytes);
   const storageKey = `${userId}/${inputHash}/${sha256}.${extension}`;
   assertOwnerKey(userId, storageKey);
@@ -33,7 +33,8 @@ export async function saveArtifact(userId: string, inputHash: string, bytes: Buf
     try { await writeFile(file, bytes, { mode: 0o600, flag: "wx" }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   } else {
-    const { error } = await adminSupabase().storage.from(bucket).upload(storageKey, bytes, { contentType: extension === "pdf" ? "application/pdf" : "text/plain", upsert: false });
+    const contentType = extension === "pdf" ? "application/pdf" : extension === "tex" ? "text/plain" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const { error } = await adminSupabase().storage.from(bucket).upload(storageKey, bytes, { contentType, upsert: false });
     if (error && !["409", "400"].includes(String((error as { statusCode?: string }).statusCode))) throw new Error("Saving the application file failed. Retry the draft; your existing packet is preserved.");
   }
   // Verify both freshly saved files and concurrent identical uploads. A

@@ -28,8 +28,9 @@ describe("AI essay generation", () => {
     expect(result.confirmedAt).toBeUndefined();
     expect(result.requiresUserInput).toBe(true);
     expect(parse).toHaveBeenCalledTimes(2);
-    expect(parse.mock.calls[0][0].model).toBe("gpt-6-sol");
+    expect(parse.mock.calls[0][0].model).toBe("gpt-6-luna");
     expect(parse.mock.calls[1][0].model).toBe("gpt-6-luna");
+    expect(result.aiDraft?.model).toBe("gpt-6-luna");
     expect(parse.mock.calls[0][0].store).toBe(false);
     const context = JSON.parse(parse.mock.calls[0][0].input[1].content);
     expect(context).not.toHaveProperty("name");

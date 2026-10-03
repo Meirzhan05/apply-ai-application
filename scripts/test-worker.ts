@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { DEFAULT_AI_MODEL } from "../src/lib/ai-model";
 import { initialDemoState } from "../src/lib/demo-data";
 import { loadState, mutateState } from "../src/lib/repository";
 import { selectApplication } from "../src/lib/workflow";
@@ -32,7 +33,7 @@ async function main() {
     } while (Date.now() < timeout);
     assert.equal(app!.status, "draft_review", app!.error || "Draft worker did not finish");
     assert.ok(app!.runWorkerClaimedAt, "Worker must claim the persisted run");
-    assert.equal(app!.packet?.model, "gpt-6-sol", "Must exercise the actual structured Responses draft");
+    assert.equal(app!.packet?.model, DEFAULT_AI_MODEL, "Must exercise the actual structured Responses draft");
     assert.ok(app!.packet?.profileHash);
     assert.ok(app!.packet!.answers.some((answer) => answer.requiresUserInput));
     console.log("PASS production-mode queue → Trigger.dev worker → OpenAI structured draft → owner-scoped Supabase review packet");

@@ -47,6 +47,14 @@ export const demoProfile: Profile = {
     },
   ],
   sensitiveAnswers: {},
+  automationVersion: 1,
+  automationSettings: {
+    version: 1,
+    resumeTailoring: true,
+    coverLetterMode: "required-only",
+    essayMode: "automatic-truthful",
+  },
+  onboarding: { questionnaire: {} },
   demo: true,
   updatedAt: now,
 };

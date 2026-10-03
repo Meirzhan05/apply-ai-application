@@ -5,6 +5,7 @@ import { isDemo } from "@/lib/demo-mode";
 import type { AppState, Job } from "@/lib/types";
 import { readActiveCatalogRows } from "@/lib/catalog";
 import { dedupeJobs } from "@/lib/sources";
+import { preparePilotMutation, type PilotMutationContext } from "@/lib/pilot";
 
 export { isDemo } from "@/lib/demo-mode";
 
@@ -14,13 +15,11 @@ export async function currentUserId(): Promise<string> {
   const client = await serverSupabase();
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) throw new Error("AUTH_REQUIRED");
-  const allowed = (process.env.BETA_ALLOWED_EMAILS || "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
-  if (allowed.length && !allowed.includes(data.user.email?.toLowerCase() || "")) throw new Error("This private beta account has not been invited yet.");
   return data.user.id;
 }
 
 async function catalog(): Promise<Job[]> {
-  const rows = await readActiveCatalogRows();
+  const rows = await readActiveCatalogRows({ cache: true });
   return rows.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at) || a.id.localeCompare(b.id)).map((row) => row.data);
 }
 
@@ -81,8 +80,9 @@ function composeState(userId: string, stored: Partial<AppState> | undefined, job
 export async function mutateState<T>(
   userId: string,
   change: (state: AppState) => T | Promise<T>,
+  context?: PilotMutationContext,
 ): Promise<T> {
-  if (isDemo()) return updateState(change);
+  if (isDemo()) return updateState(change, context);
   const client = adminSupabase();
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data: current, error: readError } = await client
@@ -92,7 +92,9 @@ export async function mutateState<T>(
       .maybeSingle();
     if (readError) throw readError;
     const state = composeState(userId, current?.data as Partial<AppState> | undefined, await catalog());
+    const previous = structuredClone(state);
     const result = await change(state);
+    preparePilotMutation(previous, state, context);
     const saved: Partial<AppState> = { ...state };
     delete saved.jobs;
     if (current) {
@@ -123,7 +125,8 @@ export async function saveCatalog(jobs: Job[]): Promise<void> {
   if (isDemo()) {
     await updateState((state) => {
       const existing = new Map(state.jobs.map((job) => [job.id, job]));
-      jobs.forEach((job) => existing.set(job.id, { ...job, discoveredAt: existing.get(job.id)?.discoveredAt ?? job.discoveredAt }));
+      const checkedAt = new Date().toISOString();
+      jobs.forEach((job) => existing.set(job.id, { ...job, discoveredAt: existing.get(job.id)?.discoveredAt ?? job.discoveredAt, lastCheckedAt: checkedAt }));
       state.jobs = [...existing.values()];
       state.lastRefreshAt = new Date().toISOString();
     });
