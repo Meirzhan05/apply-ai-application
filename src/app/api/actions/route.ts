@@ -652,7 +652,13 @@ export async function POST(request: Request) {
     const { action, payload } = Input.parse(await request.json());
     await perform(userId, action, payload);
     if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action)) {
-      await queuePersonalSearch(userId);
+      const searching = await queuePersonalSearch(userId);
+      // Unchanged search inputs reuse the private discovery results, but profile
+      // edits still invalidate fit assessments (for example new fact IDs).
+      if (!searching && process.env.OPENAI_API_KEY && process.env.TRIGGER_SECRET_KEY &&
+        (await loadState(userId)).jobs.some((job) => job.active)) {
+        await queueMatchAssessment(userId).catch(() => undefined);
+      }
     }
     if (
       !isDemo() &&
