@@ -1,4 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import { createPdfMultiPageFixture } from "@/lib/fixtures/pdf-multi-page";
 import { parsePdfSource } from "@/lib/pdf-source";
@@ -63,6 +67,61 @@ describe("PDFBox source-preserving renderer", () => {
     expect(reparsed.text).toContain("• Built search index for 1,200 users.");
     expect(reparsed.text).not.toContain("Built a search index for 1,200 users.");
     expect(reparsed.anchors.filter((item) => item.text === "Built search index for 1,200 users.")).toHaveLength(1);
+  }, 120_000);
+
+  it("rewrites positioned TJ word spacing while preserving a static section divider", async () => {
+    const sourceBytes = await createPdfSourceFixture({ positionedWordSpacing: true, sectionDivider: true });
+    const source = await parsePdfSource(sourceBytes);
+    const anchor = source.anchors.find((item) => item.text === "Built a search index for 1,200 users.");
+    expect(source.support.status).toBe("candidate");
+    expect(anchor).toMatchObject({ kind: "bullet", candidateClaim: true, editable: true });
+    const plan = planFor(source, { anchorId: anchor!.id, text: "Built search index for 1,200 users." });
+
+    const rendered = await renderPdfSourceBytes(sourceBytes, source, plan, Date.now() + 90_000);
+    const reparsed = await parsePdfSource(rendered.pdf);
+
+    expect(rendered.visualOutsideEditDifferenceAt144Dpi).toBe(0);
+    expect(rendered.visualOutsideEditDifferenceAt300Dpi).toBe(0);
+    expect(reparsed.text).toContain("Built search index for 1,200 users.");
+    expect(reparsed.text).not.toContain("Built a search index for 1,200 users.");
+  }, 120_000);
+
+  it.each([
+    { characterSpacing: 0.25 },
+    { wordSpacing: 0.25 },
+    { characterSpacing: 0.25, graphicsStateRestore: true },
+    { horizontalScaling: 95 },
+  ])("refuses to edit a source bullet with active PDF text spacing %#", async (spacing) => {
+    const sourceBytes = await createPdfSourceFixture({ positionedWordSpacing: true, ...spacing });
+    const source = await parsePdfSource(sourceBytes);
+    if (spacing.horizontalScaling !== undefined) {
+      expect(source.support).toMatchObject({ status: "blocked" });
+      return;
+    }
+    const anchor = source.anchors.find((item) => item.text === "Built a search index for 1,200 users.")!;
+    expect(anchor.editable).toBe(true);
+    const plan = planFor(source, { anchorId: anchor.id, text: "Built search index for 1,200 users." });
+
+    await expect(renderPdfSourceBytes(sourceBytes, source, plan, Date.now() + 90_000)).rejects.toThrow(/character, word, or horizontal text spacing/i);
+  }, 120_000);
+
+  it("reuses exact glyph bytes from the same embedded font when PDFBox cannot encode text directly", async () => {
+    const sourceBytes = await createPdfSourceFixture({ qualificationText: "A synthetic café glyph." });
+    const runtime = process.env.PDFBOX_RUNTIME_ROOT;
+    const java = process.env.PDFBOX_JAVA_BIN ?? (runtime ? path.join(runtime, "jre", "bin", "java") : "java");
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pdf-source-glyph-test-"));
+    try {
+      const sourcePath = path.join(directory, "source.pdf");
+      await writeFile(sourcePath, sourceBytes, { mode: 0o600, flag: "wx" });
+      const classPath = [path.join(runtime ?? path.join(process.cwd(), ".runtime", "pdf"), "classes"),
+        path.join(runtime ?? path.join(process.cwd(), ".runtime", "pdf"), "pdfbox-app-3.0.8.jar")].join(path.delimiter);
+      const output = execFileSync(java, ["-Djava.awt.headless=true", "-cp", classPath, "PdfSourceRewrite", "--self-test-source-glyph-fallback", sourcePath], {
+        encoding: "utf8", timeout: 30_000, maxBuffer: 4096,
+      });
+      expect(output.trim()).toBe("sourceGlyphFallback=passed");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }, 120_000);
 
   it("rewrites a continued bullet on page two and preserves page count, page geometry, and repeated furniture", async () => {

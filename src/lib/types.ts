@@ -149,6 +149,10 @@ export interface PdfSourceAnchor extends ResumeSourceAnchorBase {
   sourceText: string;
   bulletPrefix: string;
   boundsPt: { left: number; top: number; right: number; bottom: number };
+  /** PDF.js display-list show-text operator ordinal used to resolve TJ/Tj in the original stream. */
+  showOperatorIndex?: number;
+  /** Unicode decoded from the raw show-text operator, before PDF.js infers positioned word spaces. */
+  operatorText?: string;
   operatorFingerprint: string;
   fontResourceName: string;
   font: { family: string; sizePt: number; bold: boolean; italic: boolean };
@@ -156,8 +160,8 @@ export interface PdfSourceAnchor extends ResumeSourceAnchorBase {
 }
 
 export interface PdfSourceRepresentation {
-  version: 1 | 2;
-  parser: "pdfjs-text-1" | "pdfjs-text-2";
+  version: 1 | 2 | 3;
+  parser: "pdfjs-text-1" | "pdfjs-text-2" | "pdfjs-text-3";
   format: "pdf";
   sourceHash: string;
   text: string;
@@ -326,7 +330,7 @@ export interface ResumeSourcePlan {
   jobHashPolicyVersion?: 2;
   format: "docx" | "pdf";
   sourceHash: string;
-  representationVersion: 1 | 2;
+  representationVersion: 1 | 2 | 3;
   profileHash: string;
   factsHash: string;
   settingsHash: string;
@@ -372,7 +376,7 @@ export interface PdfResumeArtifact {
   javaVersion: string;
   runtimeArchitecture: string;
   sourceHash: string;
-  representationVersion: 1 | 2;
+  representationVersion: 1 | 2 | 3;
   profileHash: string;
   factsHash: string;
   settingsHash: string;

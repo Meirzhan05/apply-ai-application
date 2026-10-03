@@ -9,6 +9,10 @@ export interface PositionedSourceSpan {
   id: string;
   pageIndex: number;
   bounds: SourceBounds;
+  /** Header spans stay out of column detection and attach to their visual lane. */
+  topFurniture?: boolean;
+  /** Right-aligned date/location spans follow the unique body lane on the same row. */
+  lineMetadata?: boolean;
 }
 
 export interface SourceTextRegion {
@@ -119,6 +123,24 @@ function spansOverlap(a: PositionedSourceSpan, b: PositionedSourceSpan): boolean
     && Math.min(a.bounds.bottom, b.bounds.bottom) - Math.max(a.bounds.top, b.bounds.top) > OVERLAP_TOLERANCE_PT;
 }
 
+function inlineContinuationLinkedToLane(span: PositionedSourceSpan, spans: PositionedSourceSpan[], laneLeft: number): boolean {
+  const pending = [span];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    if (Math.abs(current.bounds.left - laneLeft) <= MAX_COLUMN_ASSIGNMENT_DISTANCE_PT) return true;
+    for (const candidate of spans) {
+      if (visited.has(candidate.id) || Math.abs(candidate.bounds.top - current.bounds.top) > 1.5 || spansOverlap(candidate, current) === false &&
+          Math.min(candidate.bounds.bottom, current.bounds.bottom) - Math.max(candidate.bounds.top, current.bounds.top) <= 2) continue;
+      const gap = Math.max(0, Math.max(candidate.bounds.left, current.bounds.left) - Math.min(candidate.bounds.right, current.bounds.right));
+      if (gap <= 18) pending.push(candidate);
+    }
+  }
+  return false;
+}
+
 /**
  * Assigns positioned text to deterministic page columns and reconstructs
  * reading order as top-to-bottom within each column, then left-to-right.
@@ -135,11 +157,13 @@ export function groupPositionedSpansIntoRegions(spans: PositionedSourceSpan[]): 
 
   for (const pageIndex of pages) {
     const pageSpans = spans.filter((span) => span.pageIndex === pageIndex);
-    const columns = candidateColumns(pageSpans) ?? [{ left: Math.min(...pageSpans.map((span) => span.bounds.left)), spans: pageSpans }];
+    const laneSpans = pageSpans.filter((span) => !span.topFurniture && !span.lineMetadata);
+    const columnEvidence = laneSpans.length ? laneSpans : pageSpans;
+    const columns = candidateColumns(columnEvidence) ?? [{ left: Math.min(...columnEvidence.map((span) => span.bounds.left)), spans: columnEvidence }];
     if (columns.length > 2) return invalid("This page has more than two distinct text columns. Upload a simpler one- or two-column résumé layout.");
 
     const assignedByColumn = columns.map(() => [] as PositionedSourceSpan[]);
-    for (const span of pageSpans) {
+    for (const span of columnEvidence) {
       const distances = columns.map((column) => Math.abs(span.bounds.left - column.left));
       const closestDistance = Math.min(...distances);
       if (distances.length === 2 && Math.abs(distances[0] - distances[1]) <= MIN_COLUMN_ASSIGNMENT_MARGIN_PT) {
@@ -147,14 +171,43 @@ export function groupPositionedSpansIntoRegions(spans: PositionedSourceSpan[]): 
       }
       const closestColumn = distances.indexOf(closestDistance);
       if (closestDistance > MAX_COLUMN_ASSIGNMENT_DISTANCE_PT) {
-        return invalid("A text span falls between the detected columns, so its original reading region is ambiguous.");
+        const inlineContinuation = columns.length === 1 && inlineContinuationLinkedToLane(span, columnEvidence, columns[0].left);
+        if (!inlineContinuation) return invalid("A text span falls between the detected columns, so its original reading region is ambiguous.");
       }
       assignedByColumn[closestColumn].push(span);
     }
 
+    for (const span of pageSpans.filter((item) => (item.topFurniture || item.lineMetadata) && !columnEvidence.includes(item))) {
+      if (columns.length === 1) {
+        assignedByColumn[0].push(span);
+        continue;
+      }
+      if (span.topFurniture) {
+        const distances = columns.map((column) => Math.abs(span.bounds.left - column.left));
+        const closestDistance = Math.min(...distances);
+        const closestColumn = distances.indexOf(closestDistance);
+        if (closestDistance > MAX_COLUMN_ASSIGNMENT_DISTANCE_PT) {
+          // A centered or full-width page heading can sit in the gutter; keep it
+          // with the first lane without letting it create or reorder columns.
+          assignedByColumn[0].push(span);
+          continue;
+        }
+        const otherDistance = distances[1 - closestColumn];
+        if (otherDistance - closestDistance <= MIN_COLUMN_ASSIGNMENT_MARGIN_PT)
+          return invalid("A top-of-page text span falls between the detected columns, so its reading lane is ambiguous.");
+        assignedByColumn[closestColumn].push(span);
+        continue;
+      }
+      const matchingColumns = assignedByColumn.flatMap((columnSpans, columnIndex) =>
+        columnSpans.some((candidate) => verticalOverlap({ left: span.bounds.left, spans: [span] }, { left: candidate.bounds.left, spans: [candidate] }) > 0)
+          ? [columnIndex] : []);
+      if (matchingColumns.length !== 1) return invalid("A right-aligned date or location does not align with one unique text row, so its entry cannot be identified safely.");
+      assignedByColumn[matchingColumns[0]].push(span);
+    }
+
     if (columns.length === 2) {
-      for (const left of assignedByColumn[0]) {
-        for (const right of assignedByColumn[1]) {
+      for (const left of assignedByColumn[0].filter((span) => !span.topFurniture)) {
+        for (const right of assignedByColumn[1].filter((span) => !span.topFurniture)) {
           if (spansOverlap(left, right)) return invalid("Text from separate columns overlaps on the page, so it cannot be edited without risking cross-column flow.");
         }
       }

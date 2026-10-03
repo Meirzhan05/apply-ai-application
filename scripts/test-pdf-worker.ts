@@ -15,6 +15,8 @@ async function main() {
   assert.equal(result.output?.pageHeightPt, 792);
   assert.equal(result.output?.outsideEditPixelsAt144Dpi, 0);
   assert.equal(result.output?.outsideEditPixelsAt300Dpi, 0);
+  assert.deepEqual(result.output?.smokeCases?.map((item) => item.name), ["legacy-tj", "positioned-tj-with-divider"]);
+  assert.ok(result.output?.smokeCases?.every((item) => item.wordingChanged && item.outsideEditPixelsAt144Dpi === 0 && item.outsideEditPixelsAt300Dpi === 0));
   assert.ok((result.output?.pdfboxJarSha512 ?? "").match(/^[a-f0-9]{128}$/));
   assert.ok((result.output?.outputBytes ?? 0) > 0);
   console.log(JSON.stringify({ check: "production PDFBox/Temurin rendering and fidelity", status: result.status, version: result.version, ...result.output }));

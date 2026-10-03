@@ -49,7 +49,7 @@ function pageRecords(pages: ResumePageValidation[] | undefined) {
   });
 }
 function sourceLayoutMatchesPlan(plan: ResumeSourcePlan, source: NonNullable<Profile["resumeSourceDocument"]>) {
-  if (!plan.sourceLayout && !plan.layoutHash) return !(source.format === "pdf" && source.version === 2);
+  if (!plan.sourceLayout && !plan.layoutHash) return !(source.format === "pdf" && source.version >= 2);
   if (!plan.sourceLayout || !plan.layoutHash || sourceLayoutHash(plan.sourceLayout) !== plan.layoutHash) return false;
   const { pages, anchors } = plan.sourceLayout;
   if (pages.length < 1 || pages.length > 8 || pages.some((page, index) => page.pageNumber !== index + 1 || page.rotation !== 0 ||
@@ -243,7 +243,7 @@ export async function withPacketFiles(profile: Profile, original: ApplicationPac
         const baseline = await saveArtifact(profile.id, inputHash, rendered.baselinePdf, "pdf");
         const source = await saveArtifact(profile.id, inputHash, rendered.docx, "docx");
         packet = { ...packet, resumeArtifact: { format: "docx", inputHash, pageCount: rendered.pageCount, renderer: rendered.renderer, rendererVersion: rendered.rendererVersion, sourceHash: plan.sourceHash,
-          representationVersion: plan.representationVersion, profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
+          representationVersion: 1, profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
           layoutPolicy: docxPolicyFor(plan), layoutValidation: { outcome: "passed", pageWidthPt: rendered.pageWidthPt, pageHeightPt: rendered.pageHeightPt, pages: rendered.pages, layoutHash: rendered.layoutHash,
             unchangedAnchorTolerancePt: 1, pageSizeTolerancePt: 0.5, visualOutsideEditTolerance: 0.001, visualOutsideEditDifference: rendered.visualOutsideEditDifference, baselinePdfHash: rendered.baselinePdfHash },
           baseline: { ...baseline, mimeType: "application/pdf" },
