@@ -55,6 +55,15 @@ async function main() {
       const context = "Software Engineering Intern at Cedar Systems";
       const jobButton = (name: string) => strongRole.getByRole("button", { name: `${name} ${context}`, exact: true });
       assert.equal(await page.locator(".profile-context").getByText("Work authorization needs confirmation.", { exact: true }).isVisible(), true, "Strong fit must not conceal unresolved eligibility information");
+      const setup = page.locator(".setup-context");
+      assert.equal(await setup.isVisible(), true, "Incomplete setup must be discoverable before the role list");
+      await setup.locator("summary").click();
+      assert.equal(await setup.getByRole("list").getByText("sponsorship answer", { exact: true }).isVisible(), true);
+      await setup.getByRole("button", { name: "Review profile", exact: false }).click();
+      await page.getByRole("heading", { name: "Your profile", exact: true }).waitFor();
+      assert.equal(await page.locator("#setup-workAuthorization").evaluate(element => element === document.activeElement), true, "Setup action focuses the next missing answer");
+      await page.getByRole("button", { name: "Matches", exact: true }).click();
+      assert.equal(await setup.getAttribute("open"), null);
       assert.equal(await strongRole.locator(".fit-highlight").isVisible(), true, "Show positive evidence without opening details");
       assert.equal(await strongRole.locator(".preparation-note").count(), 0, "Shared preparation guidance must not repeat in every role");
       await page.evaluate(() => window.scrollTo(0, 0));
@@ -215,6 +224,14 @@ async function main() {
       await query.fill("Cedar");
       await page.getByRole("combobox", { name: "Sort roles" }).selectOption("newest");
       await launcher.click();
+      await page.reload();
+      await dialog.waitFor();
+      assert.equal(await url.inputValue(), "https://company.example/careers/role", "Reload restores the unfinished import");
+      assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
+      assert.equal(await query.inputValue(), "Cedar", "Reload restores the search");
+      assert.equal(await page.getByRole("button", { name: "Saved 1", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true, includeHidden: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("combobox", { name: "Sort roles", includeHidden: true }).inputValue(), "newest");
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();
       await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).waitFor();
       assert.equal(await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).isDisabled(), true);
@@ -228,8 +245,8 @@ async function main() {
       await strongRole.waitFor();
       assert.equal(await query.inputValue(), "Cedar");
       assert.equal(await page.getByRole("button", { name: "Saved 1", exact: true }).getAttribute("aria-pressed"), "true");
-      assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).getAttribute("aria-pressed"), "true");
-      assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).inputValue(), "newest");
+      assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true, includeHidden: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("combobox", { name: "Sort roles", includeHidden: true }).inputValue(), "newest");
       await launcher.click();
       await url.fill("https://company.example/careers/role");
       await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).fill("Example");
@@ -241,6 +258,21 @@ async function main() {
       assert.equal(fixture.jobs.length, 4, "Duplicate import recovery must not create another role");
       await page.getByRole("button", { name: "Return to previous view", exact: true }).click();
       await strongRole.waitFor();
+      await launcher.click();
+      await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await page.reload();
+      await strongRole.waitFor();
+      assert.equal(await dialog.count(), 0, "Discarded import must not reopen after reload");
+      await launcher.click();
+      assert.equal(await url.inputValue(), "", "Discard clears the stored import fields");
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: /^All roles / }).click();
+      if (label === "mobile") await page.getByRole("button", { name: /^Filter and sort/ }).click();
+      await page.getByRole("button", { name: /^Any fit / }).click();
+      await query.fill("");
+      await page.getByRole("combobox", { name: "Sort roles" }).selectOption("relevant");
+      await page.evaluate(owner => sessionStorage.removeItem(`apply-ai:matches:${owner}`), fixture.profile.id);
       fixture = publicState(structuredClone(demoState));
       await page.reload();
       await strongRole.waitFor();
@@ -267,6 +299,7 @@ async function main() {
       await strongRole.getByRole("button", { name: `Apply automatically for ${context}`, exact: true }).waitFor();
       assert.match((await page.locator("#application-mode-note").textContent()) ?? "", /can prepare and submit/);
       assert.doesNotMatch((await page.locator("#application-mode-note").textContent()) ?? "", /You approve materials/);
+      await page.evaluate(owner => sessionStorage.removeItem(`apply-ai:matches:${owner}`), fixture.profile.id);
       console.log(`PASS ${label}: fit/search/counts/sort/disclosure, dialog keyboard behavior, touch targets, save/unsave, dismissal undo and restore`);
     }
     for (const [width, height] of [[320, 740], [820, 900], [720, 500]]) {

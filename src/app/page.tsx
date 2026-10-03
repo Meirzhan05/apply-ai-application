@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
+import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
 import { discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput, importedRole, roleForPosting } from "@/lib/import-input";
@@ -59,7 +60,6 @@ type ViewState = AppState & {
 };
 type Section = "matches" | "applications" | "profile" | "settings";
 type Filter = MatchFilter;
-type BrowseView = { collection: MatchCollection; filter: Filter; search: string; sort: "relevant" | "newest" };
 
 export default function Dashboard() {
   const router = useRouter();
@@ -70,6 +70,7 @@ export default function Dashboard() {
   const searchInput = useRef<HTMLInputElement>(null);
   const jobList = useRef<HTMLDivElement>(null);
   const pendingRoleFocus = useRef<string | null>(null);
+  const pendingSetupFocus = useRef<string | null>(null);
   const [importTouched, setImportTouched] = useState(false);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
@@ -83,12 +84,8 @@ export default function Dashboard() {
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
   const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" }; reasonFor?: string; returnView?: BrowseView; postingUrl?: string } | null>(null);
-  const [importFields, setImportFields] = useState({
-    url: "",
-    company: "",
-    title: "",
-    location: "",
-  });
+  const [importFields, setImportFields] = useState(emptyImport);
+  const sessionOwner = useRef<string | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
   const [factText, setFactText] = useState("");
   const [answerDraft, setAnswerDraft] = useState<ScreeningAnswer[]>([]);
@@ -102,6 +99,14 @@ export default function Dashboard() {
     reload()
       .then((body) => {
         if (live) {
+          try {
+            const saved = readMatchesSession(window.sessionStorage, body.profile.id);
+            if (saved) {
+              setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
+              setImportFields(saved.draft); setImportOpen(saved.importOpen);
+            }
+          } catch { /* Storage can be disabled by browser preferences. */ }
+          sessionOwner.current = body.profile.id;
           setData(body);
           setProfileDraft({ ...structuredClone(body.profile), timeZone: body.profile.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
         }
@@ -114,6 +119,12 @@ export default function Dashboard() {
       refresh.stop();
     };
   }, [reload, refresh]);
+  useEffect(() => {
+    const owner = data?.profile.id;
+    if (!owner || sessionOwner.current !== owner) return;
+    try { writeMatchesSession(window.sessionStorage, owner, { view: { collection, filter, search, sort }, draft: importFields, importOpen }); }
+    catch { /* Keep working when browser storage is disabled. */ }
+  }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusy(action);
     setBusyJob(String(payload.jobId ?? ""));
@@ -206,6 +217,11 @@ export default function Dashboard() {
     const role = document.getElementById(`role-${pendingRoleFocus.current}`)?.closest("article") ?? document.getElementById("matches-heading");
     if (role instanceof HTMLElement) { role.focus(); pendingRoleFocus.current = null; }
   }, [data, feedbackNotice]);
+  useEffect(() => {
+    if (section !== "profile" || !pendingSetupFocus.current) return;
+    document.getElementById(pendingSetupFocus.current)?.focus();
+    pendingSetupFocus.current = null;
+  }, [section]);
   const revealRole = (job: Job, message: string, dismissed = feedback.get(job.id)?.kind === "dismissed") => {
     const previousView = { collection, filter, search, sort };
     setImportOpen(false); setCollection(dismissed ? "dismissed" : "all"); setFilter("all"); setSearch(`${job.company} ${job.title}`);
@@ -392,7 +408,10 @@ export default function Dashboard() {
                   <span className="desktop-import-label">+ Import a job link</span><span className="compact-import-label">Import a link</span>
                 </button>
               </div>
-              {hasSharedUnknown && <div className="profile-context" role="note">
+              {!data.onboarding.complete ? <details className="profile-context setup-context">
+                <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
+                <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; setSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
+              </details> : hasSharedUnknown && <div className="profile-context" role="note">
                 <span>Work authorization needs confirmation.</span>
                 <button className="text-button" onClick={() => setSection("profile")}>Review profile</button>
               </div>}
@@ -681,7 +700,7 @@ export default function Dashboard() {
                 )}
               </div>
               <details className="search-status">
-                <summary>{data.onboarding.complete ? "Search status" : "Finish profile setup"} · {data.lastRefreshAt ? `updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
+                <summary>Search status · {data.lastRefreshAt ? `workspace updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
@@ -1509,6 +1528,7 @@ export default function Dashboard() {
                 <label>
                   Are you authorized to work in the United States?
                   <select
+                    id="setup-workAuthorization"
                     value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
                     onChange={(event) => setProfileDraft({
                       ...profileDraft,
@@ -1529,6 +1549,7 @@ export default function Dashboard() {
                 <label>
                   Will you require sponsorship for employment?
                   <select
+                    id="setup-requiresSponsorship"
                     value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
                     onChange={(event) => setProfileDraft({
                       ...profileDraft,
@@ -1608,7 +1629,7 @@ export default function Dashboard() {
                 {!data.onboarding.complete && <p className="muted">Complete the required answers and confirm at least one resume fact before enabling automation.</p>}
               </section>}
               <div className="profile-card">
-                <h3>Resume and confirmed facts</h3>
+                <h3 id="confirmed-resume-facts" tabIndex={-1}>Resume and confirmed facts</h3>
                 <p className="muted">
                   Uploading extracts text for your review. It never confirms
                   claims automatically. Source-preserving PDF and DOCX layouts
@@ -1820,7 +1841,7 @@ export default function Dashboard() {
                 } else {
                   setFeedbackNotice({ message: added ? `${added.title} at ${added.company} was added, but the posting is closed. Your view is preserved.` : "Link added. Refresh your workspace to locate its posting details.", postingUrl: added?.url });
                 }
-                setImportFields({ url: "", company: "", title: "", location: "" });
+                setImportFields(emptyImport);
               }
             }}>
               <label>Job URL (required)
@@ -1833,6 +1854,7 @@ export default function Dashboard() {
                 </label>)}
               </fieldset>}
               <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
+              {Object.values(importFields).some(value => value.trim()) && <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setError(""); setImportOpen(false); }}>Discard draft</button>}
               {error && <div role="alert"><p>{displayError} {existingImport ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
