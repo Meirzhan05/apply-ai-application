@@ -266,6 +266,13 @@ export default function Dashboard() {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
       if (event.key === "/") { event.preventDefault(); searchInput.current?.focus(); }
+      if (!event.repeat && ["s", "d", "u"].includes(event.key)) {
+        const role = target.closest("article");
+        const action = event.key === "u"
+          ? target.closest(".matches-panel")?.querySelector<HTMLButtonElement>('[data-match-action="undo"]')
+          : role?.querySelector<HTMLButtonElement>(event.key === "s" ? '[data-match-action="save"]' : '[data-match-action="dismiss"], [data-match-action="restore"]');
+        if (action && !action.disabled) { event.preventDefault(); action.click(); }
+      }
       if (event.key === "j" || event.key === "k") {
         const roles = Array.from(jobList.current?.querySelectorAll<HTMLElement>("article") ?? []);
         const index = roles.findIndex(role => role.contains(document.activeElement));
@@ -837,7 +844,8 @@ export default function Dashboard() {
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
                 <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
-                <p>Press <kbd>/</kbd> to search, <kbd>j</kbd> for the next role, or <kbd>k</kbd> for the previous role. Shortcuts pause while you type or use a dialog.</p>
+                <p>Navigation: <kbd>/</kbd> search · <kbd>j</kbd> next role · <kbd>k</kbd> previous role.</p>
+                <p>With a role focused: <kbd>s</kbd> Save or Unsave · <kbd>d</kbd> Dismiss or Restore. Within Matches: <kbd>u</kbd> Undo dismissal. Shortcuts pause in text fields, dialogs and menus.</p>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
                 <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
                 <dl>
@@ -851,7 +859,7 @@ export default function Dashboard() {
               </div>
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
-                {feedbackNotice.undo && <button className="text-button" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
+                {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;
                   const next = await act("feedback", undo);
@@ -867,7 +875,7 @@ export default function Dashboard() {
                   document.getElementById("matches-heading")?.focus();
                 }}>Previous view</button>}
                 <details className="feedback-options" key={feedbackNotice.message}>
-                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>Details</span></summary>
+                  <summary aria-label="More feedback options" title="Feedback details"><Menu size={18} /><span>{feedbackNotice.reasonFor ? "Add reason" : "Details"}</span></summary>
                   <div className="feedback-details">
                     {feedbackNotice.compactMessage && <p>{feedbackNotice.message}</p>}
                     {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
@@ -969,7 +977,7 @@ export default function Dashboard() {
                           </details>
                         </div>
                         <div className="job-actions">
-                          {collection === "dismissed" ? <button className="outline-action" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
+                          {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
                             if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${job.title} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
@@ -977,6 +985,8 @@ export default function Dashboard() {
                             <button
                               disabled={Boolean(busy)}
                               aria-label={`${feedback.get(job.id)?.kind === "saved" ? "Unsave" : "Save"} ${context}`}
+                              data-match-action="save"
+                              aria-keyshortcuts="s"
                               aria-pressed={feedback.get(job.id)?.kind === "saved"}
                               onClick={async () => {
                                 const saved = feedback.get(job.id)?.kind === "saved";
@@ -1005,6 +1015,8 @@ export default function Dashboard() {
                             </button>
                             <button
                               disabled={Boolean(busy)}
+                              data-match-action="dismiss"
+                              aria-keyshortcuts="d"
                               aria-label={`Dismiss ${context}`}
                               onClick={async () => {
                                 const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
@@ -2067,7 +2079,7 @@ export default function Dashboard() {
             <h2 id="import-heading">Import a job link</h2>
             <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
             <form onSubmit={async event => {
-              event.preventDefault(); setConfirmDiscardImport(false); setImportTouched(true);
+              event.preventDefault(); if (confirmDiscardImport) return; setImportTouched(true);
               if (!importReady || busy) return;
               const next = await act("import", importFields);
               if (next) {
@@ -2090,7 +2102,7 @@ export default function Dashboard() {
                   <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
+              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
                 <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>

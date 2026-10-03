@@ -21,6 +21,7 @@ async function main() {
   let failImport = false;
   let authImport = false;
   let authFeedback = false;
+  let feedbackRequests = 0;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -40,6 +41,7 @@ async function main() {
         fixture.matches.push({ jobId: job.id, assessment: assessMatchLocally(fixture.profile, job) });
         return route.fulfill({ json: { ok: true } });
       }
+      feedbackRequests++;
       assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
       if (authFeedback) { authFeedback = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
@@ -230,6 +232,31 @@ async function main() {
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("j");
       assert.equal(await page.getByRole("article").first().evaluate(element => element === document.activeElement), true);
+      slowFeedback = true;
+      const beforeShortcut = feedbackRequests;
+      await page.keyboard.down("s"); await page.keyboard.down("s"); await page.keyboard.up("s");
+      await jobButton("Unsave").waitFor();
+      assert.equal(feedbackRequests, beforeShortcut + 1, "Holding Save must produce one feedback action");
+      await page.keyboard.press("d");
+      await strongRole.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Undo dismissal", exact: true }).waitFor();
+      await page.keyboard.press("u");
+      await strongRole.waitFor();
+      await jobButton("Unsave").waitFor();
+      assert.equal(await strongRole.evaluate(element => element === document.activeElement), true, "Keyboard Undo restores role focus and saved state");
+      await page.keyboard.press("d");
+      await strongRole.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
+      await strongRole.waitFor(); await strongRole.focus(); await page.keyboard.press("d");
+      await page.getByRole("heading", { name: "No dismissed roles", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      await strongRole.focus(); await page.keyboard.press("s"); await jobButton("Unsave").waitFor();
+      await page.keyboard.press("s"); await jobButton("Save").waitFor();
+      const beforeTyping = feedbackRequests;
+      await query.focus(); await page.keyboard.type("sdu");
+      assert.equal(await query.inputValue(), "sdu");
+      assert.equal(feedbackRequests, beforeTyping, "Typing must not invoke triage shortcuts");
+      await query.fill("");
       await launcher.click();
       const url = page.getByRole("textbox", { name: "Job URL (required)", exact: true });
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true);
@@ -299,6 +326,7 @@ async function main() {
       await launcher.click();
       await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "Requesting discard preserves draft until confirmed");
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).count(), 0, "Discard confirmation presents only its two choices");
       await page.screenshot({ path: `.data/matches-import-discard-${label}.png` });
       assert.equal(await dialog.getByRole("button", { name: "Keep editing", exact: true }).evaluate(element => element === document.activeElement), true, "Discard confirmation focuses its safe choice");
       await dialog.getByRole("button", { name: "Keep editing", exact: true }).click();
