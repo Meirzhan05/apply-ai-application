@@ -16,7 +16,7 @@ export function ApplicationHelp() {
   const [search, setSearch] = useState("");
   const matches = topics.filter(topic => `${topic.title} ${topic.text}`.toLowerCase().includes(search.trim().toLowerCase()));
   return <details className="application-help" id="applications-help">
-    <summary>Review help and shortcuts</summary>
+    <summary>Help and shortcuts</summary>
     <div className="application-help-content">
       <label htmlFor="application-help-search">Find help for a task</label>
       <input id="application-help-search" type="search" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} placeholder="Try sources, consent, or submission" />

@@ -72,6 +72,7 @@ async function main() {
       const summaryBox = await orientation.boundingBox(); const resumeBox = await page.locator(".resume-preview").boundingBox();
       assert.ok(summaryBox && resumeBox && summaryBox.y < resumeBox.y, "Remaining tasks must precede the document review");
       assert.ok(summaryBox.y < height, "The task summary must begin in the first viewport");
+      if (width <= 650) assert.ok(summaryBox.y + summaryBox.height <= height - 100, "The pending tasks must fit on phone with space to begin reviewing");
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
       assert.equal(await humanInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await humanInput.inputValue(), "");

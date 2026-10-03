@@ -611,7 +611,7 @@ export default function Dashboard() {
     { key: "settings", label: "Search settings", icon: Settings2 },
   ];
   return (
-    <div className={`shell ${section === "matches" ? "matches-workspace" : ""}`}>
+    <div className={`shell ${section === "matches" ? "matches-workspace" : section === "applications" ? "applications-workspace" : ""}`}>
       <aside className="sidebar">
         <div className="identity">
           <div className="brand">
@@ -1097,12 +1097,12 @@ export default function Dashboard() {
           </div>
         )}
         {section === "applications" && (
-          <main className="wide-panel">
+          <main className="wide-panel applications-panel">
             <h1>Your applications</h1>
             <p className="subheading">
               {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review the details before the agent enters a form, then review the exact form before submission."}
             </p>
-            <ApplicationHelp />
+            <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find or filter applications</summary><div className="application-tools">
               <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => setApplicationSearch(event.target.value)} /></label>
               <div className="application-filters" role="group" aria-label="Application collection">
@@ -1110,7 +1110,7 @@ export default function Dashboard() {
                 <button type="button" aria-pressed={attentionOnly} disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => setAttentionOnly(true)}>Needs your review ({needsAction.length})</button>
               </div>
               <p className="application-shortcuts">Outside a text field: <kbd>/</kbd> search · <kbd>j</kbd> next · <kbd>k</kbd> previous · <kbd>?</kbd> help</p>
-            </div></details>}
+            </div></details>}</div>
             {blockers.length > 0 && (
               <section className="next-action" aria-label="Blocked applications" aria-live="polite">
                 <div className="next-icon"><CircleHelp size={20} /></div>
@@ -1150,7 +1150,7 @@ export default function Dashboard() {
               <div className="application-collection" hidden={!applications.length}>
                 <h2 className="application-count" role="status">{displayedApplications.length} of {applications.length} applications</h2>
                 {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
-                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${job?.title ?? "Application"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
+                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
               <div className="app-list" ref={applicationList} hidden={!displayedApplications.length} aria-label="Your application list">
                 {displayedApplications.length ? (
                   displayedApplications.map((app) => {

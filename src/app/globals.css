@@ -1797,6 +1797,9 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .application-help-content input { width: 100%; min-height: 44px; }
 .application-help-content p { color: var(--ink); line-height: 1.6; }
 .application-help-content > details { border-bottom: 1px solid var(--line); }
+.application-utilities { display: flex; flex-wrap: wrap; align-items: start; gap: 0 24px; }
+.application-utilities > details { margin: 8px 0; }
+.application-utilities > details[open] { flex-basis: 100%; }
 .application-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; margin: 16px 0 24px; }
 .collection-tools { margin: 0 0 16px; color: var(--forest); font-size: 14px; }
 .collection-tools > summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
@@ -1814,11 +1817,21 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 @media (max-width: 900px) {
   .application-collection .app-list, .application-count { display: none; }
   .application-picker { display: block; margin-bottom: 8px; }
-  .application-picker-heading { display: flex; justify-content: space-between; align-items: center; color: var(--forest); font-size: 14px; font-weight: 600; }
-  .application-picker-heading > div { display: flex; gap: 8px; }
-  .application-picker-heading button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border: 1px solid var(--line); background: var(--paper); color: var(--forest); border-radius: 8px; }
-  .application-picker label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 6px; }
+  .application-position { margin: 0 0 8px; color: var(--forest); font-size: 14px; font-weight: 600; }
+  .application-picker-controls { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 8px; align-items: center; }
+  .application-picker-controls button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 48px; border: 1px solid var(--line); background: var(--paper); color: var(--forest); border-radius: 8px; }
   .application-picker select { width: 100%; min-width: 0; max-width: 100%; min-height: 48px; padding: 10px 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+}
+
+@media (max-width: 650px) {
+  .applications-workspace .topbar { display: none; }
+  .applications-panel { padding-top: 18px; }
+  .applications-panel > .subheading { display: none; }
+  .applications-panel .app-layout { margin-top: 16px; gap: 20px; }
+  .applications-panel .application-utilities { gap: 0 16px; }
+  .applications-panel .application-progress { margin: 12px 0; }
+  .applications-panel .detail-head h2 { font-size: 24px; }
+  .applications-panel .packet-orientation { margin-top: 12px; }
 }
 
 .packet-orientation { margin: 18px 0; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
