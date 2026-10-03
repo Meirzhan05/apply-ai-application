@@ -215,7 +215,7 @@ export default function Dashboard() {
     if (batchProgress || !pendingBatchFocus.current) return;
     pendingBatchFocus.current = false;
     const frame = requestAnimationFrame(() => {
-      const destination = document.querySelector<HTMLElement>('.feedback-notice [data-match-action="review-saved"]') ?? document.querySelector<HTMLElement>('.inline-error .text-button') ?? document.querySelector<HTMLElement>('.batch-save-control button');
+      const destination = document.querySelector<HTMLElement>('.inline-error .workspace-recovery-actions .dark-button, .inline-error .workspace-recovery-actions .text-button') ?? document.querySelector<HTMLElement>('.feedback-notice [data-match-action="review-saved"]') ?? document.querySelector<HTMLElement>('.batch-save-control button');
       destination?.focus();
     });
     return () => cancelAnimationFrame(frame);

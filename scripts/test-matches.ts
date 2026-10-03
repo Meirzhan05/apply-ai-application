@@ -709,9 +709,24 @@ async function main() {
     await saveView.click();
     const batchRecovery = batchPage.getByRole("alert").filter({ hasText: "The save status could not be refreshed" });
     await batchRecovery.waitFor();
+    const refreshBatch = batchRecovery.getByRole("button", { name: "Refresh workspace", exact: true });
+    await batchPage.waitForFunction(() => document.activeElement?.closest('.workspace-recovery-actions') !== null && document.activeElement?.textContent === "Refresh workspace");
+    assert.equal(await refreshBatch.evaluate(element => element === document.activeElement), true, "Zero-confirmed batch failure must focus the usable recovery action");
+    const recoveryContrast = () => refreshBatch.evaluate(element => {
+      const style = getComputedStyle(element);
+      const [foreground, background] = [style.color, style.backgroundColor].map(color => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(value => Number(value) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      });
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    await batchPage.mouse.move(0, 0);
+    assert.ok(await recoveryContrast() >= 4.5, "Recovery label needs AA contrast when focused");
+    await refreshBatch.hover();
+    assert.ok(await recoveryContrast() >= 4.5, "Recovery label needs AA contrast on hover too");
     assert.equal(await saveView.isDisabled(), true, "Uncertain batch outcomes stay gated after a failed reconciliation");
     assert.equal(await batchPage.getByRole("article").locator('[data-match-action="save"]').first().isDisabled(), true, "Individual writes stay gated too");
-    await batchRecovery.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+    await refreshBatch.click();
     await batchPage.getByRole("alert").filter({ hasText: "Could not refresh your workspace" }).waitFor();
     assert.equal(await saveView.isDisabled(), true, "Repeated refresh failure must not release uncertainty");
     assert.equal(batchCalls, 1, "No automatic mutation retry after an unreadable success response");
