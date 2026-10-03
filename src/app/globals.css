@@ -1896,3 +1896,9 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .personal-search-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .personal-search-actions a { display: inline-flex; align-items: center; }
 .empty .personal-search-context { margin-top: 20px; }
+
+.matches-panel .empty { color: #52675f; }
+.personal-search-actions .dark-button { min-height: 44px; }
+@media (max-width: 650px) {
+  .matches-panel .job-search label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}

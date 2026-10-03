@@ -493,6 +493,12 @@ async function main() {
     await personalPage.screenshot({ path: ".data/matches-personal-mobile.png" });
     const searchStatus = personalPage.locator(".search-status");
     await searchStatus.locator("summary").click();
+    personalFixture.onboarding = { ...personalFixture.onboarding, complete: true, missing: [] };
+    personalFixture.automation = { ...personalFixture.automation, enabled: false, paused: false };
+    await personalPage.reload();
+    await searchStatus.locator("summary").click();
+    await searchStatus.getByText("Automation is off", { exact: true }).waitFor();
+    assert.equal(await searchStatus.getByText("Finish setup before enabling automation", { exact: true }).count(), 0);
     await searchStatus.getByRole("button", { name: "Edit search preferences", exact: true }).click();
     assert.equal(await personalPage.locator("#search-preferences").evaluate(element => element === document.activeElement), true);
     const emptyState = structuredClone(personalState);
