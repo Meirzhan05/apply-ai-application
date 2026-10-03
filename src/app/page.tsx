@@ -1203,7 +1203,7 @@ export default function Dashboard() {
               <div className="application-collection" hidden={!applications.length}>
                 <h2 className="application-count" role="status">{displayedApplications.length} of {applications.length} applications</h2>
                 {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
-                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
+                <ApplicationPicker options={displayedApplications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.title ?? "Application"} · ${job?.company ?? "Employer"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
               <div className="app-list" ref={applicationList} hidden={!displayedApplications.length} aria-label="Your application list">
                 {displayedApplications.length ? (
                   displayedApplications.map((app) => {

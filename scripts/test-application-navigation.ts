@@ -79,6 +79,7 @@ async function main() {
       await help.getByRole("button", { name: "Show all help", exact: true }).click();
       await help.locator(":scope > summary").click();
       const picker = page.getByRole("combobox", { name: "Choose application", exact: true });
+      assert.match((await page.locator("#application-choice option").first().textContent()) ?? "", /Application role 1 · Employer 1 · Review materials/);
       if (width <= 900) {
         assert.equal(await page.getByText("Application 1 of 6", { exact: true }).isVisible(), true);
         assert.equal(await page.getByRole("button", { name: "Previous application", exact: true }).isDisabled(), true);
