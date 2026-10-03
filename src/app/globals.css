@@ -1938,7 +1938,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .matches-controls .keyboard-guide summary kbd { margin-left: 3px; }
 }
 
-@media (max-width: 360px) {
+@media (max-width: 650px) {
   .matches-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .matches-controls .mobile-filters-toggle { grid-column: 1 / -1; }
   .matches-controls .filterbar { grid-row: 3; }

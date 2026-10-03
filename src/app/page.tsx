@@ -949,6 +949,7 @@ export default function Dashboard() {
                   <div><dt><kbd>s</kbd></dt><dd>Save or Unsave</dd></div>
                   <div><dt><kbd>d</kbd></dt><dd>Dismiss or Restore</dd></div>
                 </dl>
+                <p>To save several roles, narrow your view with search or a fit filter. “Save roles in this view” appears when at least two unsaved roles remain.</p>
                 <p>Within Matches, <kbd>u</kbd> undoes dismissal. These shortcuts never prepare or submit an application.</p>
               </details>
               </div>
@@ -2140,7 +2141,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <div role="alert"><p>{displayError} Your selection is preserved. Refresh the workspace to check the latest status before trying again.</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
+            {error && <div role="alert"><p>{displayError} Your selection is preserved. {error === "AUTH_REQUIRED" ? "Sign in, then return here to continue." : needsWorkspaceCheck ? "Refresh the workspace to check the latest status before trying again." : ""}</p><div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2220,15 +2221,15 @@ export default function Dashboard() {
                   <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady || needsWorkspaceCheck}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>}
+              {!confirmDiscardImport && <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady || needsWorkspaceCheck}>{busy === "import" ? "Checking and adding…" : error && !needsWorkspaceCheck && !existingImport ? "Try adding again" : "Add role"}</button>}
               {Object.values(importFields).some(value => value.trim()) && (confirmDiscardImport ? <div className="discard-confirmation" role="group" aria-labelledby="discard-import-prompt">
                 <p id="discard-import-prompt" role="status">Discard your entered posting details? This clears this draft from your browser.</p>
                 <button className="outline-action" type="button" ref={keepImportEditing} disabled={Boolean(busy)} onClick={() => { setConfirmDiscardImport(false); document.getElementById("import-job-url")?.focus(); }}>Keep editing</button>
                 <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setConfirmDiscardImport(false); setError(""); setImportOpen(false); }}>Confirm discard</button>
               </div> : <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => setConfirmDiscardImport(true)}>Discard draft</button>)}
-              {error && <div role="alert"><p>{displayError} Your entered details are preserved.</p>
+              {error && <div role="alert"><p>{displayError} Your entered details are preserved. {error === "AUTH_REQUIRED" && "Sign in, then return here to continue."}</p>
                 <div className="workspace-recovery-actions">{error === "AUTH_REQUIRED" && <a className="dark-button" href="/login">Sign in</a>}
-                <button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
+                {needsWorkspaceCheck && <button className={needsWorkspaceCheck && error !== "AUTH_REQUIRED" ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}

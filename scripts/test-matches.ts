@@ -20,6 +20,7 @@ async function main() {
   let malformedFeedback = false;
   let slowFeedback = false;
   let failImport = false;
+  let malformedImport = false;
   let authImport = false;
   let authFeedback = false;
   let feedbackRequests = 0;
@@ -35,6 +36,7 @@ async function main() {
       if (body.action === "import") {
         if (authImport) { authImport = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
         if (fixture.jobs.some(job => job.url === body.payload.url)) return route.fulfill({ status: 409, json: { error: "This link is already in your catalog." } });
+        if (malformedImport) { malformedImport = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Invented gateway failure</html>" }); }
         if (failImport) { failImport = false; return route.fulfill({ status: 503, json: { error: "Posting unavailable. Check the link or try later." } }); }
         await new Promise(resolve => setTimeout(resolve, 750));
         const job = { ...intern, id: "synthetic-import", company: body.payload.company, title: body.payload.title, url: body.payload.url, importUrl: body.payload.url, requirements: [], source: "imported" as const, sourceLabel: "Imported link", importCheck: { status: "manual" as const, checkedAt: new Date().toISOString() } };
@@ -334,6 +336,12 @@ async function main() {
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "Failed import preserves the entered link");
       assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
       await page.screenshot({ path: `.data/matches-import-recovery-${label}.png`, fullPage: true });
+      assert.equal(await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).count(), 0, "A known posting failure should guide posting retry rather than status reconciliation");
+      malformedImport = true;
+      await dialog.getByRole("button", { name: "Try adding again", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/action response could not be read/).waitFor();
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "An uncertain import outcome requires refreshing status before retrying");
+      await page.screenshot({ path: `.data/matches-import-uncertain-${label}.png`, fullPage: true });
       await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
       await dialog.getByRole("alert").waitFor({ state: "hidden" });
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "In-dialog refresh preserves the import link");
