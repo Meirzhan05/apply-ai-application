@@ -230,6 +230,14 @@ async function main() {
       await page.keyboard.press("/");
       assert.equal(await query.evaluate(element => element === document.activeElement), true);
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
+      await page.keyboard.press("?");
+      const keyboardHelp = page.locator("#matches-keyboard-help");
+      assert.notEqual(await keyboardHelp.getAttribute("open"), null);
+      assert.equal(await keyboardHelp.locator("summary").evaluate(element => element === document.activeElement), true);
+      assert.equal(await keyboardHelp.getByText("Save or Unsave", { exact: true }).isVisible(), true);
+      await page.screenshot({ path: `.data/matches-shortcuts-${label}.png` });
+      await keyboardHelp.locator("summary").click();
+      await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("j");
       assert.equal(await page.getByRole("article").first().evaluate(element => element === document.activeElement), true);
       slowFeedback = true;
@@ -447,6 +455,28 @@ async function main() {
       }
       console.log(`PASS responsive ${width}x${height}: long content, visible navigation, no horizontal overflow`);
     }
+    const sameTitlePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const sameTitleState = structuredClone(demoState);
+    sameTitleState.jobs[1].title = intern.title; sameTitleState.jobs[1].company = "Same-title employer";
+    const sameTitleFixture = publicState(sameTitleState);
+    await sameTitlePage.route("**/api/state", route => route.fulfill({ json: sameTitleFixture }));
+    await sameTitlePage.route("**/api/actions", async route => {
+      const body = route.request().postDataJSON(); assert.equal(body.action, "feedback");
+      assert.equal(body.payload.jobId, sameTitleState.jobs[1].id);
+      updateJobFeedback(sameTitleFixture, body.payload); await route.fulfill({ json: { ok: true } });
+    });
+    await sameTitlePage.goto(origin);
+    const sameTitleRole = sameTitlePage.getByRole("article", { name: `${intern.title} Same-title employer`, exact: true });
+    await sameTitleRole.waitFor();
+    await sameTitleRole.getByRole("button", { name: `Save ${intern.title} at Same-title employer`, exact: true }).click();
+    await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer saved.`, { exact: true }).waitFor();
+    await sameTitleRole.getByRole("button", { name: `Dismiss ${intern.title} at Same-title employer`, exact: true }).click();
+    await sameTitleRole.waitFor({ state: "hidden" });
+    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Same-title employer:/);
+    await sameTitlePage.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+    await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer is back in your matches.`, { exact: true }).waitFor();
+    await sameTitleRole.waitFor(); await sameTitlePage.close();
+    console.log("PASS identical titles: Save, Dismiss and Undo identify the employer");
     const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const connectionFixture = publicState(structuredClone(demoState));
     let failedUpdates = false; let expiredUpdates = false;

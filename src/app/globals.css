@@ -105,6 +105,14 @@ input, textarea { caret-color: var(--forest); }
 .evidence-comparison dd { margin: 0; overflow-wrap: anywhere; }
 .evidence-comparison button { min-height: 44px; }
 .matches-subbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; }
+.keyboard-guide { margin: 0; }
+.keyboard-guide summary { font-weight: 600; }
+.keyboard-guide summary kbd { margin-left: 8px; }
+.keyboard-list { margin: 8px 0; display: grid; gap: 8px; }
+.keyboard-list > div { display: flex; align-items: baseline; gap: 12px; }
+.keyboard-list dt { min-width: 24px; }
+.keyboard-list dd { margin: 0; }
+.matches-subbar .keyboard-guide[open] { flex-basis: 100%; }
 .matches-subbar .fit-guide[open] { flex-basis: 100%; }
 .matches-subbar .fit-guide { margin: 0; }
 .matches-panel .search-status { margin-top: 24px; }
@@ -1582,6 +1590,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .matches-controls .matches-subbar { display: contents; }
   .matches-controls .fit-guide { grid-row: 1; grid-column: 2; }
   .matches-controls .fit-guide[open] { grid-row: 3; grid-column: 1 / -1; }
+  .matches-controls .keyboard-guide { grid-row: 4; grid-column: 1 / -1; }
   .matches-panel .feedback-notice { top: 88px; }
   .matches-panel.feedback-visible .job-row, .matches-panel.feedback-visible #matches-heading { scroll-margin-top: 260px; }
   .matches-controls .result-summary { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

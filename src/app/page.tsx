@@ -267,6 +267,11 @@ export default function Dashboard() {
       const target = event.target as HTMLElement;
       if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
       if (event.key === "/") { event.preventDefault(); searchInput.current?.focus(); }
+      if (event.key === "?") {
+        event.preventDefault();
+        const help = document.getElementById("matches-keyboard-help") as HTMLDetailsElement | null;
+        if (help) { help.open = true; help.querySelector<HTMLElement>("summary")?.focus(); }
+      }
       if (!event.repeat && ["s", "d", "u"].includes(event.key)) {
         const role = target.closest("article");
         const action = event.key === "u"
@@ -848,8 +853,6 @@ export default function Dashboard() {
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
                 <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
-                <p>Navigation: <kbd>/</kbd> search · <kbd>j</kbd> next role · <kbd>k</kbd> previous role.</p>
-                <p>With a role focused: <kbd>s</kbd> Save or Unsave · <kbd>d</kbd> Dismiss or Restore. Within Matches: <kbd>u</kbd> Undo dismissal. Shortcuts pause in text fields, dialogs and menus.</p>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
                 <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
                 <dl>
@@ -858,6 +861,21 @@ export default function Dashboard() {
                   <div><dt>Uncertain</dt><dd>Important information is missing or needs verification.</dd></div>
                   <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
                 </dl>
+              </details>
+              <details id="matches-keyboard-help" className="keyboard-guide matches-guidance">
+                <summary>Keyboard shortcuts <kbd>?</kbd></summary>
+                <p>Shortcuts pause in text fields, dialogs and menus.</p>
+                <dl className="keyboard-list" aria-label="Navigation shortcuts">
+                  <div><dt><kbd>/</kbd></dt><dd>Search roles</dd></div>
+                  <div><dt><kbd>j</kbd></dt><dd>Next role</dd></div>
+                  <div><dt><kbd>k</kbd></dt><dd>Previous role</dd></div>
+                </dl>
+                <p>With a role focused:</p>
+                <dl className="keyboard-list" aria-label="Role shortcuts">
+                  <div><dt><kbd>s</kbd></dt><dd>Save or Unsave</dd></div>
+                  <div><dt><kbd>d</kbd></dt><dd>Dismiss or Restore</dd></div>
+                </dl>
+                <p>Within Matches, <kbd>u</kbd> undoes dismissal. These shortcuts never prepare or submit an application.</p>
               </details>
               </div>
               </div>
@@ -870,7 +888,8 @@ export default function Dashboard() {
                   if (next) {
                     if (collection === "dismissed") continueAfterRemoval(undo.jobId);
                     else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
-                    setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
+                    const restoredRole = next.jobs.find(role => role.id === undo.jobId);
+                    setFeedbackNotice({ message: restoredRole ? `${restoredRole.title} at ${restoredRole.company} is back in your matches.` : "Dismissal undone. The role is back in your matches." });
                   }
                 }}>Undo</button>}
                 {feedbackNotice.returnView && <button className="text-button" aria-label="Return to previous view" onClick={() => {
@@ -983,7 +1002,7 @@ export default function Dashboard() {
                         <div className="job-actions">
                           {collection === "dismissed" ? <button className="outline-action" data-match-action="restore" aria-keyshortcuts="d" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
-                            if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${job.title} restored to your matches.` }); }
+                            if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${context} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
                           <div className="small-actions">
                             <button
@@ -1001,7 +1020,7 @@ export default function Dashboard() {
                                 if (next) {
                                   if (saved && collection === "saved") continueAfterRemoval(job.id);
                                   else feedbackReturnFocus.current = job.id;
-                                  setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                                  setFeedbackNotice({ message: `${context} ${saved ? "removed from saved" : "saved"}.` });
                                 }
                               }}
                             >
@@ -1027,7 +1046,7 @@ export default function Dashboard() {
                                 const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
                                 if (next) {
                                   continueAfterRemoval(job.id);
-                                  setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, compactMessage: `${job.title} dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                  setFeedbackNotice({ message: `${context} dismissed. Find it in Dismissed.`, compactMessage: `${job.company}: ${job.title} dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
                                 }
                               }}
                             >
@@ -2022,7 +2041,7 @@ export default function Dashboard() {
                   reason: dismissReason || undefined,
                 });
                 if (next) setDismissJobId(null);
-                if (next) { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice({ message: "Dismissal reason updated.", undo: feedbackNotice?.undo }); }
+                if (next) { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice({ message: dismissedRole ? `Dismissal reason updated for ${dismissedRole.title} at ${dismissedRole.company}.` : "Dismissal reason updated.", undo: feedbackNotice?.undo }); }
               }}
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
