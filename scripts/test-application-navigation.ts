@@ -38,13 +38,14 @@ async function main() {
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
       const picker = page.getByRole("combobox", { name: "Choose application", exact: true });
-      if (width <= 650) {
+      if (width <= 900) {
         assert.equal(await page.getByText("Application 1 of 6", { exact: true }).isVisible(), true);
         assert.equal(await page.getByRole("button", { name: "Previous application", exact: true }).isDisabled(), true);
         await picker.selectOption(state.applications[5].id);
         await page.getByRole("heading", { name: "Application role 6", exact: true }).waitFor();
         assert.equal(await page.getByText("Application 6 of 6", { exact: true }).isVisible(), true);
-        assert.equal(await page.getByText("Application complete · Submission confirmed", { exact: true }).isVisible(), true);
+        if (width <= 650) assert.equal(await page.getByText("Application complete · Submission confirmed", { exact: true }).isVisible(), true);
+        else assert.equal(await page.locator('.progress-desktop .done').count(), 5);
         assert.equal(await page.locator('.progress [aria-current="step"]').count(), 0);
 
         assert.equal(await page.getByRole("button", { name: "Next application", exact: true }).isDisabled(), true);
@@ -62,7 +63,7 @@ async function main() {
         await page.locator(".app-list-item").first().click();
       }
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Unsaved applicant answer");
-      if (width <= 650) assert.equal(await picker.isDisabled(), true);
+      if (width <= 900) assert.equal(await picker.isDisabled(), true);
       else assert.equal(await page.locator(".app-list-item").nth(5).isDisabled(), true);
       await page.getByRole("button", { name: "Matches", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Keep your changes?" });
@@ -77,7 +78,7 @@ async function main() {
       await page.getByRole("button", { name: /^View application for .*Employer 2/ }).click();
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
       assert.equal(await page.getByLabel(other.packet!.answers[0].question, { exact: true }).inputValue(), "Other employer answer", "Matches entry must not transfer answers");
-      if (width <= 650) await picker.selectOption(first.id);
+      if (width <= 900) await picker.selectOption(first.id);
       else await page.locator(".app-list-item").first().click();
       assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "Unsaved applicant answer");
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Discard this edit");
@@ -86,7 +87,7 @@ async function main() {
       await page.getByRole("button", { name: "Applications", exact: true }).click();
       assert.equal(await page.getByLabel(first.packet!.answers[0].question, { exact: true }).inputValue(), "Unsaved applicant answer");
       assert.equal(saves, 1);
-      if (width <= 650) assert.equal(await picker.isEnabled(), true);
+      if (width <= 900) assert.equal(await picker.isEnabled(), true);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       assert.deepEqual(errors, []);
       console.log(`PASS ${width}px: explicit collection, direct selection, correct detail, preserved unsaved changes, cancellation, no overflow`);

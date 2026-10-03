@@ -1749,7 +1749,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .app-layout:has(.application-collection[hidden]) { grid-template-columns: minmax(0, 1fr); }
 .application-count { font-size: 15px; margin: 0 0 12px; color: var(--forest); }
 .application-picker { display: none; }
-@media (max-width: 650px) {
+@media (max-width: 900px) {
   .application-collection .app-list, .application-count { display: none; }
   .application-picker { display: block; margin-bottom: 8px; }
   .application-picker-heading { display: flex; justify-content: space-between; align-items: center; color: var(--forest); font-size: 14px; font-weight: 600; }
