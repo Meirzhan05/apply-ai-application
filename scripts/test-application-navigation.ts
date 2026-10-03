@@ -71,6 +71,12 @@ async function main() {
       await page.keyboard.press("?");
       const help = page.locator("#applications-help");
       const helpSearch = help.getByRole("searchbox", { name: "Find help for a task", exact: true });
+      assert.equal(await help.locator(".help-task-group").count(), 3);
+      for (const query of ["sources", "source facts", "submission"]) {
+        await helpSearch.fill(query);
+        assert.equal(await help.getByText("No matching topic.", { exact: false }).count(), 0, `Suggested query ${query} must find guidance`);
+        assert.ok(await help.locator(".help-task-group details").count() > 0);
+      }
       await helpSearch.fill("consent");
       assert.equal(await help.getByText("1 topic", { exact: true }).isVisible(), true);
       await help.getByText("Answer personal or consent questions", { exact: true }).click();

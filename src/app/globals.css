@@ -1807,6 +1807,8 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .application-help-content input { width: 100%; min-height: 44px; }
 .application-help-content p { color: var(--ink); line-height: 1.6; }
 .application-help-content > details { border-bottom: 1px solid var(--line); }
+.help-task-group > div { padding: 0 0 12px 16px; }
+.help-task-group > div > details { margin: 4px 0; }
 .application-utilities { display: flex; flex-wrap: wrap; align-items: start; gap: 0 24px; }
 .application-utilities > details { margin: 8px 0; }
 .application-utilities > details[open] { flex-basis: 100%; }
