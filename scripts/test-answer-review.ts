@@ -17,7 +17,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   await mkdir(".data", { recursive: true });
   try {
-    for (const [label, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
+    for (const [label, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844], ["narrow", 320, 740]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
       const state = initialDemoState();
       const app = selectApplication(state, state.jobs[0].id, state.profile.id);
       const fact = state.profile.facts[0];
@@ -173,6 +173,13 @@ async function main() {
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await corrections.getByRole("alert").waitFor();
       assert.equal(await page.locator(".inline-error").count(), 0, "Correction recovery must have one local instruction");
+      await page.waitForFunction(() => document.activeElement?.getAttribute("aria-describedby") === "correction-save-error");
+      const correctionError = await corrections.getByRole("alert").boundingBox();
+      assert.ok(correctionError && correctionError.y >= 0 && correctionError.y + correctionError.height <= height, "Correction save error must stay visible after failure");
+      await page.keyboard.press("Tab");
+      assert.equal(await corrections.getByRole("button", { name: "Cancel corrections", exact: true }).evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await corrections.getByRole("button", { name: "Save facts and return to application", exact: true }).evaluate(element => element === document.activeElement), true);
       assert.equal(await factInput.inputValue(), "Analyzed survey data in my Python coursework project");
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.text, fact.text);
       const checkboxWidth = await corrections.getByRole("checkbox").evaluate(element => element.getBoundingClientRect().width);
