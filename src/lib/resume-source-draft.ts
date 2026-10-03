@@ -127,7 +127,7 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
   source = sourceWithCurrentEvidenceClaims(source, profile.name);
   const counts: Counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
   if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This source résumé layout is unsupported.");
-  if ((source.format === "docx" && source.version !== 1) || (source.format === "pdf" && source.version !== 1 && source.version !== 2) ||
+  if ((source.format === "docx" && source.version !== 1) || (source.format === "pdf" && source.version !== 1 && source.version !== 2 && source.version !== 3) ||
     source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 80)
     throw new Error("The inspected source résumé is missing, stale, or outside the supported context limit.");
   assertSourceInformationComplete(source, profile);

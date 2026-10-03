@@ -59,6 +59,76 @@ it("keeps ordinary indented content in one column and follows its vertical order
   ]);
 });
 
+it("keeps adjacent PDF.js fragments on one line in their single reading lane", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "line-start", pageIndex: 0, bounds: { left: 46, top: 100, right: 110, bottom: 112 } },
+    { id: "separator", pageIndex: 0, bounds: { left: 114, top: 100, right: 117, bottom: 112 } },
+    { id: "line-tail", pageIndex: 0, bounds: { left: 120, top: 100, right: 270, bottom: 112 } },
+    { id: "next-line", pageIndex: 0, bounds: { left: 46, top: 118, right: 220, bottom: 130 } },
+  ]);
+
+  expect(result.status).toBe("supported");
+  if (result.status !== "supported") return;
+  expect(result.assignments.map((item) => item.spanId)).toEqual(["line-start", "separator", "line-tail", "next-line"]);
+  expect(new Set(result.assignments.map((item) => item.regionId))).toEqual(new Set(["page-1-column-1"]));
+});
+
+it("does not let a disconnected pair of text fragments define a new inline lane", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "left-lane", pageIndex: 0, bounds: { left: 54, top: 200, right: 180, bottom: 212 } },
+    { id: "detached-one", pageIndex: 0, bounds: { left: 330, top: 100, right: 342, bottom: 112 } },
+    { id: "detached-two", pageIndex: 0, bounds: { left: 350, top: 100, right: 380, bottom: 112 } },
+  ]);
+
+  expect(result).toMatchObject({ status: "blocked", reason: expect.stringMatching(/falls between the detected columns/i), regions: [], assignments: [] });
+});
+
+it("keeps page-title rows and right-aligned row metadata with a single body lane", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "header", pageIndex: 0, topFurniture: true, bounds: { left: 229, top: 30, right: 370, bottom: 42 } },
+    { id: "role", pageIndex: 0, bounds: { left: 61, top: 100, right: 250, bottom: 114 } },
+    { id: "bullet-marker", pageIndex: 0, bounds: { left: 61, top: 140, right: 65, bottom: 154 } },
+    { id: "bullet-text", pageIndex: 0, bounds: { left: 116, top: 140, right: 270, bottom: 154 } },
+    { id: "date", pageIndex: 0, lineMetadata: true, bounds: { left: 479, top: 100, right: 571, bottom: 114 } },
+  ]);
+
+  expect(result.status).toBe("supported");
+  if (result.status !== "supported") return;
+  expect(result.regions).toHaveLength(1);
+  expect(result.assignments.map((item) => item.spanId)).toEqual(["header", "role", "date", "bullet-marker", "bullet-text"]);
+  expect(new Set(result.assignments.map((item) => item.regionId))).toEqual(new Set(["page-1-column-1"]));
+});
+
+it("keeps top-of-page contact furniture in its established right column", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "left-name", pageIndex: 0, topFurniture: true, bounds: { left: 50, top: 20, right: 220, bottom: 34 } },
+    { id: "right-contact", pageIndex: 0, topFurniture: true, bounds: { left: 340, top: 20, right: 520, bottom: 32 } },
+    { id: "left-role", pageIndex: 0, bounds: { left: 50, top: 100, right: 245, bottom: 114 } },
+    { id: "left-bullet-one", pageIndex: 0, bounds: { left: 50, top: 130, right: 250, bottom: 144 } },
+    { id: "left-bullet-two", pageIndex: 0, bounds: { left: 70, top: 160, right: 255, bottom: 174 } },
+    { id: "right-skills", pageIndex: 0, bounds: { left: 340, top: 100, right: 500, bottom: 114 } },
+    { id: "right-project", pageIndex: 0, bounds: { left: 340, top: 130, right: 510, bottom: 144 } },
+  ]);
+
+  expect(result.status).toBe("supported");
+  if (result.status !== "supported") return;
+  const assignments = new Map(result.assignments.map((item) => [item.spanId, item]));
+  expect(assignments.get("right-contact")?.regionId).toBe("page-1-column-2");
+  expect(result.assignments.map((item) => item.spanId)).toEqual([
+    "left-name", "left-role", "left-bullet-one", "left-bullet-two", "right-contact", "right-skills", "right-project",
+  ]);
+});
+
+it("assigns furniture spans only once when they are the page's only text", () => {
+  const result = groupPositionedSpansIntoRegions([
+    { id: "header", pageIndex: 0, topFurniture: true, bounds: { left: 229, top: 30, right: 370, bottom: 42 } },
+  ]);
+
+  expect(result.status).toBe("supported");
+  if (result.status !== "supported") return;
+  expect(result.assignments).toEqual([{ spanId: "header", regionId: "page-1-column-1", readingOrder: 0 }]);
+});
+
 it("keeps page regions distinct while maintaining document-wide reading order", () => {
   const result = groupPositionedSpansIntoRegions([
     { id: "p2-right-a", pageIndex: 1, bounds: { left: 330, top: 36, right: 470, bottom: 50 } },

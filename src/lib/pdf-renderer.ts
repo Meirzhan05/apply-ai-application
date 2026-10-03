@@ -21,6 +21,8 @@ function safePdfWorkerError(error: unknown): Error | undefined {
   if (/No glyph for U\+[0-9A-F]{4,6}\b[^\r\n]{0,180}\bin font\b/i.test(stderr))
     return new ResumeRendererDiagnosticError({ code: "unsupported_glyph" });
   if (/The source font for an edited résumé bullet is not embedded as a supported outline font\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "unembedded_font" });
+  if (stderr.includes("The source bullet uses character, word, or horizontal text spacing that cannot be safely preserved by this PDF editor."))
+    return new Error("The source bullet uses character, word, or horizontal text spacing that cannot be safely preserved by this PDF editor.");
   if (/The PDF source font changed after inspection\./.test(stderr)) return new ResumeRendererDiagnosticError({ code: "changed_source_font" });
   if (stderr.includes("The PDF renderer changed page dimensions after editing."))
     return new ResumeRendererDiagnosticError({ code: "page_dimensions" });
@@ -86,8 +88,9 @@ function anchorForEdit(source: PdfSourceRepresentation, edit: ResumeSourcePlan["
 function editManifest(source: PdfSourceRepresentation, plan: ResumeSourcePlan) {
   return plan.edits.map((edit) => {
     const anchor = anchorForEdit(source, edit);
+    if (!Number.isInteger(anchor.showOperatorIndex) || typeof anchor.operatorText !== "string") throw new Error("The inspected PDF is missing its exact source text-operator map. Reinspect the original PDF before drafting again.");
     const replacement = `${anchor.bulletPrefix}${edit.text}`;
-    const fields = [encode(anchor.id), String(anchor.pageNumber), encode(anchor.sourceText), encode(replacement), encode(anchor.font.family),
+    const fields = [encode(anchor.id), String(anchor.pageNumber), String(anchor.showOperatorIndex), encode(anchor.sourceText), encode(anchor.operatorText), encode(replacement), encode(anchor.font.family),
       String(anchor.boundsPt.left), String(anchor.boundsPt.top), String(anchor.boundsPt.right), String(anchor.boundsPt.bottom)];
     return fields.join("\t");
   }).join("\n") + (plan.edits.length ? "\n" : "");
@@ -146,7 +149,7 @@ function sourcePages(source: PdfSourceRepresentation, metrics: ReturnType<typeof
 }
 
 function validatePlan(sourceBytes: Buffer, source: PdfSourceRepresentation, plan: ResumeSourcePlan, trustedName?: string) {
-  if (source.format !== "pdf" || source.support.status !== "candidate" || source.sourceHash !== bytesHash(sourceBytes) || plan.format !== "pdf" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version)
+  if (source.format !== "pdf" || source.version !== 3 || source.support.status !== "candidate" || source.sourceHash !== bytesHash(sourceBytes) || plan.format !== "pdf" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version)
     throw new Error(source.support.reason ?? "The inspected PDF source is missing, stale, or unsupported. Upload and inspect the original again.");
   const expectedClaims = new Set(sourceEvidenceAnchors(source, planEvidencePolicy(plan), trustedName).map((anchor) => anchor.id));
   const actualClaims = new Set(plan.claims.map((claim) => claim.anchorId));

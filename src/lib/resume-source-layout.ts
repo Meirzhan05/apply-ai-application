@@ -2,7 +2,7 @@ import { hashJson } from "@/lib/crypto";
 import type { PdfSourceRepresentation, ResumeSourceLayoutMap } from "@/lib/types";
 
 export function pdfSourceLayout(source: PdfSourceRepresentation): ResumeSourceLayoutMap | undefined {
-  if (source.version !== 2) return undefined;
+  if (source.version !== 2 && source.version !== 3) return undefined;
   const pages = source.layout.pages;
   if (!pages || pages.length !== source.layout.pageCount) throw new Error("The inspected PDF is missing its complete page and region map. Re-upload the original before drafting.");
   const anchors = source.anchors.map((anchor) => {

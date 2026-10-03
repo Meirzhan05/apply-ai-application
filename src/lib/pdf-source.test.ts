@@ -7,7 +7,7 @@ it("inspects complete readable PDF content into stable source-bound anchors", as
   const source = await parsePdfSource(bytes);
   const repeated = await parsePdfSource(bytes);
 
-  expect(source).toMatchObject({ format: "pdf", parser: "pdfjs-text-2", version: 2, support: { status: "candidate" }, sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  expect(source).toMatchObject({ format: "pdf", parser: "pdfjs-text-3", version: 3, support: { status: "candidate" }, sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
   expect(source.text).toContain("avery@example.com");
   expect(source.text).toContain("linkedin.com/in/averychen");
   expect(source.text).toContain("Work Experience");
@@ -41,6 +41,17 @@ it("blocks image-only PDFs and maps every page and text column for readable sour
   expect(columns.support).toEqual({ status: "candidate" });
   expect(columns.layout.columns).toBe(2);
   expect(columns.layout.pages?.[0].regions.map((region) => region.columnId)).toEqual(["column-1", "column-2"]);
+});
+
+it("keeps a second-page right-column section in its original column near the top edge", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ pages: 2, pageTwoRightTop: true }));
+  const heading = source.anchors.find((anchor) => anchor.text === "Technical Skills");
+  const skill = source.anchors.find((anchor) => anchor.text === "Updated tooling");
+
+  expect(source.support).toEqual({ status: "candidate" });
+  expect(heading).toMatchObject({ pageNumber: 2, regionId: "page-2-column-2" });
+  expect(skill).toMatchObject({ pageNumber: 2, regionId: "page-2-column-2" });
+  expect(new Set(source.anchors.map((anchor) => anchor.id)).size).toBe(source.anchors.length);
 });
 
 it("keeps complete long source text but blocks bullets too long to safely edit", async () => {

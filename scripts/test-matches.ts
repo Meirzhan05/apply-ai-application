@@ -17,8 +17,11 @@ async function main() {
   demoState.matchCache = { [matchKey(demoState.profile, intern)]: { ...assessMatchLocally(demoState.profile, intern), category: "strong" } };
   let fixture = publicState(demoState);
   let failFeedback = false;
+  let malformedFeedback = false;
   let slowFeedback = false;
+  let failRefresh = false;
   let failImport = false;
+  let malformedImport = false;
   let authImport = false;
   let authFeedback = false;
   let feedbackRequests = 0;
@@ -27,13 +30,14 @@ async function main() {
     const page = await browser.newPage();
     // Drive the shipped component with invented applicant/jobs. No account,
     // provider calls, application approvals or submissions are involved.
-    await page.route("**/api/state", route => route.fulfill({ json: fixture }));
+    await page.route("**/api/state", route => { if (failRefresh) { failRefresh = false; return route.fulfill({ status: 503, json: { error: "Invented refresh failure" } }); } return route.fulfill({ json: fixture }); });
     await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(fixture)}\n\n` }));
     await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
       if (body.action === "import") {
         if (authImport) { authImport = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
         if (fixture.jobs.some(job => job.url === body.payload.url)) return route.fulfill({ status: 409, json: { error: "This link is already in your catalog." } });
+        if (malformedImport) { malformedImport = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Invented gateway failure</html>" }); }
         if (failImport) { failImport = false; return route.fulfill({ status: 503, json: { error: "Posting unavailable. Check the link or try later." } }); }
         await new Promise(resolve => setTimeout(resolve, 750));
         const job = { ...intern, id: "synthetic-import", company: body.payload.company, title: body.payload.title, url: body.payload.url, importUrl: body.payload.url, requirements: [], source: "imported" as const, sourceLabel: "Imported link", importCheck: { status: "manual" as const, checkedAt: new Date().toISOString() } };
@@ -44,6 +48,7 @@ async function main() {
       feedbackRequests++;
       assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
+      if (malformedFeedback) { malformedFeedback = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Invented gateway failure</html>" }); }
       if (authFeedback) { authFeedback = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
       if (failFeedback) { failFeedback = false; return route.fulfill({ status: 503, json: { error: "Feedback could not be saved. Try again." } }); }
       if (slowFeedback) { slowFeedback = false; await new Promise(resolve => setTimeout(resolve, 750)); }
@@ -89,6 +94,7 @@ async function main() {
       assert.ok(firstRoleBox && firstRoleBox.y < height, "The first role must begin in the initial viewport");
       assert.equal(await strongRole.locator(".fit-highlight").innerText(), "Posting: React · Your confirmed experience: Built a React portfolio project");
       if (label === "mobile") {
+        assert.ok(firstRoleBox && firstRoleBox.y <= height / 2, "Role reading should begin within the first half of the phone viewport");
         const prepareBox = await jobButton("Prepare application for").boundingBox();
         assert.ok(prepareBox && prepareBox.y + prepareBox.height <= height, "One complete opportunity and its preparation action should fit in the opening phone viewport");
       }
@@ -108,9 +114,11 @@ async function main() {
       }
       assert.equal(await page.getByRole("combobox", { name: "Sort roles" }).getAttribute("aria-describedby"), "sort-help");
       assert.equal(await page.getByText("Relevance considers fit and your feedback.", { exact: true }).isVisible(), true);
+      await page.locator("#matches-help > summary").click();
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
       await page.locator(".fit-guide summary").click();
+      await page.locator("#matches-help > summary").click();
       assert.equal(await strongRole.locator(".match-reasons").isVisible(), false, "Full reasoning is disclosed on request");
       await strongRole.locator(".fit-evidence summary").click();
       assert.equal(await strongRole.locator(".evidence-comparison").getByText("Built a React portfolio project", { exact: true }).isVisible(), true);
@@ -148,8 +156,7 @@ async function main() {
       await dismissLauncher.click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, undefined, "Quick dismissal must not invent a reason");
-      await page.locator(".feedback-options summary").click();
-      const reasonLauncher = page.getByRole("button", { name: "Add a reason (optional)", exact: true });
+      const reasonLauncher = page.getByRole("button", { name: "Add reason", exact: true });
       await reasonLauncher.click();
       const dismissDialog = page.getByRole("dialog", { name: "Add a dismissal reason" });
       await dismissDialog.waitFor();
@@ -167,11 +174,39 @@ async function main() {
       await dismissDialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
       assert.equal(await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
       assert.doesNotMatch(await dismissDialog.getByRole("alert").innerText(), /AUTH_REQUIRED/);
+      assert.equal(await page.locator(".inline-error").count(), 0, "Modal recovery must not duplicate the global error");
+      const signInBounds = (await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).boundingBox())!;
+      const refreshBounds = (await dismissDialog.getByRole("button", { name: "Refresh workspace", exact: true }).boundingBox())!;
+      assert.ok(refreshBounds.y >= signInBounds.y + signInBounds.height || refreshBounds.x >= signInBounds.x + signInBounds.width + 16, "Recovery controls need visible separation or a separate row");
+      await page.screenshot({ path: `.data/matches-reason-recovery-${label}.png`, fullPage: true });
+      await dismissDialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dismissDialog.getByRole("alert").waitFor({ state: "hidden" });
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "Location is not right", "In-dialog refresh preserves the reason draft");
+      await page.keyboard.press("Escape");
+      await dismissDialog.waitFor({ state: "hidden" });
+      await reasonLauncher.click();
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "Location is not right", "Reopening the same role preserves the reason draft");
       await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
       await dismissDialog.waitFor({ state: "hidden" });
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Location is not right");
       await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
       await strongRole.waitFor();
+      await jobButton("Dismiss").click();
+      await page.getByRole("button", { name: "Add reason", exact: true }).click();
+      await dismissDialog.getByRole("combobox", { name: "Reason" }).selectOption("Wrong role");
+      await page.goto(`${origin}/login`);
+      await page.goto(origin);
+      await dismissDialog.waitFor();
+      assert.equal(await dismissDialog.getByRole("combobox", { name: "Reason" }).inputValue(), "Wrong role", "Returning from sign-in retains the same applicant and role draft");
+      await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
+      await dismissDialog.waitFor({ state: "hidden" });
+      assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Wrong role");
+      assert.equal(JSON.parse((await page.evaluate(owner => sessionStorage.getItem(`apply-ai:matches:${owner}`), fixture.profile.id))!).dismissDraft, undefined, "Saving clears the stored reason draft");
+      await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
+      await jobButton("Restore role").click();
+      await page.getByRole("button", { name: "All roles 3", exact: true }).click();
+      await strongRole.waitFor();
+      if (label === "mobile") await page.getByRole("button", { name: /^Filter and sort/ }).click();
       assert.match(await strongRole.locator(".fit-evidence summary").getAttribute("aria-label") ?? "", /2 things to check/);
       assert.equal(await page.getByRole("button", { name: "Matches", exact: true }).getAttribute("aria-current"), "page");
       assert.equal(await page.getByRole("button", { name: "Any fit 3", exact: true }).getAttribute("aria-pressed"), "true");
@@ -182,6 +217,14 @@ async function main() {
       await page.getByRole("button", { name: "Saved 0", exact: true }).click();
       await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      const previousSearch = await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue();
+      malformedFeedback = true;
+      await jobButton("Save").click();
+      await strongRole.getByRole("alert").getByText("We couldn’t confirm whether your collection changes were saved. Refresh your workspace to check the latest status before trying again.", { exact: true }).waitFor();
+      assert.equal(await jobButton("Save").isVisible(), true);
+      assert.equal(await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue(), previousSearch);
+      await strongRole.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await strongRole.getByRole("alert").waitFor({ state: "hidden" });
       failFeedback = true;
       await jobButton("Save").click();
       await strongRole.getByRole("alert").getByText("Feedback could not be saved. Try again.", { exact: true }).waitFor();
@@ -232,10 +275,26 @@ async function main() {
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("?");
       const keyboardHelp = page.locator("#matches-keyboard-help");
+      assert.notEqual(await page.locator("#matches-help").getAttribute("open"), null, "The help shortcut must reveal its enclosing disclosure");
       assert.notEqual(await keyboardHelp.getAttribute("open"), null);
       assert.equal(await keyboardHelp.locator("summary").evaluate(element => element === document.activeElement), true);
       assert.equal(await keyboardHelp.getByText("Save or Unsave", { exact: true }).isVisible(), true);
       await page.screenshot({ path: `.data/matches-shortcuts-${label}.png` });
+      await keyboardHelp.getByRole("checkbox", { name: "Enable keyboard shortcuts", exact: true }).uncheck();
+      assert.equal(await page.locator("[aria-keyshortcuts]").count(), 0, "Disabled shortcuts must not be advertised to assistive technology");
+      await keyboardHelp.locator("summary").click();
+      const navMatches = page.getByRole("button", { name: "Matches", exact: true });
+      await navMatches.focus();
+      for (const key of ["/", "?", "j", "k"]) await page.keyboard.press(key);
+      assert.equal(await navMatches.evaluate(element => element === document.activeElement), true, "Disabled global character shortcuts must preserve native focus");
+      assert.equal(await keyboardHelp.getAttribute("open"), null);
+      const requestsBeforeDisabledShortcuts = feedbackRequests;
+      await strongRole.focus();
+      for (const key of ["s", "d", "u"]) await page.keyboard.press(key);
+      assert.equal(feedbackRequests, requestsBeforeDisabledShortcuts, "Disabled action shortcuts must not send mutations");
+      assert.equal(JSON.parse((await page.evaluate(owner => sessionStorage.getItem(`apply-ai:matches:${owner}`), fixture.profile.id))!).shortcutsEnabled, false);
+      await keyboardHelp.locator("summary").click();
+      await keyboardHelp.getByRole("checkbox", { name: "Enable keyboard shortcuts", exact: true }).check();
       await keyboardHelp.locator("summary").click();
       await page.getByRole("button", { name: "Matches", exact: true }).focus();
       await page.keyboard.press("j");
@@ -286,12 +345,46 @@ async function main() {
       await dialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
       assert.equal(await dialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
       assert.doesNotMatch(await dialog.getByRole("alert").innerText(), /Check the link|AUTH_REQUIRED/);
+      assert.equal(await page.locator(".inline-error").count(), 0, "Import recovery must not duplicate the global error");
       assert.equal(await url.inputValue(), "https://company.example/careers/role");
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Authentication must be recovered before resubmitting");
+      await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dialog.getByRole("alert").waitFor({ state: "hidden" });
       failImport = true;
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();
       await dialog.getByRole("alert").getByText(/Posting unavailable/).waitFor();
       assert.equal(await url.inputValue(), "https://company.example/careers/role", "Failed import preserves the entered link");
       assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
+      await page.screenshot({ path: `.data/matches-import-recovery-${label}.png`, fullPage: true });
+      assert.equal(await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).count(), 0, "A known posting failure should guide posting retry rather than status reconciliation");
+      malformedImport = true;
+      await dialog.getByRole("button", { name: "Try adding again", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/couldn’t confirm whether this role was added/).waitFor();
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "An uncertain import outcome requires refreshing status before retrying");
+      const recoveryBox = await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).boundingBox();
+      const urlBox = await url.boundingBox();
+      assert.ok(recoveryBox && urlBox && recoveryBox.y + recoveryBox.height <= urlBox.y, "Import reconciliation is discoverable before the retained form fields");
+      await page.screenshot({ path: `.data/matches-import-uncertain-${label}.png`, fullPage: true });
+      failRefresh = true;
+      await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/Could not refresh your workspace/).waitFor();
+      assert.match(await dialog.getByRole("alert").innerText(), /couldn’t confirm whether this role was added/);
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Failed reconciliation must keep repeat import blocked");
+      await page.screenshot({ path: `.data/matches-import-refresh-failed-${label}.png`, fullPage: true });
+      for (let step = 0; step < 5; step++) await page.keyboard.press("Tab");
+      const draftExit = dialog.getByRole("button", { name: "Discard draft", exact: true });
+      assert.equal(await draftExit.evaluate(element => element === document.activeElement), true, "Native dialog tab order exposes the retained-draft exit");
+      const draftExitBox = await draftExit.boundingBox();
+      assert.ok(draftExitBox && draftExitBox.y >= 0 && draftExitBox.y + draftExitBox.height <= height, "Focusing the draft exit scrolls it fully into view");
+      await page.keyboard.press("Escape");
+      for (const name of ["Save", "Dismiss", "Prepare application for"]) assert.equal(await jobButton(name).isDisabled(), true, "Role action availability must match the reconciliation guard");
+      await launcher.click();
+      assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Reopening a dialog must not release an unresolved import guard");
+      await dialog.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await dialog.getByRole("alert").waitFor({ state: "hidden" });
+      assert.equal(await url.inputValue(), "https://company.example/careers/role", "In-dialog refresh preserves the import link");
+      assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).inputValue(), "Example");
+      assert.equal(await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).inputValue(), "Analyst");
       await page.keyboard.press("Escape");
       await jobButton("Save").click();
       await page.getByRole("button", { name: "Saved 1", exact: true }).click();
@@ -310,6 +403,8 @@ async function main() {
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();
       await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).waitFor();
       assert.equal(await dialog.getByRole("button", { name: "Checking and adding…", exact: true }).isDisabled(), true);
+      assert.equal(await url.isDisabled(), true, "An in-flight import locks its submitted link");
+      for (const field of ["Company (required)", "Job title (required)", "Location (optional)"]) assert.equal(await dialog.getByRole("textbox", { name: field, exact: true }).isDisabled(), true, "An in-flight import must not erase new edits on completion");
       await dialog.waitFor({ state: "hidden" });
       const imported = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Analyst", exact: true }) });
       await imported.waitFor();
@@ -385,7 +480,17 @@ async function main() {
       await page.getByRole("article").last().getByRole("button", { name: /^Dismiss / }).click();
       await page.waitForFunction(() => document.querySelectorAll(".job-row").length === 11);
       const undoBox = await page.getByRole("button", { name: "Undo dismissal", exact: true }).boundingBox();
-      assert.ok(undoBox && undoBox.y >= (label === "mobile" ? 78 : 0) && undoBox.y + undoBox.height <= height, "Lower-list Undo remains visible without scrolling back");
+      const chromeBox = (await page.locator(label === "mobile" ? ".sidebar" : ".topbar").boundingBox())!;
+      assert.ok(undoBox && undoBox.y >= chromeBox.y + chromeBox.height && undoBox.y + undoBox.height <= height, "Lower-list Undo remains visible below navigation without scrolling back");
+      const feedbackRail = page.locator(".matches-feedback-rail");
+      const readingPane = page.getByRole("region", { name: "Matches workspace", exact: true });
+      assert.ok(await readingPane.evaluate(element => element.scrollTop > 0), "Lower-list dismissal must exercise a scrolled reading pane");
+      const railBounds = (await feedbackRail.boundingBox())!;
+      const paneBounds = (await readingPane.boundingBox())!;
+      assert.ok(railBounds.y + railBounds.height <= paneBounds.y + 1, "Persistent feedback must occupy reserved space outside the reading area");
+      await readingPane.evaluate(element => element.scrollBy(0, -180));
+      const scrolledRailBounds = (await feedbackRail.boundingBox())!;
+      assert.equal(scrolledRailBounds.y, railBounds.y, "Undo stays visible while roles scroll independently");
       await page.screenshot({ path: `.data/matches-feedback-${label}.png` });
       await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
       await page.waitForFunction(() => document.querySelectorAll(".job-row").length === 12);
@@ -399,6 +504,15 @@ async function main() {
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
       await page.screenshot({ path: `.data/matches-${label}-viewport.png` });
+      const defaultPane = page.getByRole("region", { name: "Matches workspace", exact: true });
+      await defaultPane.focus();
+      await page.keyboard.press("PageDown");
+      await page.waitForFunction(() => (document.querySelector(".matches-content-scroll")?.scrollTop ?? 0) > 100);
+      assert.equal(await defaultPane.evaluate(element => element === document.activeElement), true, "The reading pane supports native keyboard scrolling without changing focus");
+      await page.screenshot({ path: `.data/matches-pane-focus-${label}.png` });
+      await defaultPane.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await page.screenshot({ path: `.data/matches-end-${label}.png` });
+      await defaultPane.evaluate(element => { element.scrollTop = 0; });
       fixture.lastRefreshAt = new Date().toISOString();
       fixture.discovery = { lastRefreshAt: new Date(Date.now() - 2 * 86400000).toISOString(), sources: [{ source: "first", status: "available", checkedAt: new Date().toISOString() }, { source: "second", status: "unavailable", checkedAt: new Date().toISOString() }], events: [] };
       await page.reload();
@@ -454,6 +568,11 @@ async function main() {
         const navigation = page.getByRole("button", { name, exact: true });
         assert.ok(await navigation.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 10), `Navigation labels stay visible at ${width}px`);
       }
+      if (width <= 650) {
+        const boxes = await page.locator(".collection-filter").evaluateAll(elements => elements.map(element => { const box = element.getBoundingClientRect(); return { top: box.top, height: box.height }; }));
+        assert.equal(new Set(boxes.map(box => box.top)).size, 1, "Collection controls stay on one readable row at narrow widths");
+        assert.ok(boxes.every(box => box.height >= 44));
+      }
       console.log(`PASS responsive ${width}x${height}: long content, visible navigation, no horizontal overflow`);
     }
     const sameTitlePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -473,7 +592,7 @@ async function main() {
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer saved.`, { exact: true }).waitFor();
     await sameTitleRole.getByRole("button", { name: `Dismiss ${intern.title} at Same-title employer`, exact: true }).click();
     await sameTitleRole.waitFor({ state: "hidden" });
-    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Dismissed: Same-title employer\./);
+    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Dismissed: Software Engineering Intern at Same-title employer\./);
     await sameTitlePage.getByRole("button", { name: "Undo dismissal", exact: true }).click();
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer is back in your matches.`, { exact: true }).waitFor();
     await sameTitleRole.waitFor(); await sameTitlePage.close();
@@ -543,6 +662,109 @@ async function main() {
     }
     await personalPage.close();
     console.log("PASS personal-search states: compact completed status, first role action, focused setup, failed-search import and monthly budget recovery");
+    const batchPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const batchState = structuredClone(demoState);
+    batchState.jobs = Array.from({ length: 4 }, (_, index) => ({ ...intern, id: `batch-${index}`, company: `QA Batch ${index}`, url: `https://example.com/batch-${index}` }));
+    batchState.importedJobs = []; batchState.applications = [];
+    updateJobFeedback(batchState, { jobId: "batch-0", kind: "saved" });
+    let batchFixture = publicState(batchState); let batchCalls = 0; let failBatch = true;
+    let releaseBatch: (() => void) | undefined; let slowBatch = false;
+    let ambiguousBatch = false; let failedBatchRefresh = false; let failAmbiguousRefresh = true;
+    await batchPage.route("**/api/state", route => route.fulfill(failedBatchRefresh ? { status: 503, json: { error: "Temporary refresh failure" } } : { json: batchFixture }));
+    await batchPage.route("**/api/actions", async route => {
+      const body = route.request().postDataJSON();
+      assert.equal(body.action, "feedback"); assert.equal(body.payload.kind, "saved");
+      assert.equal(body.payload.expectedKind, "clear"); assert.equal(body.payload.expectedOwnerId, batchFixture.profile.id);
+      batchCalls++;
+      if (ambiguousBatch) {
+        ambiguousBatch = false; failedBatchRefresh = failAmbiguousRefresh;
+        updateJobFeedback(batchFixture, body.payload);
+        return route.fulfill({ status: 200, contentType: "application/json", body: "unreadable" });
+      }
+      if (failBatch && batchCalls === 2) return route.fulfill({ status: 503, json: { error: "A role could not be saved. Try again." } });
+      if (slowBatch) { slowBatch = false; await new Promise<void>(resolve => { releaseBatch = resolve; }); }
+      updateJobFeedback(batchFixture, body.payload); return route.fulfill({ json: { ok: true } });
+    });
+    await batchPage.goto(origin); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).fill("QA Batch");
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Interrupted. 1/3 saves confirmed.", { exact: true }).waitFor();
+    assert.equal(batchCalls, 2, "Stop after the first failed request");
+    assert.equal(batchFixture.feedback.filter(item => item.kind === "saved").length, 2, "Keep the completed save and original bookmark");
+    failBatch = false;
+    await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Saved 2 roles.", { exact: true }).waitFor();
+    await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
+    assert.equal(batchCalls, 4, "Retry only the remaining unsaved roles");
+    await batchPage.getByRole("button", { name: "Review saved", exact: true }).click();
+    assert.equal(await batchPage.getByRole("article").count(), 4);
+    await batchPage.getByRole("button", { name: "Return to previous view", exact: true }).click();
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; slowBatch = true;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
+    assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), true);
+    assert.equal(await batchPage.getByRole("combobox", { name: "Sort roles", exact: true }).isDisabled(), true);
+    await batchPage.getByRole("button", { name: "Stop further saves", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Stopping…", exact: true }).waitFor();
+    while (!releaseBatch) await batchPage.waitForTimeout(10);
+    releaseBatch();
+    await batchPage.locator(".feedback-summary").getByText("Stopped. Saved 1/3.", { exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), false);
+    assert.equal(batchCalls, 1, "Stopping finishes the in-flight bookmark without starting another");
+    await batchPage.screenshot({ path: ".data/matches-batch-mobile.png" });
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; ambiguousBatch = true;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    const saveView = batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true });
+    await saveView.click();
+    const batchRecovery = batchPage.getByRole("alert").filter({ hasText: "The save status could not be refreshed" });
+    await batchRecovery.waitFor();
+    const refreshBatch = batchRecovery.getByRole("button", { name: "Refresh workspace", exact: true });
+    await batchPage.waitForFunction(() => document.activeElement?.closest('.workspace-recovery-actions') !== null && document.activeElement?.textContent === "Refresh workspace");
+    assert.equal(await refreshBatch.evaluate(element => element === document.activeElement), true, "Zero-confirmed batch failure must focus the usable recovery action");
+    const recoveryContrast = () => refreshBatch.evaluate(element => {
+      const style = getComputedStyle(element);
+      const [foreground, background] = [style.color, style.backgroundColor].map(color => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(value => Number(value) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      });
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    await batchPage.mouse.move(0, 0);
+    assert.ok(await recoveryContrast() >= 4.5, "Recovery label needs AA contrast when focused");
+    await refreshBatch.hover();
+    assert.ok(await recoveryContrast() >= 4.5, "Recovery label needs AA contrast on hover too");
+    assert.equal(await saveView.isDisabled(), true, "Uncertain batch outcomes stay gated after a failed reconciliation");
+    assert.equal(await batchPage.getByRole("article").locator('[data-match-action="save"]').first().isDisabled(), true, "Individual writes stay gated too");
+    await refreshBatch.click();
+    await batchPage.getByRole("alert").filter({ hasText: "Could not refresh your workspace" }).waitFor();
+    assert.equal(await saveView.isDisabled(), true, "Repeated refresh failure must not release uncertainty");
+    assert.equal(batchCalls, 1, "No automatic mutation retry after an unreadable success response");
+    assert.equal(await batchPage.locator(".matches-feedback-rail").count(), 0, "Uncertain batch recovery consolidates the confirmed count and next action in one region");
+    assert.match(await batchPage.getByRole("alert").filter({ hasText: "0 of 3 saves confirmed" }).innerText(), /Remaining save outcomes need checking/);
+    await batchPage.screenshot({ path: ".data/matches-batch-uncertain-mobile.png" });
+    failedBatchRefresh = false;
+    await batchPage.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false);
+    assert.equal(batchCalls, 1, "Successful reconciliation reveals the accepted save without repeating it");
+    await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; ambiguousBatch = true; failAmbiguousRefresh = false;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Save status refreshed.", { exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false, "A successful automatic reconciliation must clear the old uncertainty error gate");
+    assert.equal(await batchPage.locator(".inline-error").count(), 0);
+    assert.equal(batchCalls, 1, "Automatic reconciliation never repeats an accepted mutation");
+    await batchPage.close();
+    console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
+    if (process.env.TEST_MATCHES_SKIP_CONNECTION === "1") {
+      console.log("SKIP unchanged connection checks by explicit focused-test setting");
+      return;
+    }
     const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const connectionFixture = publicState(structuredClone(demoState));
     let failedUpdates = false; let expiredUpdates = false;
@@ -559,7 +781,8 @@ async function main() {
     const connectionNotice = connectionPage.locator(".workspace-connection");
     try { await connectionNotice.waitFor({ timeout: 60_000 }); }
     catch (error) { console.error("Connection test diagnostics", { failedChecks, hidden: await connectionPage.evaluate(() => document.hidden) }); throw error; }
-    assert.match((await connectionNotice.textContent()) ?? "", /updates are paused/);
+    assert.match((await connectionNotice.textContent()) ?? "", /Reconnecting.*last received list/);
+    assert.ok((await connectionNotice.boundingBox())!.height <= 76, "Connection recovery should leave phone reading space while retaining a touch-sized retry");
     assert.equal(await connectionPage.getByRole("article").count(), 3, "Interrupted updates retain the last received list");
     await connectionPage.screenshot({ path: ".data/matches-connection-mobile.png" });
     failedUpdates = false;

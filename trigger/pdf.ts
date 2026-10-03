@@ -17,21 +17,37 @@ export const verifyPdfRuntime = task({
   retry: { maxAttempts: 1 },
   run: async (payload: Record<string, never>) => {
     if (Object.keys(payload).length) throw new Error("The PDF runtime check accepts no input.");
-    const original = await createPdfSourceFixture();
-    const source = await parsePdfSource(original);
-    if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "The synthetic PDF fixture is unsupported.");
-    const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({ anchorId: anchor.id, text: anchor.text, factIds: [`synthetic-smoke-fact-${index}`] }));
-    const target = source.anchors.find((anchor) => anchor.text === "Built a search index for 1,200 users.");
-    if (!target) throw new Error("The synthetic PDF has no editable bullet.");
-    const edit = claims.find((claim) => claim.anchorId === target.id);
-    if (!edit) throw new Error("The synthetic PDF bullet is not a candidate claim.");
-    edit.text = "Built search index for 1,200 users.";
-    const plan: ResumeSourcePlan = { version: 1, format: "pdf", sourceHash: source.sourceHash, representationVersion: source.version,
-      profileHash: "0".repeat(64), factsHash: "1".repeat(64), settingsHash: "2".repeat(64), jobHash: "3".repeat(64), claims,
-      edits: [{ anchorId: target.id, text: edit.text, factIds: edit.factIds }],
-      grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0, findings: claims.map((claim) => ({ claimId: claim.anchorId,
-        affectedText: claim.text, outcome: "supported", reason: "Synthetic smoke fact.", evidenceFactIds: claim.factIds })) }, model: "synthetic-smoke" };
-    const rendered = await renderPdfSourceBytes(original, source, plan, Date.now() + 90_000);
+    const cases = [
+      { name: "legacy-tj", options: {} },
+      { name: "positioned-tj-with-divider", options: { positionedWordSpacing: true, sectionDivider: true } },
+    ] as const;
+    const smokeCases = [];
+    let primary: { original: Buffer; rendered: Awaited<ReturnType<typeof renderPdfSourceBytes>> } | undefined;
+    for (const testCase of cases) {
+      const original = await createPdfSourceFixture(testCase.options);
+      const source = await parsePdfSource(original);
+      if (source.support.status !== "candidate") throw new Error(`${testCase.name}: ${source.support.reason ?? "The synthetic PDF fixture is unsupported."}`);
+      const claims = source.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({ anchorId: anchor.id, text: anchor.text, factIds: [`synthetic-smoke-fact-${index}`] }));
+      const target = source.anchors.find((anchor) => anchor.text === "Built a search index for 1,200 users.");
+      if (!target) throw new Error(`${testCase.name}: the synthetic PDF has no editable bullet.`);
+      const edit = claims.find((claim) => claim.anchorId === target.id);
+      if (!edit) throw new Error(`${testCase.name}: the synthetic PDF bullet is not a candidate claim.`);
+      edit.text = "Built search index for 1,200 users.";
+      const plan: ResumeSourcePlan = { version: 1, format: "pdf", sourceHash: source.sourceHash, representationVersion: source.version,
+        profileHash: "0".repeat(64), factsHash: "1".repeat(64), settingsHash: "2".repeat(64), jobHash: "3".repeat(64), claims,
+        edits: [{ anchorId: target.id, text: edit.text, factIds: edit.factIds }],
+        grounding: { version: 1, writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0, findings: claims.map((claim) => ({ claimId: claim.anchorId,
+          affectedText: claim.text, outcome: "supported", reason: "Synthetic smoke fact.", evidenceFactIds: claim.factIds })) }, model: "synthetic-smoke" };
+      const rendered = await renderPdfSourceBytes(original, source, plan, Date.now() + 90_000);
+      const reparsed = await parsePdfSource(rendered.pdf);
+      if (!reparsed.text.includes(edit.text) || reparsed.text.includes(target.text) || rendered.visualOutsideEditDifferenceAt144Dpi !== 0 || rendered.visualOutsideEditDifferenceAt300Dpi !== 0)
+        throw new Error(`${testCase.name}: the PDF edit was not visible or changed pixels outside the edited text.`);
+      smokeCases.push({ name: testCase.name, outsideEditPixelsAt144Dpi: rendered.visualOutsideEditDifferenceAt144Dpi,
+        outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi, wordingChanged: true });
+      primary ??= { original, rendered };
+    }
+    if (!primary) throw new Error("No PDF runtime smoke case ran.");
+    const { original, rendered } = primary;
     const runtimeRoot = process.env.PDFBOX_RUNTIME_ROOT;
     if (!runtimeRoot) throw new Error("The deployed PDF runtime root is not configured.");
     const runtimeManifest = JSON.parse(await readFile(path.join(runtimeRoot, "runtime-manifest.json"), "utf8")) as { java: string; pdfbox: string; architecture: string };
@@ -46,6 +62,6 @@ export const verifyPdfRuntime = task({
     return { renderer: rendered.renderer, pdfboxVersion: rendered.rendererVersion, javaVersion: rendered.javaVersion, architecture: rendered.runtimeArchitecture,
       pdfboxJarSha512: jarSha512, sourceBytes: original.length, outputBytes: rendered.pdf.length, pages: 1, pageWidthPt: rendered.pageWidthPt,
       pageHeightPt: rendered.pageHeightPt, outsideEditPixelsAt144Dpi: rendered.visualOutsideEditDifferenceAt144Dpi,
-      outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi };
+      outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi, smokeCases };
   },
 });

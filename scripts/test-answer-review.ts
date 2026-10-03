@@ -32,6 +32,7 @@ async function main() {
       await page.route("**/api/state", (route) => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", (route) => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
       let confirmations = 0; let failFactSave = true; let failAnswerSave = true;
+      let failAmbiguousAnswerSave = false; let answerSaveRequests = 0;
       let edits = 0;
       await page.route("**/api/actions", async (route) => {
         const { action, payload } = route.request().postDataJSON();
@@ -54,6 +55,8 @@ async function main() {
           if (failFactSave) { failFactSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
           saveOnboarding(state.profile, { facts: applyFactCorrection(state.profile.facts, payload.factPatch) });
         } else if (action === "editPacket") {
+          answerSaveRequests++;
+          if (failAmbiguousAnswerSave) { failAmbiguousAnswerSave = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Temporary gateway failure</html>" }); }
           if (failAnswerSave) { failAnswerSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
           const answers = applyHumanAnswerEdits(app.packet!.answers, payload.answers);
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, profileHash: packetProfileHash(state.profile), answers }));
@@ -124,6 +127,22 @@ async function main() {
       await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
       assert.equal(await humanInput.inputValue(), "My own verified answer");
       assert.equal(await essayInput.inputValue(), essay.answer);
+      await humanInput.fill("A draft with an uncertain save outcome");
+      failAmbiguousAnswerSave = true;
+      await saveAnswers.click();
+      const workspaceError = page.locator(".inline-error");
+      await workspaceError.waitFor();
+      assert.match(await workspaceError.innerText(), /Refresh your workspace to check the latest status/);
+      assert.equal(await localError.count(), 0, "An uncertain outcome needs workspace recovery, not a contradictory local save retry");
+      assert.equal(await humanInput.inputValue(), "A draft with an uncertain save outcome");
+      const requestsBeforeCheck = answerSaveRequests;
+      await saveAnswers.click();
+      assert.equal(answerSaveRequests, requestsBeforeCheck, "An uncertain save must not be repeated before checking the workspace");
+      await workspaceError.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await workspaceError.waitFor({ state: "hidden" });
+      assert.equal(await humanInput.inputValue(), "A draft with an uncertain save outcome", "Checking saved state must preserve the local draft");
+      await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
       await page.waitForFunction(id => document.activeElement?.id === `readiness-${id}`, app.id);

@@ -4,10 +4,14 @@ export function updateJobFeedback(state: AppState, change: {
   jobId: string;
   kind: "saved" | "dismissed" | "clear";
   reason?: string;
+  expectedOwnerId?: string;
+  expectedKind?: "saved" | "dismissed" | "clear";
 }) {
+  if (change.expectedOwnerId && change.expectedOwnerId !== state.profile.id) throw new Error("Your workspace changed. Refresh before saving these roles.");
   const job = state.jobs.find(job => job.id === change.jobId);
   if (!job) throw new Error("Job not found.");
   const previous = state.feedback.find(item => item.jobId === job.id);
+  if (change.expectedKind && (previous?.kind ?? "clear") !== change.expectedKind) throw new Error("This role’s collection changed. Refresh your view before saving it.");
   state.feedback = state.feedback.filter(item => item.jobId !== job.id);
   if (change.kind !== "clear") state.feedback.push({
     jobId: job.id, kind: change.kind, reason: change.reason,
