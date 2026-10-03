@@ -22,6 +22,7 @@ import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView }
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
+import { postWorkspaceAction } from "@/lib/workspace-action";
 import { saveRoleBatch } from "@/lib/save-role-batch";
 import { checkAge, discoveryStatus } from "@/lib/discovery-status";
 import { matchEvidence } from "@/lib/match-evidence";
@@ -96,6 +97,7 @@ export default function Dashboard() {
   const keepImportEditing = useRef<HTMLButtonElement>(null);
   const batchCancel = useRef(false);
   const batchActive = useRef(false);
+  const pendingBatchFocus = useRef(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; stopping?: boolean } | null>(null);
   const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
@@ -175,13 +177,7 @@ export default function Dashboard() {
     setError("");
     setNotice("");
     try {
-      const response = await fetch("/api/actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, payload }),
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "Action failed.");
+      await postWorkspaceAction(action, payload);
       const next = await reload();
       if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
       if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerEdits(current => current?.applicationId === payload.applicationId ? null : current);
@@ -196,6 +192,15 @@ export default function Dashboard() {
       setBusy("");
     }
   };
+  useEffect(() => {
+    if (batchProgress || !pendingBatchFocus.current) return;
+    pendingBatchFocus.current = false;
+    const frame = requestAnimationFrame(() => {
+      const destination = document.querySelector<HTMLElement>('.feedback-notice [data-match-action="review-saved"]') ?? document.querySelector<HTMLElement>('.inline-error .text-button') ?? document.querySelector<HTMLElement>('.batch-save-control button');
+      destination?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [batchProgress, feedbackNotice]);
   const jobs = data?.jobs ?? [];
   const matches = useMemo(
     () =>
@@ -698,24 +703,21 @@ export default function Dashboard() {
     batchCancel.current = false;
     setBusy("saving-view"); setBusyJob(""); setError("");
     setBatchProgress({ done: 0, total: ids.length });
+    let ownerChanged = false;
     try {
       const result = await saveRoleBatch(ids, {
         cancelled: () => batchCancel.current,
         onProgress: done => setBatchProgress(current => current ? { ...current, done } : null),
         save: async jobId => {
-          let response: Response;
-          try { response = await fetch("/api/actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "feedback", payload: { jobId, kind: "saved", expectedKind: "clear", expectedOwnerId: owner } }) }); }
-          catch { throw new Error("Connection interrupted while saving. Refresh to check the latest save status before trying again."); }
-          const body = await response.json().catch(() => { throw new Error("The save response could not be read. Refresh to check the latest save status before trying again."); });
-          if (!response.ok) throw new Error(body.error || "A role could not be saved. Try again.");
+          await postWorkspaceAction("feedback", { jobId, kind: "saved", expectedKind: "clear", expectedOwnerId: owner });
         },
       });
       const count = result.savedIds.length;
-      setFeedbackNotice({ message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, savedGroup: count > 0 });
+      setFeedbackNotice({ message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, compactMessage: result.error ? `Interrupted. ${count}/${ids.length} saves confirmed.` : result.stopped ? `Stopped. Saved ${count}/${ids.length}.` : `Saved ${count} roles.`, savedGroup: count > 0 });
       if (result.error) setError(result.error);
-      try { const next = await reload(); if (next.profile.id !== owner) { setFeedbackNotice(null); setError(""); } }
+      try { const next = await reload(); if (next.profile.id !== owner) { ownerChanged = true; setFeedbackNotice(null); setError(""); } }
       catch { setError("The save status could not be refreshed. Refresh your workspace to check which roles were saved before trying again."); }
-    } finally { batchActive.current = false; setBatchProgress(null); setBusy(""); }
+    } finally { batchActive.current = false; pendingBatchFocus.current = !ownerChanged; setBatchProgress(null); setBusy(""); }
   };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
   const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
@@ -891,12 +893,12 @@ export default function Dashboard() {
                 <label htmlFor="job-search">Search roles or companies <kbd>/</kbd></label>
                 <div>
                   <Search size={18} aria-hidden="true" />
-                  <input ref={searchInput} id="job-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search job title or company" />
-                  {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
+                  <input ref={searchInput} id="job-search" type="search" disabled={Boolean(batchProgress)} value={search} onChange={event => setSearch(event.target.value)} placeholder="Search job title or company" />
+                  {search && <button disabled={Boolean(batchProgress)} aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
                 </div>
               </div>
               <div className="collectionbar" role="group" aria-label="Job collection">
-                {(["all", "saved", "dismissed"] as MatchCollection[]).map(scope => <button key={scope} className={`collection-filter ${collection === scope ? "selected" : ""}`} aria-pressed={collection === scope} onClick={() => setCollection(scope)}>
+                {(["all", "saved", "dismissed"] as MatchCollection[]).map(scope => <button key={scope} disabled={Boolean(batchProgress)} className={`collection-filter ${collection === scope ? "selected" : ""}`} aria-pressed={collection === scope} onClick={() => setCollection(scope)}>
                   {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
                 </button>)}
               </div>
@@ -904,17 +906,17 @@ export default function Dashboard() {
               <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} /><span><strong>Filter and sort</strong><small>{filtered.length} {filtered.length === 1 ? "role" : "roles"} · {filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</small></span><ChevronDown size={16} className={filterOptionsOpen ? "expanded" : ""} /></button>
               <div id="match-filter-options" className={`filterbar ${filterOptionsOpen ? "expanded" : "collapsed"}`}>
                 <div className="filters" role="group" aria-label="Fit within this collection">
-                  {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
+                  {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} disabled={Boolean(batchProgress)} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
                     {item === "all" ? "Any fit" : item[0].toUpperCase() + item.slice(1)} <span>{view.counts[item]}</span>
                   </button>)}
                 </div>
-                <div className="sort-options"><label className="sort-control">Sort <select aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
+                <div className="sort-options"><label className="sort-control">Sort <select disabled={Boolean(batchProgress)} aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
                 {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy)} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20 unsaved" : batchCandidates.length} roles in this view</button></div>}
               </div>
               <div className="matches-subbar">
               <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
               <details className="fit-guide matches-guidance">
-                <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
+                <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto apply on" : "Fit guide"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
                 <button className="text-button" onClick={() => navigateSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
                 <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
@@ -927,7 +929,7 @@ export default function Dashboard() {
                 </dl>
               </details>
               <details id="matches-keyboard-help" className="keyboard-guide matches-guidance">
-                <summary>Keyboard shortcuts <kbd>?</kbd></summary>
+                <summary aria-label="Keyboard shortcuts"><span className="desktop-shortcuts-label">Keyboard shortcuts</span><span className="compact-shortcuts-label">Shortcuts</span> <kbd>?</kbd></summary>
                 <p>Shortcuts pause in text fields, dialogs and menus.</p>
                 <dl className="keyboard-list" aria-label="Navigation shortcuts">
                   <div><dt><kbd>/</kbd></dt><dd>Search roles</dd></div>
@@ -946,7 +948,7 @@ export default function Dashboard() {
               </>}
               {feedbackNotice && <div className="feedback-notice" role="status">
                 <span className="feedback-summary" title={feedbackNotice.message}>{feedbackNotice.compactMessage ?? feedbackNotice.message}</span>
-                {feedbackNotice.savedGroup && <button className="text-button" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
+                {feedbackNotice.savedGroup && <button className="text-button" disabled={Boolean(batchProgress)} data-match-action="review-saved" onClick={() => { setFeedbackNotice({ ...feedbackNotice, savedGroup: false, returnView: { collection, filter, search, sort } }); setCollection("saved"); setFilter("all"); setSearch(""); }}>Review saved</button>}
                 {feedbackNotice.undo && <button className="text-button" data-match-action="undo" aria-keyshortcuts="u" aria-label="Undo dismissal" disabled={Boolean(busy)} onClick={async () => {
                   const undo = feedbackNotice.undo;
                   if (!undo) return;
@@ -1112,7 +1114,7 @@ export default function Dashboard() {
                                 const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
                                 if (next) {
                                   continueAfterRemoval(job.id);
-                                  setFeedbackNotice({ message: `${context} dismissed. Find it in Dismissed.`, compactMessage: `Dismissed: ${job.company}.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
+                                  setFeedbackNotice({ message: `${context} dismissed. Find it in Dismissed.`, compactMessage: `Dismissed: ${context}.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
                                 }
                               }}
                             >

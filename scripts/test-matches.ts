@@ -17,6 +17,7 @@ async function main() {
   demoState.matchCache = { [matchKey(demoState.profile, intern)]: { ...assessMatchLocally(demoState.profile, intern), category: "strong" } };
   let fixture = publicState(demoState);
   let failFeedback = false;
+  let malformedFeedback = false;
   let slowFeedback = false;
   let failImport = false;
   let authImport = false;
@@ -44,6 +45,7 @@ async function main() {
       feedbackRequests++;
       assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
+      if (malformedFeedback) { malformedFeedback = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Invented gateway failure</html>" }); }
       if (authFeedback) { authFeedback = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
       if (failFeedback) { failFeedback = false; return route.fulfill({ status: 503, json: { error: "Feedback could not be saved. Try again." } }); }
       if (slowFeedback) { slowFeedback = false; await new Promise(resolve => setTimeout(resolve, 750)); }
@@ -182,6 +184,14 @@ async function main() {
       await page.getByRole("button", { name: "Saved 0", exact: true }).click();
       await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
+      const previousSearch = await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue();
+      malformedFeedback = true;
+      await jobButton("Save").click();
+      await strongRole.getByRole("alert").getByText("The action response could not be read. Refresh your workspace to check the latest status before trying again.", { exact: true }).waitFor();
+      assert.equal(await jobButton("Save").isVisible(), true);
+      assert.equal(await page.getByRole("searchbox", { name: /^Search roles or companies/ }).inputValue(), previousSearch);
+      await strongRole.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await strongRole.getByRole("alert").waitFor({ state: "hidden" });
       failFeedback = true;
       await jobButton("Save").click();
       await strongRole.getByRole("alert").getByText("Feedback could not be saved. Try again.", { exact: true }).waitFor();
@@ -478,7 +488,7 @@ async function main() {
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer saved.`, { exact: true }).waitFor();
     await sameTitleRole.getByRole("button", { name: `Dismiss ${intern.title} at Same-title employer`, exact: true }).click();
     await sameTitleRole.waitFor({ state: "hidden" });
-    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Dismissed: Same-title employer\./);
+    assert.match((await sameTitlePage.locator(".feedback-summary").textContent()) ?? "", /^Dismissed: Software Engineering Intern at Same-title employer\./);
     await sameTitlePage.getByRole("button", { name: "Undo dismissal", exact: true }).click();
     await sameTitlePage.locator(".feedback-summary").getByText(`${intern.title} at Same-title employer is back in your matches.`, { exact: true }).waitFor();
     await sameTitleRole.waitFor(); await sameTitlePage.close();
@@ -569,12 +579,13 @@ async function main() {
     await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).fill("QA Batch");
     await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
     await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
-    await batchPage.locator(".feedback-summary").getByText("Confirmed 1 of 3 saves. Refresh to check remaining roles before trying again.", { exact: true }).waitFor();
+    await batchPage.locator(".feedback-summary").getByText("Interrupted. 1/3 saves confirmed.", { exact: true }).waitFor();
     assert.equal(batchCalls, 2, "Stop after the first failed request");
     assert.equal(batchFixture.feedback.filter(item => item.kind === "saved").length, 2, "Keep the completed save and original bookmark");
     failBatch = false;
     await batchPage.getByRole("button", { name: "Save 2 roles in this view", exact: true }).click();
-    await batchPage.locator(".feedback-summary").getByText("Saved 2 of 2 roles from this view. Review them in Saved.", { exact: true }).waitFor();
+    await batchPage.locator(".feedback-summary").getByText("Saved 2 roles.", { exact: true }).waitFor();
+    await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
     assert.equal(batchCalls, 4, "Retry only the remaining unsaved roles");
     await batchPage.getByRole("button", { name: "Review saved", exact: true }).click();
     assert.equal(await batchPage.getByRole("article").count(), 4);
@@ -583,15 +594,22 @@ async function main() {
     await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
     await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
     await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
+    assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), true);
+    assert.equal(await batchPage.getByRole("combobox", { name: "Sort roles", exact: true }).isDisabled(), true);
     await batchPage.getByRole("button", { name: "Stop further saves", exact: true }).click();
     await batchPage.getByRole("button", { name: "Stopping…", exact: true }).waitFor();
     while (!releaseBatch) await batchPage.waitForTimeout(10);
     releaseBatch();
-    await batchPage.locator(".feedback-summary").getByText("Saved 1 of 3 roles from this view. Stopped further saves.", { exact: true }).waitFor();
+    await batchPage.locator(".feedback-summary").getByText("Stopped. Saved 1/3.", { exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), false);
     assert.equal(batchCalls, 1, "Stopping finishes the in-flight bookmark without starting another");
     await batchPage.screenshot({ path: ".data/matches-batch-mobile.png" });
     await batchPage.close();
     console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
+    if (process.env.TEST_MATCHES_SKIP_CONNECTION === "1") {
+      console.log("SKIP unchanged connection checks by explicit focused-test setting");
+      return;
+    }
     const connectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const connectionFixture = publicState(structuredClone(demoState));
     let failedUpdates = false; let expiredUpdates = false;

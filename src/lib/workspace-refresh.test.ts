@@ -117,3 +117,16 @@ it("does not publish a connection failure after the refresh loop stops", async (
   await vi.advanceTimersByTimeAsync(0);
   expect(onConnection).not.toHaveBeenCalled();
 });
+
+it("keeps received state when a response is unreadable or invalid, without leaking parser errors", async () => {
+  fetchState.mockResolvedValueOnce(changed(1)); await refresh.reload();
+  fetchState.mockResolvedValueOnce(new Response("<html>gateway failure</html>", { status: 502 }));
+  await expect(refresh.reload()).rejects.toThrow("The workspace response could not be read.");
+  fetchState.mockResolvedValueOnce(Response.json(null));
+  await expect(refresh.reload()).rejects.toThrow("The workspace response could not be read.");
+  expect(onState).toHaveBeenCalledTimes(1);
+});
+it("recognizes expired authentication even if its response body is malformed", async () => {
+  fetchState.mockResolvedValueOnce(new Response("not json", { status: 401 }));
+  await expect(refresh.reload()).rejects.toThrow("AUTH_REQUIRED");
+});
