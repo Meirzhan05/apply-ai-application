@@ -75,7 +75,7 @@ async function main() {
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
       assert.equal(await humanInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await humanInput.inputValue(), "");
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByText("Before approving", { exact: true }).waitFor();
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Answer 1 personal question" }).count(), 1);
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Review and confirm 1 essay" }).count(), 1);
@@ -103,11 +103,11 @@ async function main() {
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
       assert.equal(confirmations, 1);
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), false);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), false);
       assert.equal(app.approvals.length, 0);
       await page.getByRole("button", { name: "Edit wording", exact: true }).click();
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await essayInput.fill("Discard this essay before correcting a fact.");
       await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
       await page.getByRole("dialog", { name: "Keep your changes?" }).getByRole("button", { name: "Discard and continue", exact: true }).click();
@@ -121,19 +121,19 @@ async function main() {
       assert.equal(await essayInput.inputValue(), "I would like to apply my survey analysis project experience to this role.", "Navigation cancellation preserves essay wording");
       await page.getByRole("button", { name: "Save essay revision", exact: true }).click();
       await page.getByText("Edited by you · your confirmation needed", { exact: true }).waitFor();
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       assert.equal(app.packet!.answers[0].userRevision?.originalAnswer, essay.answer);
       assert.deepEqual(app.packet!.answers[0].factIds, []);
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("Edited by you · confirmed by you", { exact: true }).waitFor();
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isEnabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isEnabled(), true);
       assert.equal(app.approvals.length, 0);
 
       await page.locator(".material-tools > summary").click();
       await page.getByRole("button", { name: "Write essays with AI", exact: true }).click();
       await page.getByText("AI essay · your confirmation needed", { exact: true }).waitFor();
       assert.equal(await humanInput.inputValue(), "My own verified answer");
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
 
       await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
       const corrections = page.getByRole("dialog", { name: "Correct the source facts", exact: true });
@@ -152,7 +152,7 @@ async function main() {
       await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
-      assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).waitFor();
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
       assert.equal(app.approvals.length, 0);

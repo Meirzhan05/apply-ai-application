@@ -31,7 +31,7 @@ async function main() {
       assert.equal(await cancel.count(), 0);
       await page.locator(".packet-reference > summary").click();
       await page.getByRole("link", { name: "Open tailored resume PDF ↗", exact: true }).waitFor();
-      assert.equal(await page.getByRole("button", { name: /Approve packet/ }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: /Approve materials/ }).count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); assert.deepEqual(errors, []);
       console.log(`PASS ${width}px: cancellation choice, Escape/focus return, one bound action, retained materials, no overflow`);
       await page.close();

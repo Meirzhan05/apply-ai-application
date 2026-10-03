@@ -101,7 +101,7 @@ async function main() {
       assert.equal(await page.getByRole("button", { name: "Refresh form state", exact: true }).count(), 0);
       assert.equal(await page.getByRole("dialog").count(), 0);
       assert.equal(await page.getByText("Complete the browser steps above, then refresh the form for review.", { exact: true }).count(), 0);
-      assert.equal(await page.getByRole("button", { name: "Review packet for a new browser session", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Review materials for a new browser session", exact: true }).isVisible(), true);
       await page.screenshot({ path: `.data/questions/expired-${name}.png` });
       app.browserSessionExpiresAt = undefined; app.error = undefined;
       setFormSnapshot(app, { ...app.form!, readyToSubmit: false, blockers: [], fields: [

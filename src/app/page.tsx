@@ -356,7 +356,7 @@ export default function Dashboard() {
                         <div className="step-card">
                           <div className="card-title">
                             <FileText size={20} />
-                            <h3>Application packet</h3>
+                            <h3>Application materials</h3>
                             <span>Version {activeApp.packet.version}</span>
                           </div>
                           <div id={`resume-review-${activeApp.id}`}>
@@ -484,7 +484,7 @@ export default function Dashboard() {
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "resume" })}>Rebuild resume</button>
                               </details>
                               <p className="target-url">
-                                Approved destination:{" "}
+                                Employer destination:{" "}
                                 <a
                                   href={appJob.applyUrl}
                                   target="_blank"
@@ -508,7 +508,7 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                {busy === "approveFill" ? "Recording approval…" : "Approve packet for form fill"}
+                                {busy === "approveFill" ? "Recording approval…" : "Approve materials for form filling"}
                               </button>
                             </div>
                             </>
@@ -1280,7 +1280,7 @@ export default function Dashboard() {
                         >
                           Refresh form state
                         </button>}
-                        {hasCurrentBrowser ? <details className="browser-restart-tools"><summary>Restart this browser instead</summary><p className="muted">This closes the current session. You will review your saved materials and approve another form fill before continuing.</p><button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review materials for a new session</button></details> : <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>{busy === "restartBrowser" ? "Opening saved materials…" : "Review packet for a new browser session"}</button>}
+                        {hasCurrentBrowser ? <details className="browser-restart-tools"><summary>Restart this browser instead</summary><p className="muted">This closes the current session. You will review your saved materials and approve another form fill before continuing.</p><button className="outline-action" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review materials for a new session</button></details> : <button className="dark-button" disabled={Boolean(busy)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>{busy === "restartBrowser" ? "Opening saved materials…" : "Review materials for a new browser session"}</button>}
                       </div>
                       </>
                     )}
@@ -1291,7 +1291,9 @@ export default function Dashboard() {
                           <strong>Submission confirmed</strong>
                           <p>{activeApp.confirmation}</p>
                           {activeApp.submissionReceipt?.screenshotPath && <a href={activeApp.submissionReceipt.screenshotPath} target="_blank" rel="noreferrer">View confirmation proof ↗</a>}
-                          <label>Minutes this application saved you (optional)<input type="number" min={0} max={240} defaultValue={activeApp.timeSavedMinutes ?? ""} onBlur={(event) => { if (event.target.value && Number(event.target.value) !== activeApp.timeSavedMinutes) act("timeSaved", { applicationId: activeApp.id, minutes: Number(event.target.value) }); }} /></label>
+                          <p>Your saved materials are available below whenever you need them.</p>
+                          <button className="outline-action" onClick={() => navigateSection("matches")}>Browse more matches</button>
+                          <details className="completion-feedback"><summary>Share time saved (optional)</summary><label>Minutes this application saved you<input type="number" min={0} max={240} defaultValue={activeApp.timeSavedMinutes ?? ""} onBlur={(event) => { if (event.target.value && Number(event.target.value) !== activeApp.timeSavedMinutes) act("timeSaved", { applicationId: activeApp.id, minutes: Number(event.target.value) }); }} /></label></details>
                         </div>
                       </div>
                     )}
@@ -1989,7 +1991,7 @@ function statusLabel(status: Application["status"]) {
   return {
     selected: "Selected",
     drafting: "Drafting",
-    draft_review: "Review packet",
+    draft_review: "Review materials",
     authorized_to_fill: "Ready to fill",
     filling: "Filling form",
     needs_user_action: "Your input needed",
