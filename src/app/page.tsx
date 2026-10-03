@@ -196,12 +196,12 @@ export default function Dashboard() {
         approveSubmit: "Final form approved. Nothing has been submitted; choose Submit application once when ready.",
         reviewForm: "Submission permission withdrawn. Review the saved final form again; nothing has been submitted.",
         restartBrowser: "Returned to materials review. Earlier permissions are cleared.",
-        cancel: "This attempt is cancelled. Your saved materials remain available.",
+        cancel: "This attempt is cancelled.",
       };
       if (outcomeMessages[action] && typeof payload.applicationId === "string") {
         const application = next.applications.find(item => item.id === payload.applicationId);
         const job = next.jobs.find(item => item.id === application?.jobId);
-        setApplicationOutcome({ id: payload.applicationId, message: `${job?.company ?? "This employer"}: ${outcomeMessages[action]}` });
+        setApplicationOutcome({ id: payload.applicationId, message: `${job?.company ?? "This employer"}: ${outcomeMessages[action]}${action === "cancel" ? (application?.packet ? " Your saved materials remain available." : " The role remains available in Matches.") : ""}` });
       }
       return next;
     } catch (err) {
@@ -1378,7 +1378,7 @@ export default function Dashboard() {
                     )}
                     {(applicationOutcome?.id === activeApp.id || retainedApplication?.id === activeApp.id) && <div className="application-outcome" role="status" id={`application-outcome-${activeApp.id}`} tabIndex={-1}>
                       <p>{applicationOutcome?.id === activeApp.id ? applicationOutcome.message : `${appJob.company}: Your current application remains open outside this collection filter.`}</p>
-                      {retainedApplication?.id === activeApp.id && <><p>Keep working on this application, or choose the next one. Your collection filter stays active.</p>{nextMatchingApplication && <button type="button" className="outline-action" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => switchApplication(nextMatchingApplication.id)}>{attentionOnly ? "Next application needing review" : "Next matching application"}</button>}</>}
+                      {retainedApplication?.id === activeApp.id && <><p>{["cancelled", "submitted"].includes(activeApp.status) ? (activeApp.packet ? "Review saved materials or choose the next application." : "Review this role in Matches or choose the next application.") : "Keep working on this application, or choose the next one."} Your collection filter stays active.</p>{nextMatchingApplication && <button type="button" className="outline-action" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => switchApplication(nextMatchingApplication.id)}>{attentionOnly ? "Next application needing review" : "Next matching application"}</button>}</>}
                     </div>}
                     {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
                     {activeApp.status === "cancelled" && <section className="step-card" aria-labelledby={`cancelled-${activeApp.id}`}>
@@ -2149,7 +2149,7 @@ export default function Dashboard() {
       {cancellation && <WorkspaceDialog labelledBy="cancel-application-heading" onClose={() => { if (!busy) setCancellationId(null); }}>
         <h2 id="cancel-application-heading">Cancel this application?</h2>
         <p>{jobs.find(job => job.id === cancellation.jobId)?.company} · {jobs.find(job => job.id === cancellation.jobId)?.title}</p>
-        <p>This stops the attempt and closes its browser session. Your saved materials remain available. Starting again requires selecting the role and reviewing a new attempt.</p>
+        <p>This stops the attempt and closes its browser session. {cancellation.packet ? "Your saved materials remain available." : "The role remains available in Matches."} Starting again requires selecting the role and reviewing a new attempt.</p>
         {!canCancelApplication(cancellation) && <p role="alert">The application status changed. Close this dialog and review its current result.</p>}
         <div className="action-row">
           <button className="outline-action" disabled={Boolean(busy)} onClick={() => setCancellationId(null)}>Keep application</button>
