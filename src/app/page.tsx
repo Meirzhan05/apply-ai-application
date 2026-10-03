@@ -747,6 +747,10 @@ export default function Dashboard() {
         const next = await reload();
         setPendingActionCheck(null);
         if (next.profile.id !== owner) { ownerChanged = true; setFeedbackNotice(null); setError(""); }
+        else if (result.error && actionNeedsWorkspaceCheck(result.error)) {
+          setError("");
+          setFeedbackNotice({ message: "Save status refreshed. Review your saved roles.", compactMessage: "Save status refreshed.", savedGroup: true });
+        }
       } catch (err) {
         const message = "The save status could not be refreshed. Refresh your workspace to check which roles were saved before trying again.";
         setPendingActionCheck({ owner, action: "feedback", message: result.error && actionNeedsWorkspaceCheck(result.error) ? result.error : message });

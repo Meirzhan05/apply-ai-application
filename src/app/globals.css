@@ -1960,6 +1960,15 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .matches-browse-controls .collectionbar { flex: none; margin: 0; }
 }
 
+@media (min-width: 651px) and (max-width: 1099px) {
+  .matches-workspace .matches-panel { padding-top: 20px; }
+  .matches-workspace .page-heading { margin-bottom: 12px; }
+  .matches-workspace .page-heading h1 { font-size: 30px; margin-bottom: 4px; }
+  .matches-browse-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 12px 0 8px; }
+  .matches-browse-controls .job-search { flex: 1 1 240px; margin: 0; }
+  .matches-browse-controls .collectionbar { flex: none; margin: 0; }
+}
+
 /* Keep persistent feedback outside the role-reading scrollport. */
 .matches-workspace { height: 100dvh; min-height: 0; overflow: hidden; }
 .matches-workspace .sidebar { height: 100%; flex-shrink: 0; overflow-y: auto; }

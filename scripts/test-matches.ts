@@ -368,6 +368,11 @@ async function main() {
       assert.match(await dialog.getByRole("alert").innerText(), /couldn’t confirm whether this role was added/);
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true, "Failed reconciliation must keep repeat import blocked");
       await page.screenshot({ path: `.data/matches-import-refresh-failed-${label}.png`, fullPage: true });
+      for (let step = 0; step < 5; step++) await page.keyboard.press("Tab");
+      const draftExit = dialog.getByRole("button", { name: "Discard draft", exact: true });
+      assert.equal(await draftExit.evaluate(element => element === document.activeElement), true, "Native dialog tab order exposes the retained-draft exit");
+      const draftExitBox = await draftExit.boundingBox();
+      assert.ok(draftExitBox && draftExitBox.y >= 0 && draftExitBox.y + draftExitBox.height <= height, "Focusing the draft exit scrolls it fully into view");
       await page.keyboard.press("Escape");
       for (const name of ["Save", "Dismiss", "Prepare application for"]) assert.equal(await jobButton(name).isDisabled(), true, "Role action availability must match the reconciliation guard");
       await launcher.click();
@@ -661,7 +666,7 @@ async function main() {
     updateJobFeedback(batchState, { jobId: "batch-0", kind: "saved" });
     let batchFixture = publicState(batchState); let batchCalls = 0; let failBatch = true;
     let releaseBatch: (() => void) | undefined; let slowBatch = false;
-    let ambiguousBatch = false; let failedBatchRefresh = false;
+    let ambiguousBatch = false; let failedBatchRefresh = false; let failAmbiguousRefresh = true;
     await batchPage.route("**/api/state", route => route.fulfill(failedBatchRefresh ? { status: 503, json: { error: "Temporary refresh failure" } } : { json: batchFixture }));
     await batchPage.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
@@ -669,7 +674,7 @@ async function main() {
       assert.equal(body.payload.expectedKind, "clear"); assert.equal(body.payload.expectedOwnerId, batchFixture.profile.id);
       batchCalls++;
       if (ambiguousBatch) {
-        ambiguousBatch = false; failedBatchRefresh = true;
+        ambiguousBatch = false; failedBatchRefresh = failAmbiguousRefresh;
         updateJobFeedback(batchFixture, body.payload);
         return route.fulfill({ status: 200, contentType: "application/json", body: "unreadable" });
       }
@@ -743,6 +748,14 @@ async function main() {
     assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false);
     assert.equal(batchCalls, 1, "Successful reconciliation reveals the accepted save without repeating it");
     await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; ambiguousBatch = true; failAmbiguousRefresh = false;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
+    await batchPage.locator(".feedback-summary").getByText("Save status refreshed.", { exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false, "A successful automatic reconciliation must clear the old uncertainty error gate");
+    assert.equal(await batchPage.locator(".inline-error").count(), 0);
+    assert.equal(batchCalls, 1, "Automatic reconciliation never repeats an accepted mutation");
     await batchPage.close();
     console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
     if (process.env.TEST_MATCHES_SKIP_CONNECTION === "1") {
