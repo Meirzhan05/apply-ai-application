@@ -16,7 +16,9 @@ import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels }
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
-import { matchView, type MatchFilter } from "@/lib/match-view";
+import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
+import { matchEvidence } from "@/lib/match-evidence";
+import { importInput } from "@/lib/import-input";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
@@ -29,7 +31,7 @@ import {
   ClipboardList,
   FileText,
   LoaderCircle,
-  MoreHorizontal,
+  Menu,
   Search,
   Settings2,
   ShieldCheck,
@@ -63,7 +65,13 @@ export default function Dashboard() {
   const [data, setData] = useState<ViewState | null>(null);
   const [section, setSection] = useState<Section>("matches");
   const [filter, setFilter] = useState<Filter>("all");
+  const [collection, setCollection] = useState<MatchCollection>("all");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const jobList = useRef<HTMLDivElement>(null);
+  const [importTouched, setImportTouched] = useState(false);
+  const [busyJob, setBusyJob] = useState("");
   const [search, setSearch] = useState("");
+  const [filterOptionsOpen, setFilterOptionsOpen] = useState(false);
   const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
@@ -72,7 +80,6 @@ export default function Dashboard() {
   const [notice, setNotice] = useState("");
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
   const applicationList = useRef<HTMLDivElement>(null);
-  const moreNavigation = useRef<HTMLDetailsElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
@@ -111,6 +118,7 @@ export default function Dashboard() {
   }, [reload, refresh]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusy(action);
+    setBusyJob(String(payload.jobId ?? ""));
     setError("");
     setNotice("");
     try {
@@ -148,7 +156,7 @@ export default function Dashboard() {
     [data],
   );
   const applications = data?.applications ?? [];
-  const view = matchView({ jobs, matches, feedback, filter, search });
+  const view = matchView({ jobs, matches, feedback, filter, collection, search });
   const filtered = view.jobs;
   filtered.sort((a, b) => sort === "newest"
     ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
@@ -159,6 +167,10 @@ export default function Dashboard() {
   const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
   const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
+  const sharedUnknown = "Work authorization has not been confirmed.";
+  const hasSharedUnknown = data?.matches.some(entry => entry.assessment.uncertainty.includes(sharedUnknown));
+  const importCheck = importInput(importFields.url);
+  const importReady = !importCheck.error && (!importCheck.manual || Boolean(importFields.company.trim() && importFields.title.trim()));
   const incompleteFacts = (data?.profile.facts ?? []).filter(
     (fact) => !fact.verified,
   ).length;
@@ -192,6 +204,31 @@ export default function Dashboard() {
     return () => observer.disconnect();
   }, [section, activeApp?.id]);
 
+  useEffect(() => {
+    if (section !== "matches") return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea, select, [contenteditable], dialog") || document.querySelector("[popover]:popover-open")) return;
+      if (event.key === "/") { event.preventDefault(); searchInput.current?.focus(); }
+      if (event.key === "j" || event.key === "k") {
+        const roles = Array.from(jobList.current?.querySelectorAll<HTMLElement>("article") ?? []);
+        const index = roles.findIndex(role => role.contains(document.activeElement));
+        const next = index < 0 ? 0 : Math.max(0, Math.min(roles.length - 1, index + (event.key === "j" ? 1 : -1)));
+        if (roles[next]) { event.preventDefault(); roles[next].focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [section]);
+  const displayError = error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
+    /failed to fetch|networkerror|load failed/i.test(error) ? "Connection lost. Check your internet connection, then refresh your workspace." : error;
+  const retryWorkspace = async () => {
+    setBusy("reload");
+    try { const next = await reload(); setProfileDraft(current => current ?? structuredClone(next.profile)); setError(""); }
+    catch { setError("Could not refresh your workspace. Check your connection and try again."); }
+    finally { setBusy(""); }
+  };
+
   if (!data)
     return (
       <div className="loading">
@@ -199,8 +236,9 @@ export default function Dashboard() {
           Apply<span>.</span>
         </div>
         {error ? (
-          <div className="errorbox">
-            {error} <a href="/login">Sign in</a>
+          <div className="errorbox" role="alert">
+            {displayError} {error === "AUTH_REQUIRED" && <a href="/login">Sign in</a>}
+            <button className="outline-action" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry workspace"}</button>
             <button
               className="signout"
               disabled={busy === "signout"}
@@ -221,7 +259,7 @@ export default function Dashboard() {
             </button>
           </div>
         ) : (
-          <p>Opening your workspace…</p>
+          <p role="status">Opening your workspace…</p>
         )}
       </div>
     );
@@ -422,7 +460,7 @@ export default function Dashboard() {
     { key: "settings", label: "Search settings", icon: Settings2 },
   ];
   return (
-    <div className="shell">
+    <div className={`shell ${section === "matches" ? "matches-workspace" : ""}`}>
       <aside className="sidebar">
         <div className="identity">
           <div className="brand">
@@ -441,7 +479,7 @@ export default function Dashboard() {
               aria-current={section === key ? "page" : undefined}
               title={label}
               className={`navitem ${section === key ? "active" : ""}`}
-              onClick={() => { setEditingEssay(null); if (moreNavigation.current) moreNavigation.current.open = false; setSection(key); }}
+              onClick={() => { setEditingEssay(null); setSection(key); }}
             >
               <Icon size={21} strokeWidth={1.8} />
               <span className="nav-label">{key === "settings" ? "Settings" : label}</span>
@@ -449,13 +487,9 @@ export default function Dashboard() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-links"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
-        <details className="mobile-more" ref={moreNavigation} onKeyDown={(event) => {
-          if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); }
-        }}>
-          <summary><MoreHorizontal size={21} aria-hidden="true" /><span>More</span></summary>
-          <div className="more-links"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
-        </details>
+        <div className="sidebar-tools"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
+        <button className="sidebar-more" popoverTarget="more-pages" aria-label="More pages"><Menu size={20} /><span>More</span></button>
+        <div id="more-pages" popover="auto" className="more-pages"><a href="/usage">AI usage</a><a href="/pilot">Autonomy pilot</a></div>
         <div className="sidebar-foot">
           <div className="foot-icon">
             <Sparkles size={19} />
@@ -517,10 +551,11 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
-        {error && (
+        {busy && <p className="workspace-progress" role="status">{busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}</p>}
+        {error && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob) && !importOpen && !dismissJobId) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
-            {error}
+            <div>{displayError}{error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}<p>Your inputs are preserved. Refresh the workspace to check the latest status before trying again.</p><button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div>
             <button onClick={() => setError("")} aria-label="Dismiss error">
               <X size={17} />
             </button>
@@ -528,24 +563,305 @@ export default function Dashboard() {
         )}
         {section === "matches" && (
           <div className="content-grid">
-            <main className="main-panel">
+            <main className="main-panel matches-panel">
               <div className="page-heading">
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {view.availableCount} roles available · {jobs.length} in your catalog ·{" "}
+                    {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} in your catalog</span> ·{" "}
                     {data.lastRefreshAt
                       ? `updated ${relative(data.lastRefreshAt)}`
                       : "ready for your review"}
                   </p>
                 </div>
                 <button
-                  className="outline-action"
-                  onClick={() => setImportOpen(true)}
+                  className="outline-action import-launcher"
+                  aria-label="+ Import a job link"
+                  onClick={() => { setError(""); setImportOpen(true); }}
                 >
-                  + Import a job link
+                  <span className="desktop-import-label">+ Import a job link</span><span className="compact-import-label">Import a link</span>
                 </button>
               </div>
+              {hasSharedUnknown && <div className="profile-context" role="note">
+                <span>Work authorization needs confirmation.</span>
+                <button className="text-button" onClick={() => setSection("profile")}>Review profile</button>
+              </div>}
+
+              {needsAction.length > 0 && (
+                <div className="next-action">
+                  <div className="next-icon">
+                    <Sparkles size={20} />
+                  </div>
+                  <div>
+                    <strong>
+                      {needsAction.length} application
+                      {needsAction.length > 1 ? "s" : ""} need your decision
+                    </strong>
+                    <p>
+                      Review a packet, complete a form, or check an uncertain
+                      result.
+                    </p>
+                  </div>
+                  <button onClick={() => setSection("applications")}>
+                    Open applications <ArrowRight size={15} />
+                  </button>
+                </div>
+              )}
+              <div className="job-search">
+                <label htmlFor="job-search">Search roles or companies <kbd>/</kbd></label>
+                <div>
+                  <Search size={18} aria-hidden="true" />
+                  <input ref={searchInput} id="job-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Job title or company" />
+                  {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
+                </div>
+              </div>
+              <div className="collectionbar" role="group" aria-label="Job collection">
+                {(["all", "saved", "dismissed"] as MatchCollection[]).map(scope => <button key={scope} className={`collection-filter ${collection === scope ? "selected" : ""}`} aria-pressed={collection === scope} onClick={() => setCollection(scope)}>
+                  {scope === "saved" && <Bookmark size={16} aria-hidden="true" />}{scope === "all" ? "All roles" : scope === "saved" ? "Saved" : "Dismissed"} <span>{view.collections[scope]}</span>
+                </button>)}
+              </div>
+              <button className="mobile-filters-toggle" aria-expanded={filterOptionsOpen} aria-controls="match-filter-options" onClick={() => setFilterOptionsOpen(!filterOptionsOpen)}><Settings2 size={16} />{filter === "all" ? "Any fit" : `${filter[0].toUpperCase() + filter.slice(1)} fit`} · {sort === "relevant" ? "Most relevant" : "Newest first"}</button>
+              <div id="match-filter-options" className={`filterbar ${filterOptionsOpen ? "expanded" : "collapsed"}`}>
+                <div className="filters" role="group" aria-label="Fit within this collection">
+                  {(["all", "strong", "possible", "uncertain"] as Filter[]).map(item => <button key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>
+                    {item === "all" ? "Any fit" : item[0].toUpperCase() + item.slice(1)} <span>{view.counts[item]}</span>
+                  </button>)}
+                </div>
+                <label className="sort-control">Sort <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label>
+              </div>
+              <div className="matches-subbar">
+              <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
+              {feedbackNotice && <div className="feedback-notice" role="status">
+                <span>{feedbackNotice.message}</span>
+                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
+                  const next = await act("feedback", feedbackNotice.undo);
+                  if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
+                }}>Undo dismissal</button>}
+                <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
+              </div>}
+              <details className="fit-guide matches-guidance">
+                <summary>{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</summary>
+                <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
+                <button className="text-button" onClick={() => setSection("settings")}>{data.automation.enabled ? "Review automation settings" : "Review settings"}</button>
+                <p>Press <kbd>/</kbd> to search, <kbd>j</kbd> for the next role, or <kbd>k</kbd> for the previous role. Shortcuts pause while you type or use a dialog.</p>
+                <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
+                <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
+                <dl>
+                  <div><dt>Strong fit</dt><dd>Substantial overlap with your profile and preferences.</dd></div>
+                  <div><dt>Possible fit</dt><dd>Some overlap, with requirements to review.</dd></div>
+                  <div><dt>Uncertain</dt><dd>Important information is missing or needs verification.</dd></div>
+                  <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
+                </dl>
+              </details>
+              </div>
+              <div className="job-list" ref={jobList}>
+                {filtered.length ? (
+                  filtered.map((job) => {
+                    const match = matches.get(job.id);
+                    const application = applications.find(
+                      (app) =>
+                        app.jobId === job.id && app.status !== "cancelled",
+                    );
+                    const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
+                    const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
+                    const context = `${job.title} at ${job.company}`;
+                    const evidence = matchEvidence(data.profile, job, match);
+                    const preparing = busyJob === job.id && ["select", "startAutonomous", "preflightImportedPosting"].includes(busy);
+                    return (
+                      <article className="job-row" key={job.id} tabIndex={-1} aria-labelledby={`role-${job.id}`}>
+                        <div className="company-block">
+                          <div className="company-mark">
+                            {job.company.charAt(0)}
+                          </div>
+                          <div>
+                            <strong>{job.company}</strong>
+                            <small>{job.location}</small>
+                            <small>
+                              {job.salary ? `${job.salary} · ` : "Salary not listed · "}
+                              {job.employmentType}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="job-detail">
+                          <h2 id={`role-${job.id}`}>{job.title}</h2>
+                          <div className="badges">
+                            <span
+                              className={`match-badge ${match?.category ?? "uncertain"}`}
+                            >
+                              {match?.category === "strong"
+                                ? "Strong fit"
+                                : match?.category === "possible"
+                                  ? "Possible fit"
+                                  : match?.category === "excluded"
+                                    ? "Search rule conflict"
+                                    : "Uncertain"}
+                            </span>
+                            <span className="source-badge">
+                              Source: {job.sourceLabel}
+                            </span>
+                            {job.postedAt && (
+                              <span className="source-badge">
+                                Posted {relative(job.postedAt)}
+                              </span>
+                            )}
+                          </div>
+                          <p className="fit-highlight">{evidence.headline}</p>
+                          {rowChecks.length > 0 && <div className="job-review-note"><span><strong>{match?.category === "excluded" ? "Search rule conflict: " : "To review: "}</strong>{rowChecks[0]}</span></div>}
+                          {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
+                          <details className="fit-evidence">
+                          <summary aria-label={`Review fit evidence for ${context}`}>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
+                          {evidence.comparisons.length > 0 && <div className="evidence-comparison">
+                            <strong>Posting terms found in confirmed facts</strong>
+                            <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
+                            <dl>{evidence.comparisons.map(item => <div key={item.requirement}><dt>{item.requirement}</dt><dd>{item.fact}</dd></div>)}</dl>
+                            <button className="text-button" onClick={() => setSection("profile")}>Review profile evidence</button>
+                          </div>}
+                          {!evidence.comparisons.length && evidence.listedSkills.length > 0 && <div className="evidence-comparison">
+                            <p>This overlap comes from skills you listed. No confirmed fact excerpt is linked to these terms here.</p>
+                            <button className="text-button" onClick={() => setSection("profile")}>Review profile evidence</button>
+                          </div>}
+                          <div className={`match-reasons ${evidence.detailedReasons.length ? "" : "only-checks"}`}>
+                            {evidence.detailedReasons.length > 0 && <div>
+                              <strong>Why it fits</strong>
+                              <ul>
+                                {evidence.detailedReasons.map((reason, i) => (
+                                  <li key={i}>{reason}</li>
+                                ))}
+                              </ul>
+                            </div>}
+                            <div>
+                              <strong>Gaps and unknowns</strong>
+                              <ul>
+                                {(match?.gaps.length || match?.uncertainty.length
+                                  ? [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])]
+                                  : ["No obvious gaps from confirmed facts."]
+                                ).map((gap, i) => (
+                                  <li key={i}>{gap}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                          </details>
+                        </div>
+                        <div className="job-actions">
+                          {collection === "dismissed" ? <button className="outline-action" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
+                            const next = await act("feedback", { jobId: job.id, kind: "clear" });
+                            if (next) setFeedbackNotice({ message: `${job.title} restored to your matches.` });
+                          }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
+                          <div className="small-actions">
+                            <button
+                              disabled={Boolean(busy)}
+                              aria-label={`${feedback.get(job.id)?.kind === "saved" ? "Unsave" : "Save"} ${context}`}
+                              aria-pressed={feedback.get(job.id)?.kind === "saved"}
+                              onClick={async () => {
+                                const saved = feedback.get(job.id)?.kind === "saved";
+                                const next = await act("feedback", {
+                                  jobId: job.id,
+                                  kind: saved ? "clear" : "saved",
+                                });
+                                if (next) setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                              }}
+                            >
+                              <Bookmark
+                                size={17}
+                                fill={
+                                  feedback.get(job.id)?.kind === "saved"
+                                    ? "currentColor"
+                                    : "none"
+                                }
+                              />
+                              {busy === "feedback" && busyJob === job.id ? "Updating…" : feedback.get(job.id)?.kind === "saved"
+                                ? "Unsave"
+                                : "Save"}
+                            </button>
+                            <button
+                              disabled={Boolean(busy)}
+                              aria-label={`Dismiss ${context}`}
+                              onClick={() => {
+                                setError("");
+                                setDismissJobId(job.id);
+                                setDismissReason("Wrong role");
+                              }}
+                            >
+                              <X size={17} />
+                              Dismiss
+                            </button>
+                          </div>
+                          {application ? (
+                            <button
+                              className="dark-button"
+                              aria-label={`View application for ${context}`}
+                              onClick={() => {
+                                setSelected(application.id);
+                                setNotice("");
+                                setEditingEssay(null);
+                                setSection("applications");
+                              }}
+                            >
+                              View application
+                            </button>
+                          ) : (
+                            <button
+                              className="dark-button"
+                              aria-label={`${data.automation.enabled ? (importedPreflight ? "Verify and apply automatically for" : "Apply automatically for") : "Prepare application for"} ${context}`}
+                              aria-describedby="application-mode-note"
+                              disabled={
+                                Boolean(busy) || match?.category === "excluded"
+                              }
+                              onClick={async () => {
+                                const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
+                                  jobId: job.id,
+                                });
+                                if (next) {
+                                  const app = next.applications.find(
+                                    (item) => item.jobId === job.id,
+                                  );
+                                  if (app) {
+                                    setSelected(app.id);
+                                    setNotice("");
+                                    setEditingEssay(null);
+                                    setSection("applications");
+                                  }
+                                }
+                              }}
+                            >
+                              {preparing ? "Preparing…" : data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
+                            </button>
+                          )}
+
+                          </>}
+                          <a
+                            className="job-link"
+                            aria-label={`View original posting for ${context} (opens in a new tab)`}
+                            href={job.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View original posting ↗
+                          </a>
+                          {error && busyJob === job.id && !dismissJobId && <div className="job-action-error" role="alert">
+                            <p>{displayError}</p>
+                            <p>Refresh to check the latest status for {context}. Your current view is preserved.</p>
+                            <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>
+                            {error === "AUTH_REQUIRED" && <a href="/login">Sign in</a>}
+                          </div>}
+                        </div>
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="empty">
+                    <Search size={28} />
+                    <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
+                    {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
+                    {filter !== "all" && <button className="outline-action" onClick={() => setFilter("all")}>Show any fit in this collection</button>}
+                    {!search.trim() && (collection === "saved" || collection === "dismissed") && <button className="outline-action" onClick={() => { setCollection("all"); setFilter("all"); }}>Browse matches</button>}
+                  </div>
+                )}
+              </div>
+              <details className="search-status">
+                <summary>{data.onboarding.complete ? "Search status" : "Finish profile setup"} · {data.lastRefreshAt ? `updated ${relative(data.lastRefreshAt)}` : "first check pending"}</summary>
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : "Finish setup before enabling automation"}</strong>
@@ -607,279 +923,7 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
-              {needsAction.length > 0 && (
-                <div className="next-action">
-                  <div className="next-icon">
-                    <Sparkles size={20} />
-                  </div>
-                  <div>
-                    <strong>
-                      {needsAction.length} application
-                      {needsAction.length > 1 ? "s" : ""} need your decision
-                    </strong>
-                    <p>
-                      Review a packet, complete a form, or check an uncertain
-                      result.
-                    </p>
-                  </div>
-                  <button onClick={() => setSection("applications")}>
-                    Open applications <ArrowRight size={15} />
-                  </button>
-                </div>
-              )}
-              <div className="job-search">
-                <label htmlFor="job-search">Search roles or companies</label>
-                <div>
-                  <Search size={18} aria-hidden="true" />
-                  <input id="job-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Job title or company" />
-                  {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
-                </div>
-              </div>
-              <div className="filterbar">
-                <div className="filters">
-                  {(
-                    [
-                      "all",
-                      "strong",
-                      "possible",
-                      "uncertain",
-                    ] as Filter[]
-                  ).map((item) => (
-                    <button
-                      key={item}
-                      aria-pressed={filter === item}
-                      className={filter === item ? "selected" : ""}
-                      onClick={() => setFilter(item)}
-                    >
-                      {item === "all"
-                        ? "All matches"
-                        : item[0].toUpperCase() + item.slice(1)}{" "}
-                      <span>
-                        {view.counts[item]}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="collections" role="group" aria-label="Your job collections">
-                <button className={`collection-filter ${filter === "saved" ? "selected" : ""}`} aria-pressed={filter === "saved"} onClick={() => setFilter("saved")}>
-                  <Bookmark size={16} aria-hidden="true" /> Saved <span>{view.counts.saved}</span>
-                </button>
-                <button className={`collection-filter ${filter === "dismissed" ? "selected" : ""}`} aria-pressed={filter === "dismissed"} onClick={() => setFilter("dismissed")}>
-                  Dismissed <span>{view.counts.dismissed}</span>
-                </button>
-                </div>
-                <label className="sort-control">Sort
-                  <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}>
-                    <option value="relevant">Most relevant</option>
-                    <option value="newest">Newest first</option>
-                  </select>
-                </label>
-              </div>
-              <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in this view{search.trim() && ` for “${search.trim()}”`}</p>
-              {feedbackNotice && <div className="feedback-notice" role="status">
-                <span>{feedbackNotice.message}</span>
-                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
-                  const next = await act("feedback", feedbackNotice.undo);
-                  if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
-                }}>Undo dismissal</button>}
-                <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
-              </div>}
-              <details className="fit-guide">
-                <summary>What do the fit labels mean?</summary>
-                <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
-                <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
-                <dl>
-                  <div><dt>Strong fit</dt><dd>Substantial overlap with your profile and preferences.</dd></div>
-                  <div><dt>Possible fit</dt><dd>Some overlap, with requirements to review.</dd></div>
-                  <div><dt>Uncertain</dt><dd>Important information is missing or needs verification.</dd></div>
-                  <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
-                </dl>
               </details>
-              <div className="job-list">
-                {filtered.length ? (
-                  filtered.map((job) => {
-                    const match = matches.get(job.id);
-                    const application = applications.find(
-                      (app) =>
-                        app.jobId === job.id && app.status !== "cancelled",
-                    );
-                    const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
-                    return (
-                      <article className="job-row" key={job.id}>
-                        <div className="company-block">
-                          <div className="company-mark">
-                            {job.company.charAt(0)}
-                          </div>
-                          <div>
-                            <strong>{job.company}</strong>
-                            <small>{job.location}</small>
-                            <small>
-                              {job.salary ? `${job.salary} · ` : ""}
-                              {job.employmentType}
-                            </small>
-                          </div>
-                        </div>
-                        <div className="job-detail">
-                          <h2>{job.title}</h2>
-                          <div className="badges">
-                            <span
-                              className={`match-badge ${match?.category ?? "uncertain"}`}
-                            >
-                              {match?.category === "strong"
-                                ? "Strong fit"
-                                : match?.category === "possible"
-                                  ? "Possible fit"
-                                  : match?.category === "excluded"
-                                    ? "Search rule conflict"
-                                    : "Uncertain"}
-                            </span>
-                            <span className="source-badge">
-                              Source: {job.sourceLabel}
-                            </span>
-                            {job.postedAt && (
-                              <span className="source-badge">
-                                Posted {relative(job.postedAt)}
-                              </span>
-                            )}
-                          </div>
-                          {(match?.uncertainty.length || match?.gaps.length) ? (
-                            <div className="job-review-note">
-                              <strong>{match?.category === "excluded" ? "Search rule to review" : "Review before applying"}</strong>
-                              <p>{match?.uncertainty[0] ?? match?.gaps[0]}</p>
-                              <button className="text-button" onClick={() => setSection(match?.category === "excluded" ? "settings" : "profile")}>
-                                {match?.category === "excluded" ? "Review search settings" : "Review profile"}
-                              </button>
-                            </div>
-                          ) : null}
-                          <details className="fit-evidence">
-                          <summary>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
-                          <div className="match-reasons">
-                            <div>
-                              <strong>Why it fits</strong>
-                              <ul>
-                                {(match?.evidence.length
-                                  ? match.evidence
-                                  : ["Review the posting to assess fit."]
-                                ).map((reason, i) => (
-                                  <li key={i}>{reason}</li>
-                                ))}
-                              </ul>
-                            </div>
-                            <div>
-                              <strong>Gaps and unknowns</strong>
-                              <ul>
-                                {(match?.gaps.length || match?.uncertainty.length
-                                  ? [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])]
-                                  : ["No obvious gaps from confirmed facts."]
-                                ).map((gap, i) => (
-                                  <li key={i}>{gap}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                          </details>
-                        </div>
-                        <div className="job-actions">
-                          {filter === "dismissed" ? <button className="outline-action" disabled={Boolean(busy)} onClick={async () => {
-                            const next = await act("feedback", { jobId: job.id, kind: "clear" });
-                            if (next) setFeedbackNotice({ message: `${job.title} restored to your matches.` });
-                          }}>Restore role</button> : <>
-                          <div className="small-actions">
-                            <button
-                              disabled={Boolean(busy)}
-                              aria-pressed={feedback.get(job.id)?.kind === "saved"}
-                              onClick={async () => {
-                                const saved = feedback.get(job.id)?.kind === "saved";
-                                const next = await act("feedback", {
-                                  jobId: job.id,
-                                  kind: saved ? "clear" : "saved",
-                                });
-                                if (next) setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
-                              }}
-                            >
-                              <Bookmark
-                                size={17}
-                                fill={
-                                  feedback.get(job.id)?.kind === "saved"
-                                    ? "currentColor"
-                                    : "none"
-                                }
-                              />
-                              {feedback.get(job.id)?.kind === "saved"
-                                ? "Unsave"
-                                : "Save"}
-                            </button>
-                            <button
-                              disabled={Boolean(busy)}
-                              onClick={() => {
-                                setDismissJobId(job.id);
-                                setDismissReason("Wrong role");
-                              }}
-                            >
-                              <X size={17} />
-                              Dismiss
-                            </button>
-                          </div>
-                          {application ? (
-                            <button
-                              className="dark-button"
-                              onClick={() => {
-                                setSelected(application.id);
-                                setSection("applications");
-                              }}
-                            >
-                              View application
-                            </button>
-                          ) : (
-                            <button
-                              className="dark-button"
-                              disabled={
-                                Boolean(busy) || match?.category === "excluded"
-                              }
-                              onClick={async () => {
-                                const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
-                                  jobId: job.id,
-                                });
-                                if (next) {
-                                  const app = next.applications.find(
-                                    (item) => item.jobId === job.id,
-                                  );
-                                  if (app) {
-                                    setSelected(app.id);
-                          setNotice("");
-                          setEditingEssay(null);
-                                    setSection("applications");
-                                  }
-                                }
-                              }}
-                            >
-                              {data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
-                            </button>
-                          )}
-                          {!application && <p className="preparation-note">{data.automation.enabled ? "Automation can prepare and submit this application using your saved settings. Review the fit checks and your authorization before starting." : "Opens an application workspace. You approve materials and the filled form before submission."}</p>}
-                          </>}
-                          <a
-                            className="job-link"
-                            href={job.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            View original posting ↗
-                          </a>
-                        </div>
-                      </article>
-                    );
-                  })
-                ) : (
-                  <div className="empty">
-                    <Search size={28} />
-                    <h3>{search.trim() ? "No roles match your search" : filter === "saved" ? "Your shortlist starts here" : filter === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
-                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter === "saved" ? "Save roles from your matches to compare them here." : filter === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
-                    {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
-                    {!search.trim() && (filter === "saved" || filter === "dismissed") && <button className="outline-action" onClick={() => setFilter("all")}>Browse matches</button>}
-                  </div>
-                )}
-              </div>
             </main>
             <aside className="activity-panel">
               <h2>Agent activity</h2>
@@ -1765,7 +1809,7 @@ export default function Dashboard() {
                 if (next) setFeedbackNotice({ message: `${jobs.find(job => job.id === dismissJobId)?.title ?? "Role"} dismissed. Find it in Dismissed.`, undo: { jobId: dismissJobId, kind: feedback.get(dismissJobId)?.kind === "saved" ? "saved" : "clear" } });
               }}
             >
-              Dismiss role
+              {busy === "feedback" ? "Dismissing…" : "Dismiss role"}
             </button>
             {error && <p role="alert">{error}</p>}
         </WorkspaceDialog>
@@ -1779,48 +1823,30 @@ export default function Dashboard() {
             >
               <X size={20} />
             </button>
-            <p className="eyebrow">BRING YOUR OWN OPPORTUNITY</p>
             <h2 id="import-heading">Import a job link</h2>
-            <p>
-              Paste a Greenhouse, Lever, or Ashby job link to retrieve its details.
-              For other sites, add the title and company. We’ll check the public posting and supported form before automatic application.
-            </p>
-            {(["url", "company", "title", "location"] as const).map((key) => (
-              <label key={key}>
-                {key === "url"
-                  ? "Job URL"
-                  : key[0].toUpperCase() + key.slice(1)}
-                <input
-                  value={importFields[key]}
-                  onChange={(event) =>
-                    setImportFields({
-                      ...importFields,
-                      [key]: event.target.value,
-                    })
-                  }
-                  placeholder={key === "url" ? "https://…" : ""}
-                />
+            <p>Start with the employer’s job link. Supported Greenhouse, Lever and Ashby postings can supply their own details.</p>
+            <form onSubmit={async event => {
+              event.preventDefault(); setImportTouched(true);
+              if (!importReady || busy) return;
+              const next = await act("import", importFields);
+              if (next) {
+                setImportOpen(false); setImportTouched(false); setCollection("all"); setFilter("all"); setSearch("");
+                setFeedbackNotice({ message: "Job link added. Review its posting details and fit before applying." });
+                setImportFields({ url: "", company: "", title: "", location: "" });
+              }
+            }}>
+              <label>Job URL (required)
+                <input type="url" required maxLength={2048} autoComplete="url" value={importFields.url} aria-describedby="import-url-help" aria-invalid={importTouched && Boolean(importCheck.error)} onBlur={() => setImportTouched(true)} onChange={event => setImportFields({ ...importFields, url: event.target.value })} placeholder="https://company.com/careers/role" />
               </label>
-            ))}
-            <button
-              className="dark-button"
-              disabled={Boolean(busy)}
-              onClick={async () => {
-                const next = await act("import", importFields);
-                if (next) {
-                  setImportOpen(false);
-                  setImportFields({
-                    url: "",
-                    company: "",
-                    title: "",
-                    location: "",
-                  });
-                }
-              }}
-            >
-              Add to catalog
-            </button>
-            {error && <p role="alert">{error}</p>}
+              <p id="import-url-help" className="field-help" role="status">{importTouched && importCheck.error ? importCheck.error : importFields.url && !importCheck.error ? importCheck.manual ? "This link needs the company and job title entered below. Availability will need verification." : "We’ll check the provider for the job's details and availability." : "Use a complete HTTPS link to a public job posting."}</p>
+              {!importCheck.error && importCheck.manual && <fieldset className="manual-import"><legend>Posting details</legend>
+                {(["company", "title", "location"] as const).map(key => <label key={key}>{key === "company" ? "Company (required)" : key === "title" ? "Job title (required)" : "Location (optional)"}
+                  <input required={key !== "location"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => setImportFields({ ...importFields, [key]: event.target.value })} />
+                </label>)}
+              </fieldset>}
+              <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add to catalog"}</button>
+              {error && <p role="alert">{displayError} Your entered details are preserved. Correct the link or try again.</p>}
+            </form>
         </WorkspaceDialog>
       )}
     </div>

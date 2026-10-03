@@ -16,6 +16,8 @@ async function main() {
   // ranking policy changes must not remove this presentation regression case.
   demoState.matchCache = { [matchKey(demoState.profile, intern)]: { ...assessMatchLocally(demoState.profile, intern), category: "strong" } };
   let fixture = publicState(demoState);
+  let failFeedback = false;
+  let slowFeedback = false;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -23,10 +25,12 @@ async function main() {
     // provider calls, application approvals or submissions are involved.
     await page.route("**/api/state", route => route.fulfill({ json: fixture }));
     await page.route("**/api/status", route => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(fixture)}\n\n` }));
-    await page.route("**/api/actions", route => {
+    await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
       assert.equal(body.action, "feedback", "Only synthetic feedback actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
+      if (failFeedback) { failFeedback = false; return route.fulfill({ status: 503, json: { error: "Feedback could not be saved. Try again." } }); }
+      if (slowFeedback) { slowFeedback = false; await new Promise(resolve => setTimeout(resolve, 750)); }
       updateJobFeedback(fixture, body.payload);
       return route.fulfill({ json: { ok: true } });
     });
@@ -38,24 +42,42 @@ async function main() {
       const strongRole = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Software Engineering Intern", exact: true }) });
       await strongRole.waitFor();
       assert.equal(await strongRole.getByText("Strong fit", { exact: true }).isVisible(), true);
-      const review = strongRole.locator(".job-review-note");
-      assert.equal(await review.getByText("Work authorization has not been confirmed.", { exact: true }).isVisible(), true, "Strong fit must not conceal unresolved eligibility information");
-      assert.equal(await review.getByRole("button", { name: "Review profile", exact: true }).isVisible(), true);
-      assert.equal(await strongRole.locator(".preparation-note").isVisible(), true, "Explain preparation and later approvals before the action");
+      const context = "Software Engineering Intern at Cedar Systems";
+      const jobButton = (name: string) => strongRole.getByRole("button", { name: `${name} ${context}`, exact: true });
+      assert.equal(await page.locator(".profile-context").getByText("Work authorization needs confirmation.", { exact: true }).isVisible(), true, "Strong fit must not conceal unresolved eligibility information");
+      assert.equal(await strongRole.locator(".fit-highlight").isVisible(), true, "Show positive evidence without opening details");
+      assert.equal(await strongRole.locator(".preparation-note").count(), 0, "Shared preparation guidance must not repeat in every role");
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const firstRoleBox = await page.getByRole("article").first().boundingBox();
+      assert.ok(firstRoleBox && firstRoleBox.y < height, "The first role must begin in the initial viewport");
+      assert.equal(await strongRole.locator(".fit-highlight").innerText(), "Posting mentions: React · Confirmed fact: Built a React portfolio project");
+      if (label === "mobile") {
+        const prepareBox = await jobButton("Prepare application for").boundingBox();
+        assert.ok(prepareBox && prepareBox.y + prepareBox.height <= height, "One complete opportunity and its preparation action should fit in the opening phone viewport");
+      }
+      if (label === "mobile") {
+        const morePages = page.getByRole("button", { name: "More pages", exact: true });
+        await morePages.click();
+        await page.getByRole("link", { name: "AI usage", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        assert.equal(await morePages.evaluate(element => element === document.activeElement), true, "Closing auxiliary navigation restores focus");
+        await page.getByRole("button", { name: "Any fit · Most relevant", exact: true }).click();
+      }
       await page.locator(".fit-guide summary").click();
       assert.equal(await page.getByText("Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.", { exact: true }).isVisible(), true);
       await page.locator(".fit-guide summary").click();
       assert.equal(await strongRole.locator(".match-reasons").isVisible(), false, "Full reasoning is disclosed on request");
       await strongRole.locator(".fit-evidence summary").click();
+      assert.equal(await strongRole.locator(".evidence-comparison").getByText("Built a React portfolio project", { exact: true }).isVisible(), true);
       assert.equal(await strongRole.locator(".match-reasons").getByText("No confirmed evidence yet for TypeScript.", { exact: true }).isVisible(), true, "Disclosure must preserve every missing requirement");
       await strongRole.locator(".fit-evidence summary").click();
       const query = page.getByRole("searchbox", { name: "Search roles or companies" });
       await query.fill("cedar engineering");
       assert.equal(await page.getByRole("article").count(), 1, "Search matches company and title case-insensitively");
-      assert.equal(await page.getByRole("button", { name: "All matches 1", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Any fit 1", exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Strong 1", exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Possible 0", exact: true }).isVisible(), true);
-      assert.equal(await page.locator(".result-summary").innerText(), '1 role in this view for “cedar engineering”');
+      assert.equal(await page.locator(".result-summary").innerText(), '1 role in all roles for “cedar engineering”');
       await query.fill("no-company-has-this-name");
       await page.getByRole("heading", { name: "No roles match your search", exact: true }).waitFor();
       await page.getByRole("button", { name: "Clear search", exact: true }).last().click();
@@ -69,7 +91,7 @@ async function main() {
       await launcher.click();
       const dialog = page.getByRole("dialog", { name: "Import a job link" });
       await dialog.waitFor();
-      assert.equal(await page.getByRole("textbox", { name: "Job URL", exact: true }).evaluate(element => element === document.activeElement), true, "Opening import moves focus into its input");
+      assert.equal(await page.getByRole("textbox", { name: "Job URL (required)", exact: true }).evaluate(element => element === document.activeElement), true, "Opening import moves focus into its input");
       for (let step = 0; step < 9; step++) {
         await page.keyboard.press("Tab");
         assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true, "Tab must stay inside the modal");
@@ -77,7 +99,7 @@ async function main() {
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "hidden" });
       assert.equal(await launcher.evaluate(element => element === document.activeElement), true, "Closing import restores launcher focus");
-      const dismissLauncher = strongRole.getByRole("button", { name: "Dismiss", exact: true });
+      const dismissLauncher = jobButton("Dismiss");
       await dismissLauncher.click();
       const dismissDialog = page.getByRole("dialog", { name: "Why dismiss this role?" });
       await dismissDialog.waitFor();
@@ -86,7 +108,7 @@ async function main() {
       await dismissDialog.waitFor({ state: "hidden" });
       assert.equal(await dismissLauncher.evaluate(element => element === document.activeElement), true);
       assert.equal(await page.getByRole("button", { name: "Matches", exact: true }).getAttribute("aria-current"), "page");
-      assert.equal(await page.getByRole("button", { name: "All matches 3", exact: true }).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.getByRole("button", { name: "Any fit 3", exact: true }).getAttribute("aria-pressed"), "true");
       for (const control of await strongRole.locator(".small-actions button, .dark-button, .job-link").all()) {
         const box = await control.boundingBox();
         assert.ok(box && box.width >= 44 && box.height >= 44, "Job actions need at least 44px targets");
@@ -94,38 +116,92 @@ async function main() {
       await page.getByRole("button", { name: "Saved 0", exact: true }).click();
       await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
-      await strongRole.getByRole("button", { name: "Save", exact: true }).click();
-      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
+      failFeedback = true;
+      await jobButton("Save").click();
+      await strongRole.getByRole("alert").getByText("Feedback could not be saved. Try again.", { exact: true }).waitFor();
+      assert.equal(await jobButton("Save").isVisible(), true, "Failed feedback must not invent a saved state");
+      await strongRole.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await strongRole.getByRole("alert").waitFor({ state: "hidden" });
+      slowFeedback = true;
+      await jobButton("Save").click();
+      await strongRole.getByText("Updating…", { exact: true }).waitFor();
+      assert.equal(await jobButton("Save").isDisabled(), true);
+
+      await jobButton("Unsave").waitFor();
       await page.getByRole("button", { name: "Saved 1", exact: true }).click();
       assert.equal(await page.getByRole("article").count(), 1);
-      await strongRole.getByRole("button", { name: "Unsave", exact: true }).click();
+      await page.getByRole("button", { name: "Strong 1", exact: true }).click();
+      assert.equal(await page.getByRole("button", { name: "Saved 1", exact: true }).getAttribute("aria-pressed"), "true", "Fit changes must retain Saved scope");
+      assert.equal(await page.getByRole("article").count(), 1);
+      await page.getByRole("button", { name: "Uncertain 0", exact: true }).click();
+      await page.getByRole("heading", { name: "No uncertain fit roles in saved", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Show any fit in this collection", exact: true }).click();
+      await jobButton("Unsave").click();
       await page.getByRole("heading", { name: "Your shortlist starts here", exact: true }).waitFor();
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
-      await strongRole.getByRole("button", { name: "Save", exact: true }).click();
-      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
-      await strongRole.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await jobButton("Save").click();
+      await jobButton("Unsave").waitFor();
+      await jobButton("Dismiss").click();
       await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).waitFor();
       assert.equal(await page.getByRole("article").count(), 2);
       await page.getByRole("button", { name: "Undo dismissal", exact: true }).click();
-      await strongRole.getByRole("button", { name: "Unsave", exact: true }).waitFor();
+      await jobButton("Unsave").waitFor();
       assert.equal(await page.getByRole("article").count(), 3, "Undo restores both the role and its previous saved state");
-      await strongRole.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await jobButton("Dismiss").click();
       await page.getByRole("dialog", { name: "Why dismiss this role?" }).getByRole("button", { name: "Dismiss role", exact: true }).click();
       await page.getByRole("button", { name: "Dismissed 1", exact: true }).click();
       assert.equal(await page.getByRole("article").count(), 1);
-      await strongRole.getByRole("button", { name: "Restore role", exact: true }).click();
+      await jobButton("Restore role").click();
       await page.getByRole("heading", { name: "No dismissed roles", exact: true }).waitFor();
       await page.getByRole("button", { name: "Browse matches", exact: true }).click();
       assert.equal(await page.getByRole("article").count(), 3);
       await page.getByRole("button", { name: "Close feedback message", exact: true }).click();
+      await page.getByRole("button", { name: "Matches", exact: true }).focus();
+      await page.keyboard.press("/");
+      assert.equal(await query.evaluate(element => element === document.activeElement), true);
+      await page.getByRole("button", { name: "Matches", exact: true }).focus();
+      await page.keyboard.press("j");
+      assert.equal(await page.getByRole("article").first().evaluate(element => element === document.activeElement), true);
+      await launcher.click();
+      const url = page.getByRole("textbox", { name: "Job URL (required)", exact: true });
+      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isDisabled(), true);
+      await url.fill("http://company.example/role");
+      await url.blur();
+      assert.equal(await dialog.getByText("Use an HTTPS job link.", { exact: true }).isVisible(), true);
+      await url.fill("https://boards.greenhouse.io/team/jobs/123");
+      assert.equal(await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).count(), 0);
+      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isEnabled(), true);
+      await url.fill("https://company.example/careers/role");
+      await dialog.getByRole("textbox", { name: "Company (required)", exact: true }).fill("Example");
+      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isDisabled(), true);
+      await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).fill("Analyst");
+      assert.equal(await dialog.getByRole("button", { name: "Add to catalog", exact: true }).isEnabled(), true);
+      await page.keyboard.press("Escape");
+      if (label === "mobile") await page.getByRole("button", { name: "Any fit · Most relevant", exact: true }).click();
+      await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: `.data/matches-${label}.png`, fullPage: true });
+      await page.screenshot({ path: `.data/matches-${label}-viewport.png` });
       fixture.automation.enabled = true;
       await page.reload();
-      await strongRole.getByRole("button", { name: "Apply automatically", exact: true }).waitFor();
-      assert.match(await strongRole.locator(".preparation-note").innerText(), /can prepare and submit/);
-      assert.doesNotMatch(await strongRole.locator(".preparation-note").innerText(), /You approve materials/);
+      await strongRole.getByRole("button", { name: `Apply automatically for ${context}`, exact: true }).waitFor();
+      assert.match((await page.locator("#application-mode-note").textContent()) ?? "", /can prepare and submit/);
+      assert.doesNotMatch((await page.locator("#application-mode-note").textContent()) ?? "", /You approve materials/);
       console.log(`PASS ${label}: fit/search/counts/sort/disclosure, dialog keyboard behavior, touch targets, save/unsave, dismissal undo and restore`);
+    }
+    for (const [width, height] of [[320, 740], [820, 900], [720, 500]]) {
+      await page.setViewportSize({ width, height });
+      fixture = publicState(structuredClone(demoState));
+      fixture.jobs[0].title = "Early career software engineering and analytics opportunity — international product development team";
+      fixture.jobs[0].company = "International technology research and development company";
+      await page.goto(origin);
+      await page.getByRole("article").first().waitFor();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Long-content layout must not overflow at ${width}px`);
+      for (const name of ["Matches", "Applications", "Profile", "Search settings"]) {
+        const navigation = page.getByRole("button", { name, exact: true });
+        assert.ok(await navigation.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 10), `Navigation labels stay visible at ${width}px`);
+      }
+      console.log(`PASS responsive ${width}x${height}: long content, visible navigation, no horizontal overflow`);
     }
   } finally { await browser.close(); }
 }
