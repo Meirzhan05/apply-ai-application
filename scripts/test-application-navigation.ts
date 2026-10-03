@@ -12,6 +12,7 @@ async function main() {
   for (const job of state.jobs) selectApplication(state, job.id, state.profile.id);
   state.applications.reverse();
   const first = state.applications[0];
+  const completed = state.applications[5]; completed.status = "submitted"; completed.confirmation = "Synthetic employer confirmation."; completed.submittedAt = new Date().toISOString();
   const fact = state.profile.facts[0];
   setPacket(state, first, { schemaVersion: 1, files: [{ kind: "resume", filename: "tailored-resume.pdf", mimeType: "application/pdf", sha256: "a".repeat(64), size: 1, factIds: [fact.id] }], version: 1, createdAt: new Date().toISOString(), model: "fixture", summary: "Navigation verification", profileHash: packetProfileHash(state.profile), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [{ question: "Are you legally authorized to work in the United States?", answer: "", author: "human", factIds: [], requiresUserInput: true }] });
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
@@ -31,6 +32,9 @@ async function main() {
         await picker.selectOption(state.applications[5].id);
         await page.getByRole("heading", { name: "Application role 6", exact: true }).waitFor();
         assert.equal(await page.getByText("Application 6 of 6", { exact: true }).isVisible(), true);
+        assert.equal(await page.getByText("Application complete · Submission confirmed", { exact: true }).isVisible(), true);
+        assert.equal(await page.locator('.progress [aria-current="step"]').count(), 0);
+
         assert.equal(await page.getByRole("button", { name: "Next application", exact: true }).isDisabled(), true);
         await page.getByRole("button", { name: "Previous application", exact: true }).click();
         await page.getByRole("heading", { name: "Application role 5", exact: true }).waitFor();
@@ -39,6 +43,10 @@ async function main() {
         await page.locator(".app-list-item").nth(5).click();
         await page.getByRole("heading", { name: "Application role 6", exact: true }).waitFor();
         assert.equal(await page.locator('.app-list-item[aria-pressed="true"]').count(), 1);
+        assert.equal(await page.locator('.progress-desktop .done').count(), 5);
+        assert.equal(await page.locator('.progress [aria-current="step"]').count(), 0);
+        assert.equal(await page.locator('.progress-desktop').getByText("Submission confirmed", { exact: true }).isVisible(), true);
+
         await page.locator(".app-list-item").first().click();
       }
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Unsaved applicant answer");
