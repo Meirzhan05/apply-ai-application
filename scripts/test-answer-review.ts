@@ -192,6 +192,9 @@ async function main() {
       await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).waitFor();
       assert.equal(await page.locator(".packet-orientation a").count(), 1, "Only the available rebuild task should be linked while materials are stale");
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
+      await page.reload();
+      await page.getByRole("button", { name: "Undo source fact changes", exact: true }).waitFor();
+      await page.getByText("Undo is available in this browser tab, including after a reload,", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Undo source fact changes", exact: true }).click();
       await page.locator(".materials-update").getByText("Source fact correction undone. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.deepEqual(state.profile.facts.find(item => item.id === fact.id), fact);

@@ -19,6 +19,7 @@ import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
+import { readFactCorrectionHistory, writeFactCorrectionHistory, type FactCorrectionHistory } from "@/lib/fact-correction-history";
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
 import { PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
@@ -111,7 +112,7 @@ export default function Dashboard() {
   const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; facts: VerifiedFact[]; claim: string } | null>(null);
-  const [lastFactCorrection, setLastFactCorrection] = useState<{ owner: string; applicationId: string; before: VerifiedFact[]; after: VerifiedFact[] } | null>(null);
+  const [lastFactCorrection, setLastFactCorrection] = useState<FactCorrectionHistory | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("");
@@ -142,6 +143,7 @@ export default function Dashboard() {
               setCollection(saved.view.collection); setFilter(saved.view.filter); setSearch(saved.view.search); setSort(saved.view.sort);
               setImportFields(saved.draft); setImportOpen(saved.importOpen);
             }
+            setLastFactCorrection(readFactCorrectionHistory(window.sessionStorage, body.profile.id, body.applications.map(app => app.id), body.profile.facts));
             const navigation = readWorkspaceNavigation(window.sessionStorage, body.profile.id, body.applications.map(app => app.id));
             if (navigation) {
               setSection(navigation.section); setSelected(navigation.applicationId);
@@ -270,6 +272,12 @@ export default function Dashboard() {
     try { writeWorkspaceNavigation(window.sessionStorage, owner, { section, applicationId: activeApp?.id ?? null, search: applicationSearch, attentionOnly }); }
     catch { /* Browser preferences may disable access to session storage itself. */ }
   }, [data?.profile.id, section, activeApp?.id, applicationSearch, attentionOnly]);
+  useEffect(() => {
+    const owner = data?.profile.id;
+    if (!owner || sessionOwner.current !== owner) return;
+    try { writeFactCorrectionHistory(window.sessionStorage, owner, lastFactCorrection?.owner === owner ? lastFactCorrection : null); }
+    catch { /* Current-page Undo remains available without browser storage. */ }
+  }, [data?.profile.id, lastFactCorrection]);
   const answerDraft = answerEdits && answerEdits.applicationId === activeApp?.id ? answerEdits.answers : [];
   const setAnswerDraft = (answers: ScreeningAnswer[]) => setAnswerEdits(activeApp && answers.length ? { applicationId: activeApp.id, answers } : null);
   const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
@@ -1429,7 +1437,7 @@ export default function Dashboard() {
                     )}
                     {lastFactCorrection?.owner === data.profile.id && lastFactCorrection.applicationId === activeApp.id && <section className="fact-change-history" aria-label="Last source fact change">
                       <strong>Source facts saved</strong>
-                      <p>You can undo this correction while these facts still match your saved changes. Other profile edits stay intact.</p>
+                      <p>Undo is available in this browser tab, including after a reload, while these facts still match your saved changes. Other profile edits stay intact.</p>
                       <details><summary>Review your last source fact changes</summary>
                         {lastFactCorrection.before.map((fact, index) => <div key={fact.id}><p><strong>Before:</strong> {fact.text} · {fact.verified ? "confirmed" : "unconfirmed"}</p><p><strong>Saved:</strong> {lastFactCorrection.after[index]?.text} · {lastFactCorrection.after[index]?.verified ? "confirmed" : "unconfirmed"}</p></div>)}
                       </details>
