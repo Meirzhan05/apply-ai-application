@@ -3,13 +3,16 @@
 import { useState } from "react";
 import type { ScreeningAnswer, VerifiedFact } from "@/lib/types";
 
-export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange }: {
+export function EssayReview({ answer, facts, inputId, editable, blocked, onSave, onEditingChange, onDraftChange, editing: controlledEditing }: {
   answer: ScreeningAnswer; facts: VerifiedFact[]; inputId: string;
   editable: boolean; blocked: boolean; onSave: (text: string) => Promise<unknown | null>;
   onEditingChange?: (editing: boolean) => void;
   onDraftChange?: (text: string) => void;
+  editing?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [localEditing, setLocalEditing] = useState(false);
+  const editing = controlledEditing ?? localEditing;
+  const setEditing = (value: boolean) => { setLocalEditing(value); onEditingChange?.(value); };
   const [text, setText] = useState(answer.answer);
   const revision = answer.userRevision;
   const sourceIds = revision?.originalFactIds ?? answer.factIds;
@@ -21,10 +24,10 @@ export function EssayReview({ answer, facts, inputId, editable, blocked, onSave,
       <p className="muted">Use truthful wording. Your changes apply only to this answer and need fresh confirmation.</p>
       <div className="essay-actions">
         <button type="button" className="outline-action" disabled={blocked || !text.trim() || text.trim() === answer.answer}
-          onClick={async () => { if (await onSave(text)) { setEditing(false); onEditingChange?.(false); } }}>Save essay revision</button>
-        <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(false); onEditingChange?.(false); }}>Cancel editing</button>
+          onClick={async () => { if (await onSave(text)) setEditing(false); }}>Save essay revision</button>
+        <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(false); }}>Cancel editing</button>
       </div>
-    </> : editable && <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(true); onEditingChange?.(true); }}>Edit wording</button>}
+    </> : editable && <button type="button" className="text-button" disabled={blocked} onClick={() => { setText(answer.answer); setEditing(true); }}>Edit wording</button>}
     <details className="essay-evidence">
       <summary aria-label={`${revision ? "Original draft and source facts" : "Source facts"} for: ${answer.question}`}>{revision ? "Original AI draft and source facts" : "Facts used in this essay"}</summary>
       {revision && <><p>{revision.originalAnswer}</p><p className="muted">These facts supported the original draft. Your revision is applicant-provided wording, not a newly verified claim.</p></>}

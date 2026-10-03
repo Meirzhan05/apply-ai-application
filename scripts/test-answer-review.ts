@@ -108,6 +108,13 @@ async function main() {
       await page.getByRole("button", { name: "Edit wording", exact: true }).click();
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await page.getByRole("button", { name: "Approve packet for form fill", exact: true }).isDisabled(), true);
+      await essayInput.fill("Discard this essay before correcting a fact.");
+      await page.getByRole("button", { name: "Correct or unconfirm source facts", exact: true }).first().click();
+      await page.getByRole("dialog", { name: "Keep your changes?" }).getByRole("button", { name: "Discard and continue", exact: true }).click();
+      await page.getByRole("dialog", { name: "Correct the source facts", exact: true }).getByRole("button", { name: "Cancel corrections", exact: true }).click();
+      assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
+      assert.equal(await essayInput.inputValue(), essay.answer);
+      await page.getByRole("button", { name: "Edit wording", exact: true }).click();
       await essayInput.fill("I would like to apply my survey analysis project experience to this role.");
       await page.getByRole("button", { name: "Matches", exact: true }).click();
       await page.getByRole("dialog", { name: "Keep your changes?" }).getByRole("button", { name: "Stay here", exact: true }).click();

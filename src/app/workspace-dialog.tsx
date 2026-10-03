@@ -20,7 +20,11 @@ export function WorkspaceDialog({ labelledBy, onClose, children }: {
       element.close();
       document.body.style.overflow = previousOverflow;
       if (launcher?.isConnected) launcher.focus({ preventScroll: true });
-      else document.getElementById("matches-heading")?.focus({ preventScroll: true });
+      else {
+        const heading = document.querySelector<HTMLElement>("main h1");
+        heading?.setAttribute("tabindex", "-1");
+        heading?.focus({ preventScroll: true });
+      }
     };
   }, []);
   return <dialog ref={dialog} className="modal workspace-dialog" aria-labelledby={labelledBy}

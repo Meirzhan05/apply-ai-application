@@ -89,6 +89,7 @@ export default function Dashboard() {
   const [editingEssay, setEditingEssay] = useState<number | null>(null);
   const [essayDraft, setEssayDraft] = useState<{ applicationId: string; answerIndex: number; text: string } | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<{ run: () => void } | null>(null);
+  const [cancellationId, setCancellationId] = useState<string | null>(null);
   const [, updateBrowserClock] = useState(0);
   const applicationList = useRef<HTMLDivElement>(null);
   const [factCorrection, setFactCorrection] = useState<{ applicationId: string; factIds: string[]; claim: string } | null>(null);
@@ -167,6 +168,7 @@ export default function Dashboard() {
     [data],
   );
   const applications = data?.applications ?? [];
+  const cancellation = applications.find(app => app.id === cancellationId);
   const view = matchView({ jobs, matches, feedback, filter, collection, search });
   const filtered = view.jobs;
   filtered.sort((a, b) => sort === "newest"
@@ -349,6 +351,7 @@ export default function Dashboard() {
                         "submitting",
                         "submitted",
                         "uncertain",
+                        "cancelled",
                       ].includes(activeApp.status) && (
                         <div className="step-card">
                           <div className="card-title">
@@ -431,6 +434,7 @@ export default function Dashboard() {
                                 {answerOwner(answer.question) === "ai" && answerReviewHash(answer) ? <>
                                   <EssayReview key={`${activeApp.id}-${i}-${answerReviewHash(answer)}`} answer={answer} facts={data.profile.facts}
                                     inputId={`screening-${activeApp.id}-${i}`} editable={activeApp.status === "draft_review"}
+                                    editing={editingEssay === i}
                                     blocked={Boolean(busy) || Boolean(activeApp.queuedRun) || Boolean(activeApp.materialsStale) || answersDirty || (editingEssay !== null && editingEssay !== i)}
                                     onEditingChange={(editing) => { setEditingEssay(editing ? i : null); setEssayDraft(editing ? { applicationId: activeApp.id, answerIndex: i, text: answer.answer } : null); }}
                                     onDraftChange={(text) => setEssayDraft({ applicationId: activeApp.id, answerIndex: i, text })}
@@ -1452,18 +1456,11 @@ export default function Dashboard() {
                     {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
-                    {![
-                      "submitted",
-                      "submitting",
-                      "awaiting_verification",
-                      "uncertain",
-                      "cancelled",
-                    ].includes(activeApp.status) || (activeApp.autonomousAuthorization && activeApp.status === "submitting" && !activeApp.submissionAttemptedAt) ? (
+                    {canCancelApplication(activeApp) ? (
                       <button
                         className="subtle-danger"
-                        onClick={() =>
-                          act("cancel", { applicationId: activeApp.id })
-                        }
+                        disabled={Boolean(busy)}
+                        onClick={() => requestNavigation(() => setCancellationId(activeApp.id))}
                       >
                         Cancel this application
                       </button>
@@ -1886,6 +1883,17 @@ export default function Dashboard() {
             setNotice("Source facts saved. Rebuild the materials and review them before approving.");
           }
         }} />}
+      {cancellation && <WorkspaceDialog labelledBy="cancel-application-heading" onClose={() => { if (!busy) setCancellationId(null); }}>
+        <h2 id="cancel-application-heading">Cancel this application?</h2>
+        <p>{jobs.find(job => job.id === cancellation.jobId)?.company} · {jobs.find(job => job.id === cancellation.jobId)?.title}</p>
+        <p>This stops the attempt and closes its browser session. Your saved materials remain available. Starting again requires selecting the role and reviewing a new attempt.</p>
+        {!canCancelApplication(cancellation) && <p role="alert">The application status changed. Close this dialog and review its current result.</p>}
+        <div className="action-row">
+          <button className="outline-action" disabled={Boolean(busy)} onClick={() => setCancellationId(null)}>Keep application</button>
+          <button className="dark-button" disabled={Boolean(busy) || !canCancelApplication(cancellation)} onClick={async () => { if (await act("cancel", { applicationId: cancellation.id })) setCancellationId(null); }}>{busy === "cancel" ? "Cancelling…" : "Confirm cancellation"}</button>
+        </div>
+        {error && <p role="alert">{displayError}</p>}
+      </WorkspaceDialog>}
       {pendingNavigation && activeApp?.packet && (
         <WorkspaceDialog labelledBy="unsaved-heading" onClose={() => { if (!busy) setPendingNavigation(null); }}>
           <h2 id="unsaved-heading">Keep your changes?</h2>
@@ -1971,6 +1979,10 @@ function formatDelay(milliseconds: number) {
 }
 function needsApplicationReview(application: Application) {
   return ["draft_review", "final_review", "needs_user_action", "awaiting_verification", "uncertain"].includes(application.status) || Boolean(application.blockers?.some(blocker => blocker.progress === "blocked"));
+}
+
+function canCancelApplication(application: Application) {
+  return !["submitted", "submitting", "awaiting_verification", "uncertain", "cancelled"].includes(application.status) || Boolean(application.autonomousAuthorization && application.status === "submitting" && !application.submissionAttemptedAt);
 }
 
 function statusLabel(status: Application["status"]) {
