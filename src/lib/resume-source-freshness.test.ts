@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
-import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { selectApplication } from "@/lib/workflow";
 import { assertSourceJobCurrent, normalizedSourceJobHash } from "@/lib/resume-source-freshness";
 
@@ -17,7 +16,6 @@ function importedFixture() {
 it("uses the drafting normalization for imported source-plan freshness", () => {
   const { application, job } = importedFixture();
   const original = normalizedSourceJobHash(application, job);
-  const storedUrl = job.url;
   job.description = "Changed unverified page content";
   job.requirements = ["Changed unverified requirement"];
   job.url = "https://example.invalid/role?ref=another-target";

@@ -117,7 +117,7 @@ afterEach(async () => {
 });
 
 it("uploads, confirms unbulleted qualifications, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
-  const sourceBytes = await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL" });
+  const sourceBytes = await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL", positionedWordSpacing: true, sectionDivider: true });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
@@ -187,6 +187,64 @@ it("uploads, confirms unbulleted qualifications, drafts, renders, previews, down
   expect(application.status).toBe("submitting");
   expect(application.submissionStartedAt).toBeTruthy();
   expect(fixture.tasks.some((item) => item.task === "submit-application-form")).toBe(true);
+}, 180_000);
+
+it("re-inspects a cached parser-v2 PDF before drafting and keeps confirmed source-fact identities", async () => {
+  const sourceBytes = await createPdfSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(200);
+  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  const originalAnchorIds = fixture.state!.profile.resumeSourceDocument!.anchors.map((anchor) => anchor.id);
+  const originalFactLinks = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ id: fact.id, anchorId: fact.sourceAnchorId }));
+
+  const cached = structuredClone(fixture.state!.profile.resumeSourceDocument!);
+  if (cached.format !== "pdf") throw new Error("The upload did not create a PDF source cache.");
+  cached.version = 2;
+  cached.parser = "pdfjs-text-2";
+  cached.support = { status: "blocked", reason: "Older parser text spans could not be matched to PDF source operators." };
+  for (const anchor of cached.anchors) {
+    delete anchor.showOperatorIndex;
+    delete anchor.operatorText;
+  }
+  fixture.state!.profile.resumeSourceDocument = cached;
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const requested = await publicAction("draft", { applicationId: application.id });
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  await runDraft(fixture.tasks.find((item) => item.task === "draft-application-packet")!.payload);
+
+  expect(fixture.state!.profile.resumeSourceDocument).toMatchObject({ version: 3, parser: "pdfjs-text-3", support: { status: "candidate" } });
+  expect(fixture.state!.profile.resumeText).toBe(fixture.state!.profile.resumeSourceDocument!.text);
+  expect(fixture.state!.profile.resumeSourceDocument!.anchors.map((anchor) => anchor.id)).toEqual(originalAnchorIds);
+  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ id: fact.id, anchorId: fact.sourceAnchorId }))).toEqual(originalFactLinks);
+  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  expect(application.packet?.resumeArtifact).toMatchObject({ format: "pdf", renderer: "apache-pdfbox", layoutValidation: { outcome: "passed" } });
+
+  const priorPacket = structuredClone(application.packet);
+  const legacyAgain = structuredClone(fixture.state!.profile.resumeSourceDocument!);
+  if (legacyAgain.format !== "pdf") throw new Error("The refreshed source cache changed formats.");
+  legacyAgain.version = 2;
+  legacyAgain.parser = "pdfjs-text-2";
+  legacyAgain.support = { status: "blocked", reason: "Older parser text spans could not be matched to PDF source operators." };
+  fixture.state!.profile.resumeSourceDocument = legacyAgain;
+  const staleFact = fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId)!;
+  staleFact.sourceAnchorId = "stale-confirmed-anchor";
+  const priorModelCalls = fixture.parse.mock.calls.length;
+  const retry = await publicAction("draft", { applicationId: application.id, draftMode: "resume" });
+  expect(retry.status, await retry.clone().text()).toBe(200);
+  const retryPayload = fixture.tasks.filter((item) => item.task === "draft-application-packet")[1].payload;
+  await expect(runDraft(retryPayload)).rejects.toThrow(/confirmed résumé fact no longer matches/i);
+  expect(application.status).toBe("draft_review");
+  expect(application.runWorkerClaimedAt).toBeUndefined();
+  expect(application.packet).toEqual(priorPacket);
+  expect(fixture.parse).toHaveBeenCalledTimes(priorModelCalls);
 }, 180_000);
 
 it("blocks a pre-feature PDF at the worker instead of using a generic résumé", async () => {

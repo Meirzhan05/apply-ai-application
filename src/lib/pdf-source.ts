@@ -22,7 +22,7 @@ const vectorPaintOperations = new Set<number>([OPS.stroke, OPS.fill, OPS.eoFill,
 
 interface ItemStyle { fontFamily?: string; ascent?: number; descent?: number; vertical?: boolean }
 interface TextItem { str: string; dir: string; transform: number[]; width: number; height: number; fontName: string; hasEOL?: boolean }
-interface LocatedItem { item: TextItem; rawSourceText: string; style: ItemStyle; resolvedFontName: string; fontFamily: string; bold: boolean; italic: boolean; index: number; pageNumber: number; left: number; top: number; right: number; bottom: number; baseline: number }
+interface LocatedItem { item: TextItem; rawSourceText: string; operatorText: string; showOperatorIndex: number; style: ItemStyle; resolvedFontName: string; fontFamily: string; bold: boolean; italic: boolean; index: number; pageNumber: number; left: number; top: number; right: number; bottom: number; baseline: number }
 
 const clean = (value: string) => value.replace(/[\u0000\u200b\u00ad]/g, "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -58,6 +58,45 @@ function reasonFromError(error: unknown): string {
 }
 
 function appendReason(current: string | undefined, next: string) { return current ?? next; }
+function comparableOperatorText(value: string) {
+  return value.replace(/[\uFB00-\uFB06]/g, (ligature) => ({ "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st" })[ligature] ?? ligature).replace(/\s+/g, "");
+}
+function isRightAlignedLineMetadata(item: LocatedItem, page: ParsedPage) {
+  if (item.left < page.width * 0.7 || item.right < page.width - 55 || item.rawSourceText.length > 40) return false;
+  const value = clean(item.rawSourceText);
+  const dateRange = /(?:19|20)\d{2}/.test(value) && /[–—-]/.test(value);
+  const location = /,\s*[A-Z]{2}$/.test(value);
+  const workplaceMode = /^(remote|hybrid|onsite)$/i.test(value);
+  return dateRange || location || workplaceMode;
+}
+
+function isPageHeaderFurniture(item: LocatedItem, pageNumber: number, page: ParsedPage, trustedName?: string) {
+  if (pageNumber !== 1 || item.top > 90 || item.rawSourceText.length > 100 || bulletText.test(item.rawSourceText)) return false;
+  const value = clean(item.rawSourceText);
+  const normalized = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (trustedName && normalized(value) === normalized(trustedName)) return true;
+  const contactPattern = /[\w.+-]+@[\w.-]+\.[A-Z]{2,}|https?:\/\/|www\.|\b(?:linkedin\.com|github\.com|portfolio\.com)\b|(?:\+?\d[\d ().-]{6,}\d)/i;
+  if (contactPattern.test(value)) return true;
+  if (value.length <= 40 && !isResumeSectionHeading(value) && page.items.some((other) =>
+    Math.abs(other.top - item.top) <= 1.5 && contactPattern.test(clean(other.rawSourceText)))) return true;
+  const fontSize = Math.hypot(item.item.transform[0], item.item.transform[1]);
+  const centered = Math.abs((item.left + item.right) / 2 - page.width / 2) <= 90;
+  return centered && fontSize >= 18 && value.split(/\s+/).length <= 4;
+}
+
+function onlySimpleHorizontalDividers(operatorList: { fnArray: number[]; argsArray: unknown[][] }): boolean {
+  const pathOperations = operatorList.fnArray.flatMap((operation, index) => operation === OPS.constructPath ? [operatorList.argsArray[index]] : []);
+  const paintOperations = operatorList.fnArray.filter((operation) => vectorPaintOperations.has(operation));
+  if (!paintOperations.length) return true;
+  if (paintOperations.some((operation) => operation !== OPS.stroke) || pathOperations.length !== paintOperations.length || pathOperations.length > 16) return false;
+  return pathOperations.every((args) => {
+    const commands = args?.[1];
+    if (!Array.isArray(commands) || commands.length !== 1) return false;
+    const command = commands[0];
+    if (!(command instanceof Float32Array) || command.length !== 6) return false;
+    return command[0] === 0 && command[3] === 1 && Math.abs(command[2] - command[5]) <= 0.01 && Math.abs(command[1] - command[4]) > 1;
+  });
+}
 
 export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promise<PdfSourceRepresentation> {
   if (bytes.length < 1 || bytes.length > MAX_SOURCE_BYTES) throw new Error("Choose a PDF résumé up to 5 MB.");
@@ -103,9 +142,12 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         const item = value as TextItem;
         const visibleText = clean(item.str);
         if (!visibleText) continue;
-        const operatorText = readableShowText[textItemCursor++];
+        const showOperatorIndex = textItemCursor;
+        const operatorText = readableShowText[textItemCursor++] ?? "";
         const cleanedOperatorText = operatorText ? clean(operatorText) : "";
-        if (cleanedOperatorText && !cleanedOperatorText.startsWith(visibleText) && !visibleText.startsWith(cleanedOperatorText)) reason = appendReason(reason, "This PDF's visible text could not be matched exactly to its source text operators. Upload an editable DOCX for source-aware editing.");
+        const sameCharactersIgnoringWhitespace = comparableOperatorText(cleanedOperatorText) === comparableOperatorText(visibleText);
+        if (cleanedOperatorText && !cleanedOperatorText.startsWith(visibleText) && !visibleText.startsWith(cleanedOperatorText) && !sameCharactersIgnoringWhitespace)
+          reason = appendReason(reason, "This PDF's visible text could not be matched exactly to its source text operators. Upload an editable DOCX for source-aware editing.");
         const text = cleanedOperatorText.startsWith(visibleText) ? cleanedOperatorText : visibleText;
         const rawSourceText = operatorText && cleanedOperatorText.startsWith(visibleText) ? operatorText : item.str;
         const style = (content.styles as Record<string, ItemStyle>)[item.fontName] ?? {};
@@ -126,7 +168,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         const top = viewport.height - y - item.height;
         const right = x + item.width;
         const bottom = viewport.height - y;
-        located.push({ item: { ...item, str: text }, rawSourceText, style, resolvedFontName, fontFamily, bold, italic, index, pageNumber, left, top, right, bottom, baseline: y });
+        located.push({ item: { ...item, str: text }, rawSourceText, operatorText, showOperatorIndex, style, resolvedFontName, fontFamily, bold, italic, index, pageNumber, left, top, right, bottom, baseline: y });
         if (left < -0.5 || top < -0.5 || right > viewport.width + 0.5 || bottom > viewport.height + 0.5) reason = appendReason(reason, `The source text “${text.slice(0, 60)}” extends outside the visible page, so the full source cannot be safely edited. Shorten or reposition it in the original PDF, or upload an editable DOCX.`);
         if (fontFamily) fontFamilies.add(fontFamily);
         else {
@@ -140,7 +182,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
 
       if (operatorList.fnArray.some((operation) => imageOperations.has(operation))) reason = appendReason(reason, "This PDF contains images or a scanned-page background that cannot be edited without changing its appearance. Upload an editable DOCX.");
       if (operatorList.fnArray.some((operation) => formOperations.has(operation))) reason = appendReason(reason, "This PDF uses a Form XObject, which is outside the supported text-only profile. Upload an editable DOCX to preserve its layout.");
-      if (operatorList.fnArray.some((operation) => vectorPaintOperations.has(operation))) reason = appendReason(reason, "This PDF contains vector artwork or outlined text that the current source editor cannot validate safely. Upload an editable DOCX.");
+      if (operatorList.fnArray.some((operation) => vectorPaintOperations.has(operation)) && !onlySimpleHorizontalDividers(operatorList)) reason = appendReason(reason, "This PDF contains vector artwork or outlined text that the current source editor cannot validate safely. Upload an editable DOCX.");
 
       const width = round(viewport.width);
       const height = round(viewport.height);
@@ -151,9 +193,12 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     const repeated = repeatFurniture(parsedPages);
     const positioned = parsedPages.flatMap((page) => page.items.filter((item) => !repeated.has(`${page.pageNumber}:${item.index}`)).map((item) => ({
       id: `${page.pageNumber}:${item.index}`, pageIndex: page.pageNumber - 1,
+      ...(isPageHeaderFurniture(item, page.pageNumber, page, trustedName) ? { topFurniture: true } : {}),
+      ...(isRightAlignedLineMetadata(item, page) ? { lineMetadata: true } : {}),
       bounds: { left: item.left, top: item.top, right: item.right, bottom: item.bottom },
     })));
     const grouping = groupPositionedSpansIntoRegions(positioned);
+    const groupingReason = grouping.status === "blocked" ? grouping.reason : undefined;
     const regionBySpanId = new Map<string, string>();
     const assignmentOrder = new Map<string, number>();
     if (grouping.status === "supported") {
@@ -195,6 +240,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     const separateBulletMarkerSpans = new Set<string>();
     const mappedBulletBodySpans = new Set<string>();
     for (const page of parsedPages) for (const marker of page.items.filter((item) => standaloneBulletMarker(item.rawSourceText))) {
+      if (grouping.status === "blocked") continue;
       const markerSpanId = `${page.pageNumber}:${marker.index}`;
       const markerRegionId = regionBySpanId.get(markerSpanId);
       const candidates = markerRegionId ? page.items.flatMap((item) => {
@@ -235,7 +281,8 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         const repeatedRole = repeated.get(`${page.pageNumber}:${item.index}`);
         const regionId = regionBySpanId.get(`${page.pageNumber}:${item.index}`);
         const columnId = pageLayouts[page.pageNumber - 1]?.regions.find((region) => region.id === regionId)?.columnId;
-        const prefix = rawText.match(bulletText)?.[0] ?? "";
+        const orphanedMarker = standaloneBulletMarker(rawText);
+        const prefix = orphanedMarker ? "" : rawText.match(bulletText)?.[0] ?? "";
         const separateBulletMarker = separateBulletBySpanId.get(spanId);
         const isBullet = Boolean(prefix) || separateBulletMarker !== undefined;
         const continuedEntryAtPageStart = page.pageNumber > 1 && !seenBodyItem && isBullet && entryHasBullet;
@@ -272,6 +319,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
           bulletPrefix: prefix, text: claimText, sectionId: activeSection.id, sectionHeading: activeSection.heading,
           entryId: currentEntryId, entryHeading: currentEntryHeading, kind, candidateClaim, editable, ...(repeatedRole ? { repeatedRole } : {}),
           boundsPt: { left: round(item.left), top: round(item.top), right: round(item.right), bottom: round(item.bottom) },
+          showOperatorIndex: item.showOperatorIndex, operatorText: item.operatorText,
           operatorFingerprint, fontResourceName: item.item.fontName, styleHash: hashJson(styleFingerprint), font: { family: item.fontFamily || "unknown", sizePt: fontSize, bold: item.bold, italic: item.italic } };
         anchors.push(anchor);
         activeSection.anchorIds.push(id);
@@ -304,10 +352,10 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
       reason = appendReason(reason, "This PDF repeats identical résumé bullet text, so the source operator cannot be mapped unambiguously. Edit the duplicate wording in the source PDF or upload an editable DOCX.");
       for (const anchor of anchors) if (duplicateBullets.has(anchor.sourceText)) anchor.editable = false;
     }
-    if (grouping.status === "blocked") reason = appendReason(reason, grouping.reason);
+    if (groupingReason) reason = appendReason(reason, groupingReason);
     if (!sections.length) sections.push({ id: `pdf-section-${hashJson([sourceHash, "default"]).slice(0, 12)}`, heading: "Résumé", anchorIds: anchors.map((anchor) => anchor.id) });
     if (anchors.some((anchor) => anchor.candidateClaim && !anchor.font.family)) reason = appendReason(reason, "A required source font could not be identified. Upload an editable DOCX rather than substituting a font.");
-    return { version: 2, parser: "pdfjs-text-2", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason, ...(supportDiagnostic ? { diagnostic: supportDiagnostic } : {}) } : { status: "candidate" },
+    return { version: 3, parser: "pdfjs-text-3", format: "pdf", sourceHash, text, support: reason ? { status: "blocked", reason, ...(supportDiagnostic ? { diagnostic: supportDiagnostic } : {}) } : { status: "candidate" },
       layout: { columns: detectedColumns, pageCount: pdf.numPages, pageSizePt: firstPageSize, marginsPt: margins, fontFamilies: [...fontFamilies].sort(), pages: pageLayouts }, sections, anchors };
   } catch (error) {
     if (error instanceof Error && /above the|Choose a PDF/.test(error.message)) throw error;

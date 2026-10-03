@@ -17,7 +17,8 @@ import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBloc
 import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
-import type { Application, Profile } from "@/lib/types";
+import { parsePdfSource } from "@/lib/pdf-source";
+import type { AppState, Application, Profile } from "@/lib/types";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
 
@@ -34,6 +35,38 @@ async function assertTailoringSourceReady(profile: Profile): Promise<void> {
     throw new Error(profile.resumeSourceDocument.support.reason ?? `This ${format} layout is not supported for source-preserving tailoring. Upload an editable DOCX or choose the exact original-résumé setting.`);
   const original = originalResumeManifest(profile);
   await readOriginalResume(profile.id, original);
+}
+
+async function refreshLegacyPdfInspection(userId: string, state: AppState): Promise<AppState> {
+  const profile = state.profile;
+  const previous = profile.resumeSourceDocument;
+  const resumeSource = profile.resumeSource;
+  if (!resumeSource || !previous || previous.format !== "pdf" || previous.version >= 3 || previous.sourceHash !== resumeSource.sha256) return state;
+
+  const original = originalResumeManifest(profile);
+  const bytes = await readOriginalResume(userId, original);
+  const inspected = await parsePdfSource(bytes, profile.name);
+  if (inspected.version !== 3 || inspected.sourceHash !== resumeSource.sha256)
+    throw new Error("The saved PDF could not be re-inspected against its original bytes. Re-upload and confirm the current source before tailoring.");
+  const inspectedAnchorIds = new Set(inspected.anchors.map((anchor) => anchor.id));
+  if (profile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
+    throw new Error("A confirmed résumé fact no longer matches the same source text after PDF re-inspection. Re-upload and reconfirm that fact before tailoring.");
+
+  await mutateState(userId, (current) => {
+    const currentProfile = current.profile;
+    const currentSource = currentProfile.resumeSource;
+    const currentDocument = currentProfile.resumeSourceDocument;
+    if (!currentSource || currentSource.storageKey !== resumeSource.storageKey || currentSource.sha256 !== resumeSource.sha256 ||
+        currentSource.size !== resumeSource.size || currentSource.mimeType !== resumeSource.mimeType ||
+        currentProfile.resumeFileName !== profile.resumeFileName || currentDocument?.format !== "pdf" ||
+        currentDocument.version !== previous.version || currentDocument.sourceHash !== previous.sourceHash)
+      throw new Error("The saved PDF source changed while it was being re-inspected. Retry using the current source; no facts were remapped.");
+    if (currentProfile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
+      throw new Error("A confirmed résumé fact changed while the PDF was being re-inspected. Retry after reviewing the current source facts.");
+    currentProfile.resumeSourceDocument = inspected;
+    currentProfile.resumeText = inspected.text;
+  });
+  return loadState(userId);
 }
 
 async function releaseParkedBrowser(userId: string, application: Application, sessionId: string, provider: Application["browserProvider"]): Promise<boolean> {
@@ -108,11 +141,18 @@ async function claimRun(userId: string, applicationId: string, runToken: string 
 
 export async function runDraft({ userId, applicationId, runToken, draftMode }: RunPayload) {
   if (!(await claimRun(userId, applicationId, runToken, "drafting"))) return { skipped: true };
-  const state = await loadState(userId);
-  const app = state.applications.find((item) => item.id === applicationId);
-  if (!app || app.userId !== userId || app.status !== "drafting" || app.runToken !== runToken) return { skipped: true };
+  let state = await loadState(userId);
+  const claimedApp = state.applications.find((item) => item.id === applicationId);
+  if (!claimedApp || claimedApp.userId !== userId || claimedApp.status !== "drafting" || claimedApp.runToken !== runToken) return { skipped: true };
+  let app: Application = claimedApp;
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   try {
+    if (state.profile.automationSettings?.resumeTailoring !== false && (!app.packet || draftMode === "resume")) {
+      state = await refreshLegacyPdfInspection(userId, state);
+      const refreshedApp = state.applications.find((item) => item.id === applicationId);
+      if (!refreshedApp || refreshedApp.userId !== userId || refreshedApp.status !== "drafting" || refreshedApp.runToken !== runToken) return { skipped: true };
+      app = refreshedApp;
+    }
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     if (state.profile.automationSettings?.resumeTailoring !== false && app.packet?.resumeSourcePlan && draftMode !== "resume") assertSourceJobCurrent(app, job);
     if (state.profile.automationSettings?.resumeTailoring !== false && (!app.packet || draftMode === "resume"))
@@ -158,6 +198,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
       const target = current.applications.find((item) => item.id === applicationId);
       if (target?.status === "drafting" && target.runToken === runToken) {
         transition(target, ["drafting"], target.autonomousAuthorization ? "needs_user_action" : target.packet ? "draft_review" : "selected");
+        target.runWorkerClaimedAt = undefined;
         target.error = error instanceof Error ? error.message : "Drafting failed.";
         if (error instanceof ResumeDraftError) target.resumeDraftDiagnostics = error.diagnostics;
         if (target.autonomousAuthorization) recordApplicationBlocker(target, error instanceof ResumeDraftError && error.diagnostics.outcome === "needs_information" ? "missing_answer" : blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl });
