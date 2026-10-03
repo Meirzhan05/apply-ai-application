@@ -195,6 +195,7 @@ export default function Dashboard() {
   const blockers = applications.flatMap((app) => (app.blockers ?? [])
     .filter((blocker) => (blocker.progress === "blocked" || blocker.progress === "resuming" || (blocker.reviewOnly && blocker.progress === "expired")) && blocker.userId === data?.profile.id)
     .map((blocker) => ({ blocker, app })));
+  const quietActivity = needsAction.length === 0 && blockers.length === 0;
 
   useEffect(() => {
     if (section !== "matches") return;
@@ -391,7 +392,7 @@ export default function Dashboard() {
           </div>
         )}
         {section === "matches" && (
-          <div className="content-grid">
+          <div className={`content-grid ${quietActivity ? "activity-quiet" : ""}`}>
             <main className="main-panel matches-panel">
               <div className="page-heading">
                 <div>
@@ -400,6 +401,8 @@ export default function Dashboard() {
                     {view.availableCount} roles available<span className="catalog-count"> · {jobs.length} roles tracked</span><span className={`source-freshness ${unavailableSources ? "source-unavailable" : ""}`} role="status">{sourceFreshness}</span>
                   </p>
                 </div>
+                <div className="matches-heading-actions">
+                {quietActivity && <button className="outline-action activity-launcher" popoverTarget="matches-activity">Activity <ChevronDown size={15} /></button>}
                 <button
                   className="outline-action import-launcher"
                   aria-label="+ Import a job link"
@@ -407,6 +410,7 @@ export default function Dashboard() {
                 >
                   <span className="desktop-import-label">+ Import a job link</span><span className="compact-import-label">Import a link</span>
                 </button>
+                </div>
               </div>
               {!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
@@ -764,7 +768,8 @@ export default function Dashboard() {
               )}
               </details>
             </main>
-            <aside className="activity-panel">
+            <aside id="matches-activity" popover={quietActivity ? "auto" : undefined} className={`activity-panel ${quietActivity ? "activity-popover" : ""}`}>
+              {quietActivity && <button className="modal-close" aria-label="Close agent activity" popoverTarget="matches-activity" popoverTargetAction="hide"><X size={18} /></button>}
               <h2>Agent activity</h2>
               <div className="timeline">
                 {data.activity.slice(0, 4).map((event) => (
@@ -782,9 +787,9 @@ export default function Dashboard() {
                 ))}
                 <div className="timeline-item future">
                   <span className="dot" />
-                  <small>Expected check frequency</small>
-                  <strong>About every 4 hours</strong>
-                  <p>Supported sources are checked for new roles.</p>
+                  <small>{data.profile.demo ? "Source checks" : "Expected check frequency"}</small>
+                  <strong>{data.profile.demo ? "Demo workspace" : "About every 4 hours"}</strong>
+                  <p>{data.profile.demo ? "Demo listings do not run live source checks." : "Supported sources are checked for new roles."}</p>
                 </div>
               </div>
               <div className="digest-card">
@@ -798,7 +803,7 @@ export default function Dashboard() {
                 <ShieldCheck size={22} />
                 <div>
                   <strong>You’re in control</strong>
-                  <p>We find opportunities. You decide what happens next.</p>
+                  <p>{data.automation.enabled ? "Enabled automation can prepare and submit applications using your saved settings." : "Find opportunities, then choose what to prepare."}</p>
                   <button onClick={() => setSection("settings")}>
                     Adjust search settings <ArrowRight size={15} />
                   </button>
@@ -1815,7 +1820,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {error && <p role="alert">{error}</p>}
+            {error && <p role="alert">{displayError} {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}</p>}
         </WorkspaceDialog>
       )}
       {importOpen && (
@@ -1855,7 +1860,8 @@ export default function Dashboard() {
               </fieldset>}
               <button className="dark-button" type="submit" disabled={Boolean(busy) || !importReady}>{busy === "import" ? "Checking and adding…" : "Add role"}</button>
               {Object.values(importFields).some(value => value.trim()) && <button className="text-button discard-import" type="button" disabled={Boolean(busy)} onClick={() => { setImportFields(emptyImport); setImportTouched(false); setError(""); setImportOpen(false); }}>Discard draft</button>}
-              {error && <div role="alert"><p>{displayError} {existingImport ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
+              {error && <div role="alert"><p>{displayError} {existingImport || error === "AUTH_REQUIRED" ? "Your entered details are preserved." : "Your entered details are preserved. Check the link before trying again."}</p>
+                {error === "AUTH_REQUIRED" && <a className="text-button" href="/login">Sign in</a>}
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}
                 {existingImport && !existingImport.active && <p>This posting is marked closed. <a href={existingImport.url} target="_blank" rel="noreferrer">Check the original posting ↗</a></p>}
               </div>}

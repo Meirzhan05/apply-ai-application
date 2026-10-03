@@ -19,6 +19,8 @@ async function main() {
   let failFeedback = false;
   let slowFeedback = false;
   let failImport = false;
+  let authImport = false;
+  let authFeedback = false;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
     const page = await browser.newPage();
@@ -29,6 +31,7 @@ async function main() {
     await page.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
       if (body.action === "import") {
+        if (authImport) { authImport = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
         if (fixture.jobs.some(job => job.url === body.payload.url)) return route.fulfill({ status: 409, json: { error: "This link is already in your catalog." } });
         if (failImport) { failImport = false; return route.fulfill({ status: 503, json: { error: "Posting unavailable. Check the link or try later." } }); }
         await new Promise(resolve => setTimeout(resolve, 750));
@@ -39,6 +42,7 @@ async function main() {
       }
       assert.equal(body.action, "feedback", "Only synthetic feedback/import actions are allowed in this test");
       assert.ok(["saved", "dismissed", "clear"].includes(body.payload.kind));
+      if (authFeedback) { authFeedback = false; return route.fulfill({ status: 401, json: { error: "AUTH_REQUIRED" } }); }
       if (failFeedback) { failFeedback = false; return route.fulfill({ status: 503, json: { error: "Feedback could not be saved. Try again." } }); }
       if (slowFeedback) { slowFeedback = false; await new Promise(resolve => setTimeout(resolve, 750)); }
       updateJobFeedback(fixture, body.payload);
@@ -51,6 +55,18 @@ async function main() {
       await page.goto(origin);
       const strongRole = page.getByRole("article", { name: "Software Engineering Intern Cedar Systems", exact: true });
       await strongRole.waitFor();
+      if (label === "desktop") {
+        const activity = page.locator("#matches-activity");
+        const activityLauncher = page.getByRole("button", { name: "Activity", exact: true });
+        assert.equal(await activity.isVisible(), false, "Quiet activity should leave room for role review");
+        await activityLauncher.click();
+        await activity.getByRole("heading", { name: "Agent activity", exact: true }).waitFor();
+        assert.equal(await activity.getByText("Demo listings do not run live source checks.", { exact: true }).isVisible(), true);
+        assert.equal(await activity.getByText("About every 4 hours", { exact: true }).count(), 0);
+        await page.keyboard.press("Escape");
+        assert.equal(await activity.isVisible(), false);
+        assert.equal(await activityLauncher.evaluate(element => element === document.activeElement), true);
+      }
       assert.equal(await strongRole.getByText("Strong fit", { exact: true }).isVisible(), true);
       const context = "Software Engineering Intern at Cedar Systems";
       const jobButton = (name: string) => strongRole.getByRole("button", { name: `${name} ${context}`, exact: true });
@@ -135,6 +151,11 @@ async function main() {
       assert.equal(await reasonLauncher.evaluate(element => element === document.activeElement), true);
       await reasonLauncher.click();
       await dismissDialog.getByRole("combobox", { name: "Reason" }).selectOption("Location is not right");
+      authFeedback = true;
+      await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
+      await dismissDialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
+      assert.equal(await dismissDialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
+      assert.doesNotMatch(await dismissDialog.getByRole("alert").innerText(), /AUTH_REQUIRED/);
       await dismissDialog.getByRole("button", { name: "Save reason", exact: true }).click();
       await dismissDialog.waitFor({ state: "hidden" });
       assert.equal(fixture.feedback.find(item => item.jobId === intern.id)?.reason, "Location is not right");
@@ -212,6 +233,12 @@ async function main() {
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isDisabled(), true);
       await dialog.getByRole("textbox", { name: "Job title (required)", exact: true }).fill("Analyst");
       assert.equal(await dialog.getByRole("button", { name: "Add role", exact: true }).isEnabled(), true);
+      authImport = true;
+      await dialog.getByRole("button", { name: "Add role", exact: true }).click();
+      await dialog.getByRole("alert").getByText(/Sign in to open your workspace/).waitFor();
+      assert.equal(await dialog.getByRole("link", { name: "Sign in", exact: true }).getAttribute("href"), "/login");
+      assert.doesNotMatch(await dialog.getByRole("alert").innerText(), /Check the link|AUTH_REQUIRED/);
+      assert.equal(await url.inputValue(), "https://company.example/careers/role");
       failImport = true;
       await dialog.getByRole("button", { name: "Add role", exact: true }).click();
       await dialog.getByRole("alert").getByText(/Posting unavailable/).waitFor();
