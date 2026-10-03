@@ -82,6 +82,7 @@ export default function Dashboard() {
   const searchInput = useRef<HTMLInputElement>(null);
   const jobList = useRef<HTMLDivElement>(null);
   const pendingRoleFocus = useRef<string | null>(null);
+  const feedbackReturnFocus = useRef<string | null>(null);
   const pendingSetupFocus = useRef<string | null>(null);
   const [importTouched, setImportTouched] = useState(false);
   const [busyJob, setBusyJob] = useState("");
@@ -336,8 +337,14 @@ export default function Dashboard() {
   useEffect(() => {
     if (!pendingRoleFocus.current) return;
     const role = document.getElementById(`role-${pendingRoleFocus.current}`)?.closest("article") ?? document.getElementById("matches-heading");
-    if (role instanceof HTMLElement) { role.focus(); pendingRoleFocus.current = null; }
+    if (role instanceof HTMLElement) { role.focus({ preventScroll: true }); role.scrollIntoView({ block: "nearest" }); pendingRoleFocus.current = null; }
   }, [data, feedbackNotice]);
+  const continueAfterRemoval = (jobId: string) => {
+    const index = filtered.findIndex(item => item.id === jobId);
+    const adjacent = filtered[index + 1] ?? filtered[index - 1];
+    pendingRoleFocus.current = adjacent?.id ?? "__heading__";
+    feedbackReturnFocus.current = adjacent?.id ?? null;
+  };
   useEffect(() => {
     if (section !== "profile" || !pendingSetupFocus.current) return;
     document.getElementById(pendingSetupFocus.current)?.focus();
@@ -347,6 +354,7 @@ export default function Dashboard() {
     const previousView = { collection, filter, search, sort };
     setImportOpen(false); setCollection(dismissed ? "dismissed" : "all"); setFilter("all"); setSearch(`${job.company} ${job.title}`);
     pendingRoleFocus.current = job.id;
+    feedbackReturnFocus.current = job.id;
     setFeedbackNotice({ message, returnView: previousView });
   };
   const displayError = error === "This link is already in your catalog." ? "This role is already in your list." : error === "AUTH_REQUIRED" ? "Sign in to open your workspace." :
@@ -742,7 +750,7 @@ export default function Dashboard() {
         )}
         {section === "matches" && (
           <div className={`content-grid ${quietActivity ? "activity-quiet" : ""}`}>
-            <main className="main-panel matches-panel">
+            <main className={`main-panel matches-panel ${feedbackNotice ? "feedback-visible" : ""}`}>
               <div className="page-heading">
                 <div>
                   <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
@@ -814,21 +822,6 @@ export default function Dashboard() {
               </div>
               <div className="matches-subbar">
               <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
-              {feedbackNotice && <div className="feedback-notice" role="status">
-                <span>{feedbackNotice.message}</span>
-                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
-                  const next = await act("feedback", feedbackNotice.undo);
-                  if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
-                }}>Undo dismissal</button>}
-                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
-                {feedbackNotice.returnView && <button className="text-button" onClick={() => {
-                  const previous = feedbackNotice.returnView!;
-                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
-                  document.getElementById("matches-heading")?.focus();
-                }}>Return to previous view</button>}
-                {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
-                <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
-              </div>}
               <details className="fit-guide matches-guidance">
                 <summary><span className="desktop-guide-label">{data.automation.enabled ? "Automatic submission enabled" : "About fit and applying"}</span><span className="compact-guide-label">{data.automation.enabled ? "Auto submission on" : "Fit and applying"}</span></summary>
                 <p id="application-mode-note">{data.automation.enabled ? "Automation can prepare and submit applications using your saved settings." : "You approve materials and the filled form before submission."}</p>
@@ -845,6 +838,27 @@ export default function Dashboard() {
               </details>
               </div>
               </div>
+              {feedbackNotice && <div className="feedback-notice" role="status">
+                <span>{feedbackNotice.message}</span>
+                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
+                  const undo = feedbackNotice.undo;
+                  if (!undo) return;
+                  const next = await act("feedback", undo);
+                  if (next) {
+                    if (collection === "dismissed") continueAfterRemoval(undo.jobId);
+                    else { pendingRoleFocus.current = undo.jobId; feedbackReturnFocus.current = undo.jobId; }
+                    setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
+                  }
+                }}>Undo dismissal</button>}
+                {feedbackNotice.reasonFor && <button className="text-button" disabled={Boolean(busy)} onClick={() => { setError(""); setDismissReason(""); setDismissJobId(feedbackNotice.reasonFor!); }}>Add a reason (optional)</button>}
+                {feedbackNotice.returnView && <button className="text-button" onClick={() => {
+                  const previous = feedbackNotice.returnView!;
+                  setCollection(previous.collection); setFilter(previous.filter); setSearch(previous.search); setSort(previous.sort); setFeedbackNotice(null);
+                  document.getElementById("matches-heading")?.focus();
+                }}>Return to previous view</button>}
+                {feedbackNotice.postingUrl && <a href={feedbackNotice.postingUrl} target="_blank" rel="noreferrer">View original posting ↗</a>}
+                <button aria-label="Close feedback message" onClick={() => { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice(null); }}><X size={18} /></button>
+              </div>}
               <div className="job-list" ref={jobList}>
                 {filtered.length ? (
                   filtered.map((job) => {
@@ -939,7 +953,7 @@ export default function Dashboard() {
                         <div className="job-actions">
                           {collection === "dismissed" ? <button className="outline-action" aria-label={`Restore role ${context}`} disabled={Boolean(busy)} onClick={async () => {
                             const next = await act("feedback", { jobId: job.id, kind: "clear" });
-                            if (next) setFeedbackNotice({ message: `${job.title} restored to your matches.` });
+                            if (next) { continueAfterRemoval(job.id); setFeedbackNotice({ message: `${job.title} restored to your matches.` }); }
                           }}>{busy === "feedback" && busyJob === job.id ? "Restoring…" : "Restore role"}</button> : <>
                           <div className="small-actions">
                             <button
@@ -952,7 +966,11 @@ export default function Dashboard() {
                                   jobId: job.id,
                                   kind: saved ? "clear" : "saved",
                                 });
-                                if (next) setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                                if (next) {
+                                  if (saved && collection === "saved") continueAfterRemoval(job.id);
+                                  else feedbackReturnFocus.current = job.id;
+                                  setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                                }
                               }}
                             >
                               <Bookmark
@@ -971,12 +989,10 @@ export default function Dashboard() {
                               disabled={Boolean(busy)}
                               aria-label={`Dismiss ${context}`}
                               onClick={async () => {
-                                const index = filtered.findIndex(item => item.id === job.id);
-                                const adjacent = filtered[index + 1] ?? filtered[index - 1];
                                 const previousKind = feedback.get(job.id)?.kind === "saved" ? "saved" : "clear";
                                 const next = await act("feedback", { jobId: job.id, kind: "dismissed" });
                                 if (next) {
-                                  pendingRoleFocus.current = adjacent?.id ?? "__heading__";
+                                  continueAfterRemoval(job.id);
                                   setFeedbackNotice({ message: `${job.title} dismissed. Find it in Dismissed.`, undo: { jobId: job.id, kind: previousKind }, reasonFor: job.id });
                                 }
                               }}
@@ -1971,7 +1987,7 @@ export default function Dashboard() {
                   reason: dismissReason || undefined,
                 });
                 if (next) setDismissJobId(null);
-                if (next) setFeedbackNotice({ message: "Dismissal reason updated.", undo: feedbackNotice?.undo });
+                if (next) { pendingRoleFocus.current = feedbackReturnFocus.current ?? "__heading__"; setFeedbackNotice({ message: "Dismissal reason updated.", undo: feedbackNotice?.undo }); }
               }}
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
