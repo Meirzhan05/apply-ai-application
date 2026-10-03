@@ -19,6 +19,7 @@ import { compareRankedJobs } from "@/lib/ranking";
 import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-view";
 import { matchEvidence } from "@/lib/match-evidence";
 import { importInput } from "@/lib/import-input";
+import { ApplicationPicker } from "@/components/application-picker";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
@@ -284,6 +285,16 @@ export default function Dashboard() {
 
   const answersDirty = Boolean(activeApp?.packet && answerDraft.length && JSON.stringify(answerDraft) !== JSON.stringify(activeApp.packet.answers));
 
+  const switchApplication = (id: string) => {
+    if (busy || answersDirty || editingEssay !== null) return;
+    const app = applications.find(item => item.id === id);
+    if (!app) return;
+    setSelected(id);
+    setAnswerDraft(app.packet?.answers ?? []);
+    setNotice("");
+    setError("");
+  };
+
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
                       [
                         "draft_review",
@@ -415,6 +426,7 @@ export default function Dashboard() {
                               >
                                 {busy === "editPacket" ? "Saving answers…" : "Save my answers"}
                               </button>
+                              {answersDirty && <button className="text-button" disabled={Boolean(busy) || editingEssay !== null} onClick={() => setAnswerDraft(activeApp.packet!.answers)}>Cancel answer changes</button>}
                               <details className="material-tools"><summary>Revise or rebuild materials</summary>
                               <button className="outline-action" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null}
                                 onClick={() => act("draft", { applicationId: activeApp.id, draftMode: "essays" })}>Write essays with AI</button>
@@ -1020,6 +1032,10 @@ export default function Dashboard() {
               </section>
             )}
             <div className="app-layout">
+              <div className="application-collection" hidden={!applications.length}>
+                <h2 className="application-count">{applications.length} {applications.length === 1 ? "application" : "applications"}</h2>
+                {(answersDirty || editingEssay !== null) && <p className="muted collection-change-note" role="status">Save or cancel your changes before switching applications.</p>}
+                <ApplicationPicker options={applications.map(app => { const job = jobs.find(item => item.id === app.jobId); return { id: app.id, label: `${job?.company ?? "Employer"} · ${job?.title ?? "Application"} · ${statusLabel(app.status)}` }; })} selected={activeApp?.id ?? ""} blocked={Boolean(busy) || answersDirty || editingEssay !== null} onSelect={switchApplication} />
               <div className="app-list" ref={applicationList} hidden={!applications.length} aria-label="Your application list">
                 {applications.length ? (
                   applications.map((app) => {
@@ -1029,10 +1045,8 @@ export default function Dashboard() {
                         key={app.id}
                         aria-pressed={activeApp?.id === app.id}
                         className={`app-list-item ${activeApp?.id === app.id ? "selected" : ""}`}
-                        onClick={() => {
-                          setSelected(app.id);
-                          setAnswerDraft(app.packet?.answers ?? []);
-                        }}
+                        disabled={Boolean(busy) || answersDirty || editingEssay !== null}
+                        onClick={() => switchApplication(app.id)}
                       >
                         <span className="company-mark small">
                           {job?.company.charAt(0) ?? "?"}
@@ -1059,6 +1073,7 @@ export default function Dashboard() {
                     </button>
                   </div>
                 )}
+              </div>
               </div>
               <div className="app-detail">
                 {activeApp && appJob ? (

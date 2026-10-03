@@ -1730,3 +1730,18 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .detail-head { flex-wrap: wrap; gap: 12px; }
   .step-card { padding: 20px; }
 }
+
+.application-collection { min-width: 0; }
+.application-collection[hidden] { display: none; }
+.app-layout:has(.application-collection[hidden]) { grid-template-columns: minmax(0, 1fr); }
+.application-count { font-size: 15px; margin: 0 0 12px; color: var(--forest); }
+.application-picker { display: none; }
+@media (max-width: 650px) {
+  .application-collection .app-list, .application-count { display: none; }
+  .application-picker { display: block; margin-bottom: 8px; }
+  .application-picker-heading { display: flex; justify-content: space-between; align-items: center; color: var(--forest); font-size: 14px; font-weight: 600; }
+  .application-picker-heading > div { display: flex; gap: 8px; }
+  .application-picker-heading button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border: 1px solid var(--line); background: var(--paper); color: var(--forest); border-radius: 8px; }
+  .application-picker label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 6px; }
+  .application-picker select { width: 100%; min-width: 0; max-width: 100%; min-height: 48px; padding: 10px 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+}
