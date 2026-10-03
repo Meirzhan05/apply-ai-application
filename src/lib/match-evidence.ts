@@ -19,8 +19,8 @@ export function matchEvidence(profile: Profile, job: Job, assessment?: MatchAsse
   });
   const substantive = assessment?.evidence.find(reason => !reason.startsWith("The posting title,"));
   const headline = comparisons.length
-    ? `Posting mentions: ${comparisons[0].requirement} · Confirmed fact: ${comparisons[0].fact}`
-    : listedSkills.length ? `Posting mentions: ${listedSkills[0].requirement} · Skill you listed: ${listedSkills[0].skill}`
+    ? `Posting: ${comparisons[0].requirement} · Your confirmed experience: ${comparisons[0].fact}`
+    : listedSkills.length ? `Posting: ${listedSkills[0].requirement} · Skill you listed: ${listedSkills[0].skill}`
     : substantive && !substantive.includes("your profile mentions it") ? substantive : (assessment?.evidence.some(reason => reason.startsWith("The posting title,"))
       ? "Title matches your search. Review the requirements below."
       : "Review the posting to compare it with your experience.");

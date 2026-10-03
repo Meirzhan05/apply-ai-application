@@ -8,7 +8,7 @@ describe("visible match evidence", () => {
     const job = jobs.find(item => item.id === "demo-engineering-intern")!;
     const evidence = matchEvidence(profile, job);
     expect(evidence.comparisons).toContainEqual({ requirement: "React", fact: "Built a React portfolio project", factId: "fact-react" });
-    expect(evidence.headline).toContain("Confirmed fact: Built a React portfolio project");
+    expect(evidence.headline).toContain("Your confirmed experience: Built a React portfolio project");
   });
   it("does not promote unconfirmed facts or partial words to supporting evidence", () => {
     const { profile, jobs } = initialDemoState();
@@ -19,6 +19,6 @@ describe("visible match evidence", () => {
     const { profile, jobs } = initialDemoState();
     const result = matchEvidence(profile, { ...jobs[0], requirements: ["User research"] });
     expect(result.comparisons).toEqual([]);
-    expect(result.headline).toBe("Posting mentions: User research · Skill you listed: User research");
+    expect(result.headline).toBe("Posting: User research · Skill you listed: User research");
   });
 });
