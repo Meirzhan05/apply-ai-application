@@ -657,12 +657,18 @@ async function main() {
     updateJobFeedback(batchState, { jobId: "batch-0", kind: "saved" });
     let batchFixture = publicState(batchState); let batchCalls = 0; let failBatch = true;
     let releaseBatch: (() => void) | undefined; let slowBatch = false;
-    await batchPage.route("**/api/state", route => route.fulfill({ json: batchFixture }));
+    let ambiguousBatch = false; let failedBatchRefresh = false;
+    await batchPage.route("**/api/state", route => route.fulfill(failedBatchRefresh ? { status: 503, json: { error: "Temporary refresh failure" } } : { json: batchFixture }));
     await batchPage.route("**/api/actions", async route => {
       const body = route.request().postDataJSON();
       assert.equal(body.action, "feedback"); assert.equal(body.payload.kind, "saved");
       assert.equal(body.payload.expectedKind, "clear"); assert.equal(body.payload.expectedOwnerId, batchFixture.profile.id);
       batchCalls++;
+      if (ambiguousBatch) {
+        ambiguousBatch = false; failedBatchRefresh = true;
+        updateJobFeedback(batchFixture, body.payload);
+        return route.fulfill({ status: 200, contentType: "application/json", body: "unreadable" });
+      }
       if (failBatch && batchCalls === 2) return route.fulfill({ status: 503, json: { error: "A role could not be saved. Try again." } });
       if (slowBatch) { slowBatch = false; await new Promise<void>(resolve => { releaseBatch = resolve; }); }
       updateJobFeedback(batchFixture, body.payload); return route.fulfill({ json: { ok: true } });
@@ -670,12 +676,12 @@ async function main() {
     await batchPage.goto(origin); await batchPage.getByRole("article").first().waitFor();
     await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).fill("QA Batch");
     await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
-    await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
     await batchPage.locator(".feedback-summary").getByText("Interrupted. 1/3 saves confirmed.", { exact: true }).waitFor();
     assert.equal(batchCalls, 2, "Stop after the first failed request");
     assert.equal(batchFixture.feedback.filter(item => item.kind === "saved").length, 2, "Keep the completed save and original bookmark");
     failBatch = false;
-    await batchPage.getByRole("button", { name: "Save 2 roles in this view", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).click();
     await batchPage.locator(".feedback-summary").getByText("Saved 2 roles.", { exact: true }).waitFor();
     await batchPage.waitForFunction(() => document.activeElement?.getAttribute("data-match-action") === "review-saved");
     assert.equal(batchCalls, 4, "Retry only the remaining unsaved roles");
@@ -685,7 +691,7 @@ async function main() {
     batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; slowBatch = true;
     await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
     await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
-    await batchPage.getByRole("button", { name: "Save 3 roles in this view", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true }).click();
     assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), true);
     assert.equal(await batchPage.getByRole("combobox", { name: "Sort roles", exact: true }).isDisabled(), true);
     await batchPage.getByRole("button", { name: "Stop further saves", exact: true }).click();
@@ -696,6 +702,25 @@ async function main() {
     assert.equal(await batchPage.getByRole("searchbox", { name: /^Search roles or companies/ }).isDisabled(), false);
     assert.equal(batchCalls, 1, "Stopping finishes the in-flight bookmark without starting another");
     await batchPage.screenshot({ path: ".data/matches-batch-mobile.png" });
+    batchFixture = publicState(structuredClone(batchState)); batchCalls = 0; ambiguousBatch = true;
+    await batchPage.reload(); await batchPage.getByRole("article").first().waitFor();
+    await batchPage.getByRole("button", { name: /^Filter and sort/ }).click();
+    const saveView = batchPage.getByRole("button", { name: "Save 3 unsaved roles in this view", exact: true });
+    await saveView.click();
+    const batchRecovery = batchPage.getByRole("alert").filter({ hasText: "The save status could not be refreshed" });
+    await batchRecovery.waitFor();
+    assert.equal(await saveView.isDisabled(), true, "Uncertain batch outcomes stay gated after a failed reconciliation");
+    assert.equal(await batchPage.getByRole("article").locator('[data-match-action="save"]').first().isDisabled(), true, "Individual writes stay gated too");
+    await batchRecovery.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+    await batchPage.getByRole("alert").filter({ hasText: "Could not refresh your workspace" }).waitFor();
+    assert.equal(await saveView.isDisabled(), true, "Repeated refresh failure must not release uncertainty");
+    assert.equal(batchCalls, 1, "No automatic mutation retry after an unreadable success response");
+    await batchPage.screenshot({ path: ".data/matches-batch-uncertain-mobile.png" });
+    failedBatchRefresh = false;
+    await batchPage.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+    await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).waitFor();
+    assert.equal(await batchPage.getByRole("button", { name: "Save 2 unsaved roles in this view", exact: true }).isDisabled(), false);
+    assert.equal(batchCalls, 1, "Successful reconciliation reveals the accepted save without repeating it");
     await batchPage.close();
     console.log("PASS filtered-view saving: guarded owner/collection requests, partial-failure recovery, retry unsaved roles, Saved navigation and stopping after in-flight save");
     if (process.env.TEST_MATCHES_SKIP_CONNECTION === "1") {

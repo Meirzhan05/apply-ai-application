@@ -108,7 +108,7 @@ input, textarea { caret-color: var(--forest); }
 .keyboard-guide { margin: 0; }
 .keyboard-guide summary { font-weight: 600; }
 .keyboard-guide summary kbd { margin-left: 8px; }
-.keyboard-list { margin: 8px 0; display: grid; gap: 8px; }
+.keyboard-list { margin: 8px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
 .keyboard-list > div { display: flex; align-items: baseline; gap: 12px; }
 .keyboard-list dt { min-width: 24px; }
 .keyboard-list dd { margin: 0; }

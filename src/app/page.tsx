@@ -735,9 +735,19 @@ export default function Dashboard() {
       });
       const count = result.savedIds.length;
       setFeedbackNotice({ message: result.error ? `Confirmed ${count} of ${ids.length} saves. Refresh to check remaining roles before trying again.` : `Saved ${count} of ${ids.length} roles from this view.${result.stopped ? " Stopped further saves." : " Review them in Saved."}`, compactMessage: result.error ? `Interrupted. ${count}/${ids.length} saves confirmed.` : result.stopped ? `Stopped. Saved ${count}/${ids.length}.` : `Saved ${count} roles.`, savedGroup: count > 0 });
-      if (result.error) setError(result.error);
-      try { const next = await reload(); if (next.profile.id !== owner) { ownerChanged = true; setFeedbackNotice(null); setError(""); } }
-      catch { setError("The save status could not be refreshed. Refresh your workspace to check which roles were saved before trying again."); }
+      if (result.error) {
+        setError(result.error);
+        if (actionNeedsWorkspaceCheck(result.error)) setPendingActionCheck({ owner, action: "feedback", message: result.error });
+      }
+      try {
+        const next = await reload();
+        setPendingActionCheck(null);
+        if (next.profile.id !== owner) { ownerChanged = true; setFeedbackNotice(null); setError(""); }
+      } catch (err) {
+        const message = "The save status could not be refreshed. Refresh your workspace to check which roles were saved before trying again.";
+        setPendingActionCheck({ owner, action: "feedback", message: result.error && actionNeedsWorkspaceCheck(result.error) ? result.error : message });
+        setError(err instanceof Error && err.message === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : message);
+      }
     } finally { batchActive.current = false; pendingBatchFocus.current = !ownerChanged; setBatchProgress(null); setBusy(""); }
   };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
@@ -963,7 +973,7 @@ export default function Dashboard() {
                   </button>)}
                 </div>
                 <div className="sort-options"><label className="sort-control">Sort <select disabled={Boolean(batchProgress)} aria-label="Sort roles" aria-describedby="sort-help" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}><option value="relevant">Most relevant</option><option value="newest">Newest first</option></select></label><p id="sort-help">{sort === "relevant" ? "Relevance considers fit and your feedback." : "Newest uses the posting date, or when we found the role."}</p></div>
-                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20 unsaved" : batchCandidates.length} roles in this view</button></div>}
+                {collection !== "dismissed" && (search.trim() || filter !== "all") && batchCandidates.length > 1 && <div className="batch-save-control"><button className="text-button" disabled={Boolean(busy) || needsWorkspaceCheck} onClick={saveFilteredRoles}>Save {batchCandidates.length === 20 ? "first 20" : batchCandidates.length} unsaved roles in this view</button></div>}
               </div>
               <div className="matches-subbar">
               <p className={`result-summary ${collection === "all" && filter === "all" && !search.trim() ? "sr-only" : ""}`} role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in {collection === "all" ? "all roles" : collection}{filter !== "all" && ` · ${filter} fit`}{search.trim() && ` for “${search.trim()}”`}</p>
@@ -983,19 +993,16 @@ export default function Dashboard() {
               <details id="matches-keyboard-help" className="keyboard-guide matches-guidance">
                 <summary aria-label={`Keyboard shortcuts${shortcutsEnabled ? "" : ", disabled"}`}><span className="desktop-shortcuts-label">Keyboard shortcuts</span><span className="compact-shortcuts-label">Shortcuts</span> {shortcutsEnabled ? <kbd>?</kbd> : <span>off</span>}</summary>
                 <label className="shortcuts-toggle"><input type="checkbox" checked={shortcutsEnabled} onChange={event => setShortcutsEnabled(event.target.checked)} />Enable keyboard shortcuts</label>
-                <p>Shortcuts pause in text fields, dialogs and menus.</p>
-                <dl className="keyboard-list" aria-label="Navigation shortcuts">
+                <p>Shortcuts pause while typing or using dialogs and menus. Save and dismiss act on the focused role.</p>
+                <dl className="keyboard-list" aria-label="Matches shortcuts">
                   <div><dt><kbd>/</kbd></dt><dd>Search roles</dd></div>
                   <div><dt><kbd>j</kbd></dt><dd>Next role</dd></div>
                   <div><dt><kbd>k</kbd></dt><dd>Previous role</dd></div>
-                </dl>
-                <p>With a role focused:</p>
-                <dl className="keyboard-list" aria-label="Role shortcuts">
                   <div><dt><kbd>s</kbd></dt><dd>Save or Unsave</dd></div>
                   <div><dt><kbd>d</kbd></dt><dd>Dismiss or Restore</dd></div>
+                  <div><dt><kbd>u</kbd></dt><dd>Undo dismissal</dd></div>
                 </dl>
-                <p>To save several roles, narrow your view with search or a fit filter. “Save roles in this view” appears when at least two unsaved roles remain.</p>
-                <p>Within Matches, <kbd>u</kbd> undoes dismissal. These shortcuts never prepare or submit an application.</p>
+                <p>Shortcuts never prepare or submit an application.</p>
               </details>
               </div>
               </div>
@@ -2155,7 +2162,7 @@ export default function Dashboard() {
             >
               {busy === "feedback" ? "Saving…" : "Save reason"}
             </button>
-            {activeError && <div role="alert"><p>{displayError} Your selection is preserved. {requiresSignIn ? "Sign in, then return here to continue." : needsWorkspaceCheck ? "Refresh the workspace to check the latest status before trying again." : ""}</p><div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
+            {activeError && <div role="alert"><p>{displayError} Your selection is preserved. {requiresSignIn ? "Return here afterward to continue." : needsWorkspaceCheck ? "Refresh the workspace to check the latest status before trying again." : ""}</p><div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>}
         </WorkspaceDialog>
       )}
       {factCorrection && <FactCorrectionDialog key={`${factCorrection.applicationId}-${factCorrection.claim}`} claim={factCorrection.claim}
@@ -2235,7 +2242,7 @@ export default function Dashboard() {
                   <input required={key !== "location"} disabled={busy === "import"} maxLength={key === "company" ? 120 : 160} value={importFields[key]} onChange={event => { setConfirmDiscardImport(false); setImportFields({ ...importFields, [key]: event.target.value }); }} />
                 </label>)}
               </fieldset>}
-              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Sign in, then return here to continue."}</p>
+              {activeError && <div role="alert"><p>{displayError} Your entered details are preserved. {requiresSignIn && "Return here afterward to continue."}</p>
                 <div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}
                 {needsWorkspaceCheck && <button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} type="button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button>}
                 {existingImport?.active && <button className="outline-action" type="button" onClick={() => revealRole(existingImport, `Showing ${existingImport.title} at ${existingImport.company}, already in your list.`)}>Review existing role</button>}</div>
