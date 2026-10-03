@@ -11,10 +11,12 @@ import { OriginalResumeInspection } from "@/components/original-resume-inspectio
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
+import { WorkspaceDialog } from "@/app/workspace-dialog";
 import { browserQuestions, browserTakeoverReasons, hasUnreadableQuestionLabels } from "@/lib/browser-questions";
 import { useRouter } from "next/navigation";
 import { browserSupabase } from "@/lib/supabase-browser";
 import { compareRankedJobs } from "@/lib/ranking";
+import { matchView, type MatchFilter } from "@/lib/match-view";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
 import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
@@ -54,13 +56,15 @@ type ViewState = AppState & {
   };
 };
 type Section = "matches" | "applications" | "profile" | "settings";
-type Filter = "all" | "strong" | "possible" | "uncertain" | "saved";
+type Filter = MatchFilter;
 
 export default function Dashboard() {
   const router = useRouter();
   const [data, setData] = useState<ViewState | null>(null);
   const [section, setSection] = useState<Section>("matches");
   const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
@@ -73,6 +77,7 @@ export default function Dashboard() {
   const [importOpen, setImportOpen] = useState(false);
   const [dismissJobId, setDismissJobId] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState("Wrong role");
+  const [feedbackNotice, setFeedbackNotice] = useState<{ message: string; undo?: { jobId: string; kind: "saved" | "clear" } } | null>(null);
   const [importFields, setImportFields] = useState({
     url: "",
     company: "",
@@ -143,15 +148,11 @@ export default function Dashboard() {
     [data],
   );
   const applications = data?.applications ?? [];
-  const filtered = jobs.filter(
-    (job) =>
-      job.active &&
-      feedback.get(job.id)?.kind !== "dismissed" &&
-      (filter === "all" ||
-        (filter === "saved" && feedback.get(job.id)?.kind === "saved") ||
-        matches.get(job.id)?.category === filter),
-  );
-  filtered.sort((a, b) => compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
+  const view = matchView({ jobs, matches, feedback, filter, search });
+  const filtered = view.jobs;
+  filtered.sort((a, b) => sort === "newest"
+    ? (new Date(b.postedAt || b.discoveredAt).getTime() - new Date(a.postedAt || a.discoveredAt).getTime()) || a.id.localeCompare(b.id)
+    : compareRankedJobs(a, b, matches, data?.feedback ?? [], jobs));
   const activeApp =
     applications.find((app) => app.id === selected) ?? applications[0];
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
@@ -438,6 +439,7 @@ export default function Dashboard() {
               key={key}
               aria-label={label}
               aria-current={section === key ? "page" : undefined}
+              title={label}
               className={`navitem ${section === key ? "active" : ""}`}
               onClick={() => { setEditingEssay(null); if (moreNavigation.current) moreNavigation.current.open = false; setSection(key); }}
             >
@@ -529,10 +531,9 @@ export default function Dashboard() {
             <main className="main-panel">
               <div className="page-heading">
                 <div>
-                  <p className="eyebrow">YOUR SEARCH, IN MOTION</p>
-                  <h1>Your next opportunities</h1>
+                  <h1 id="matches-heading" tabIndex={-1}>Your next opportunities</h1>
                   <p>
-                    {jobs.length} roles in your catalog ·{" "}
+                    {view.availableCount} roles available · {jobs.length} in your catalog ·{" "}
                     {data.lastRefreshAt
                       ? `updated ${relative(data.lastRefreshAt)}`
                       : "ready for your review"}
@@ -585,7 +586,7 @@ export default function Dashboard() {
                   )}
                 </section>
               )}
-              {(incompleteFacts > 0 || !data.profile.resumeFileName) && (
+              {(incompleteFacts > 0 || !data.profile.facts.some(fact => fact.verified)) && (
                 <div className="review-banner">
                   <div className="banner-icon">
                     <FileText size={27} />
@@ -626,6 +627,14 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+              <div className="job-search">
+                <label htmlFor="job-search">Search roles or companies</label>
+                <div>
+                  <Search size={18} aria-hidden="true" />
+                  <input id="job-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Job title or company" />
+                  {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X size={18} /></button>}
+                </div>
+              </div>
               <div className="filterbar">
                 <div className="filters">
                   {(
@@ -634,11 +643,11 @@ export default function Dashboard() {
                       "strong",
                       "possible",
                       "uncertain",
-                      "saved",
                     ] as Filter[]
                   ).map((item) => (
                     <button
                       key={item}
+                      aria-pressed={filter === item}
                       className={filter === item ? "selected" : ""}
                       onClick={() => setFilter(item)}
                     >
@@ -646,20 +655,46 @@ export default function Dashboard() {
                         ? "All matches"
                         : item[0].toUpperCase() + item.slice(1)}{" "}
                       <span>
-                        {item === "all"
-                          ? jobs.filter((job) => job.active).length
-                          : item === "saved"
-                            ? data.feedback.filter((x) => x.kind === "saved")
-                                .length
-                            : data.matches.filter(
-                                (x) => x.assessment.category === item,
-                              ).length}
+                        {view.counts[item]}
                       </span>
                     </button>
                   ))}
                 </div>
-                <span className="sort-label">Most relevant first</span>
+                <div className="collections" role="group" aria-label="Your job collections">
+                <button className={`collection-filter ${filter === "saved" ? "selected" : ""}`} aria-pressed={filter === "saved"} onClick={() => setFilter("saved")}>
+                  <Bookmark size={16} aria-hidden="true" /> Saved <span>{view.counts.saved}</span>
+                </button>
+                <button className={`collection-filter ${filter === "dismissed" ? "selected" : ""}`} aria-pressed={filter === "dismissed"} onClick={() => setFilter("dismissed")}>
+                  Dismissed <span>{view.counts.dismissed}</span>
+                </button>
+                </div>
+                <label className="sort-control">Sort
+                  <select aria-label="Sort roles" value={sort} onChange={event => setSort(event.target.value as "relevant" | "newest")}>
+                    <option value="relevant">Most relevant</option>
+                    <option value="newest">Newest first</option>
+                  </select>
+                </label>
               </div>
+              <p className="result-summary" role="status">{filtered.length} {filtered.length === 1 ? "role" : "roles"} in this view{search.trim() && ` for “${search.trim()}”`}</p>
+              {feedbackNotice && <div className="feedback-notice" role="status">
+                <span>{feedbackNotice.message}</span>
+                {feedbackNotice.undo && <button className="text-button" disabled={Boolean(busy)} onClick={async () => {
+                  const next = await act("feedback", feedbackNotice.undo);
+                  if (next) setFeedbackNotice({ message: "Dismissal undone. The role is back in your matches." });
+                }}>Undo dismissal</button>}
+                <button aria-label="Close feedback message" onClick={() => setFeedbackNotice(null)}><X size={18} /></button>
+              </div>}
+              <details className="fit-guide">
+                <summary>What do the fit labels mean?</summary>
+                <p>Fit compares the posting with your confirmed profile and search preferences. It does not confirm eligibility or guarantee an offer.</p>
+                <p>Most relevant combines fit with your saved and dismissed feedback. Newest first uses the posting date, or the date we found the role when no posting date is available.</p>
+                <dl>
+                  <div><dt>Strong fit</dt><dd>Substantial overlap with your profile and preferences.</dd></div>
+                  <div><dt>Possible fit</dt><dd>Some overlap, with requirements to review.</dd></div>
+                  <div><dt>Uncertain</dt><dd>Important information is missing or needs verification.</dd></div>
+                  <div><dt>Search rule conflict</dt><dd>The posting conflicts with a required search preference.</dd></div>
+                </dl>
+              </details>
               <div className="job-list">
                 {filtered.length ? (
                   filtered.map((job) => {
@@ -691,11 +726,11 @@ export default function Dashboard() {
                               className={`match-badge ${match?.category ?? "uncertain"}`}
                             >
                               {match?.category === "strong"
-                                ? "Strong match"
+                                ? "Strong fit"
                                 : match?.category === "possible"
-                                  ? "Possible match"
+                                  ? "Possible fit"
                                   : match?.category === "excluded"
-                                    ? "Hard rule conflict"
+                                    ? "Search rule conflict"
                                     : "Uncertain"}
                             </span>
                             <span className="source-badge">
@@ -707,6 +742,17 @@ export default function Dashboard() {
                               </span>
                             )}
                           </div>
+                          {(match?.uncertainty.length || match?.gaps.length) ? (
+                            <div className="job-review-note">
+                              <strong>{match?.category === "excluded" ? "Search rule to review" : "Review before applying"}</strong>
+                              <p>{match?.uncertainty[0] ?? match?.gaps[0]}</p>
+                              <button className="text-button" onClick={() => setSection(match?.category === "excluded" ? "settings" : "profile")}>
+                                {match?.category === "excluded" ? "Review search settings" : "Review profile"}
+                              </button>
+                            </div>
+                          ) : null}
+                          <details className="fit-evidence">
+                          <summary>Review fit evidence{match && ` · ${new Set([...match.gaps, ...match.uncertainty]).size} checks to review`}</summary>
                           <div className="match-reasons">
                             <div>
                               <strong>Why it fits</strong>
@@ -731,16 +777,25 @@ export default function Dashboard() {
                               </ul>
                             </div>
                           </div>
+                          </details>
                         </div>
                         <div className="job-actions">
+                          {filter === "dismissed" ? <button className="outline-action" disabled={Boolean(busy)} onClick={async () => {
+                            const next = await act("feedback", { jobId: job.id, kind: "clear" });
+                            if (next) setFeedbackNotice({ message: `${job.title} restored to your matches.` });
+                          }}>Restore role</button> : <>
                           <div className="small-actions">
                             <button
-                              onClick={() =>
-                                act("feedback", {
+                              disabled={Boolean(busy)}
+                              aria-pressed={feedback.get(job.id)?.kind === "saved"}
+                              onClick={async () => {
+                                const saved = feedback.get(job.id)?.kind === "saved";
+                                const next = await act("feedback", {
                                   jobId: job.id,
-                                  kind: "saved",
-                                })
-                              }
+                                  kind: saved ? "clear" : "saved",
+                                });
+                                if (next) setFeedbackNotice({ message: `${job.title} ${saved ? "removed from saved" : "saved"}.` });
+                              }}
                             >
                               <Bookmark
                                 size={17}
@@ -751,10 +806,11 @@ export default function Dashboard() {
                                 }
                               />
                               {feedback.get(job.id)?.kind === "saved"
-                                ? "Saved"
+                                ? "Unsave"
                                 : "Save"}
                             </button>
                             <button
+                              disabled={Boolean(busy)}
                               onClick={() => {
                                 setDismissJobId(job.id);
                                 setDismissReason("Wrong role");
@@ -800,6 +856,8 @@ export default function Dashboard() {
                               {data.automation.enabled ? (importedPreflight ? "Verify and apply automatically" : "Apply automatically") : "Prepare application"}
                             </button>
                           )}
+                          {!application && <p className="preparation-note">{data.automation.enabled ? "Automation can prepare and submit this application using your saved settings. Review the fit checks and your authorization before starting." : "Opens an application workspace. You approve materials and the filled form before submission."}</p>}
+                          </>}
                           <a
                             className="job-link"
                             href={job.url}
@@ -815,8 +873,10 @@ export default function Dashboard() {
                 ) : (
                   <div className="empty">
                     <Search size={28} />
-                    <h3>No jobs in this view</h3>
-                    <p>Try another filter or import a job link.</p>
+                    <h3>{search.trim() ? "No roles match your search" : filter === "saved" ? "Your shortlist starts here" : filter === "dismissed" ? "No dismissed roles" : "No jobs in this view"}</h3>
+                    <p>{search.trim() ? "Try a different title or company, or clear your search." : filter === "saved" ? "Save roles from your matches to compare them here." : filter === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : "Try another filter or import a job link."}</p>
+                    {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
+                    {!search.trim() && (filter === "saved" || filter === "dismissed") && <button className="outline-action" onClick={() => setFilter("all")}>Browse matches</button>}
                   </div>
                 )}
               </div>
@@ -1668,18 +1728,7 @@ export default function Dashboard() {
         )}
       </div>
       {dismissJobId && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDismissJobId(null);
-          }}
-        >
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dismiss-heading"
-          >
+        <WorkspaceDialog labelledBy="dismiss-heading" onClose={() => setDismissJobId(null)}>
             <button
               className="modal-close"
               onClick={() => setDismissJobId(null)}
@@ -1705,6 +1754,7 @@ export default function Dashboard() {
             </label>
             <button
               className="dark-button"
+              disabled={Boolean(busy)}
               onClick={async () => {
                 const next = await act("feedback", {
                   jobId: dismissJobId,
@@ -1712,26 +1762,16 @@ export default function Dashboard() {
                   reason: dismissReason,
                 });
                 if (next) setDismissJobId(null);
+                if (next) setFeedbackNotice({ message: `${jobs.find(job => job.id === dismissJobId)?.title ?? "Role"} dismissed. Find it in Dismissed.`, undo: { jobId: dismissJobId, kind: feedback.get(dismissJobId)?.kind === "saved" ? "saved" : "clear" } });
               }}
             >
               Dismiss role
             </button>
-          </div>
-        </div>
+            {error && <p role="alert">{error}</p>}
+        </WorkspaceDialog>
       )}
       {importOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setImportOpen(false);
-          }}
-        >
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="import-heading"
-          >
+        <WorkspaceDialog labelledBy="import-heading" onClose={() => setImportOpen(false)}>
             <button
               className="modal-close"
               onClick={() => setImportOpen(false)}
@@ -1764,6 +1804,7 @@ export default function Dashboard() {
             ))}
             <button
               className="dark-button"
+              disabled={Boolean(busy)}
               onClick={async () => {
                 const next = await act("import", importFields);
                 if (next) {
@@ -1779,8 +1820,8 @@ export default function Dashboard() {
             >
               Add to catalog
             </button>
-          </div>
-        </div>
+            {error && <p role="alert">{error}</p>}
+        </WorkspaceDialog>
       )}
     </div>
   );

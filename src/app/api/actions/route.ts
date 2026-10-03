@@ -7,6 +7,7 @@ import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
 import { z } from "zod";
 import { hashJson, newId } from "@/lib/crypto";
+import { updateJobFeedback } from "@/lib/job-feedback";
 import { answerBrowserQuestions, reviseBrowserEssay, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
 import { sendActionNeeded } from "@/lib/email";
@@ -275,23 +276,12 @@ async function perform(
   }
   if (action === "feedback")
     return mutateState(userId, (state) => {
-      const jobId = text(payload.jobId, 200);
-      const job = state.jobs.find((job) => job.id === jobId);
-      if (!job) throw new Error("Job not found.");
-      const kind = z.enum(["saved", "dismissed"]).parse(payload.kind);
-      state.feedback = state.feedback.filter((item) => item.jobId !== jobId);
-      state.feedback.push({
-        jobId,
-        kind,
+      const result = updateJobFeedback(state, {
+        jobId: text(payload.jobId, 200),
+        kind: z.enum(["saved", "dismissed", "clear"]).parse(payload.kind),
         reason: text(payload.reason, 500),
-        updatedAt: new Date().toISOString(),
-        jobSnapshot: { title: job.title, requirements: [...job.requirements], location: job.location },
       });
-      activity(
-        state,
-        kind === "saved" ? "Job saved" : "Job dismissed",
-        state.jobs.find((job) => job.id === jobId)?.title ?? "",
-      );
+      activity(state, result.label, result.title);
     }, ownerContext);
   if (action === "labelMatch") return mutateState(userId, (state) => {
     const job = state.jobs.find((item) => item.id === text(payload.jobId, 200));
