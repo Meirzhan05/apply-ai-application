@@ -12,6 +12,20 @@ vi.mock("openai", () => ({ default: class { responses = { parse: response }; } }
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("matching boundaries", () => {
+  it("matches multiple acceptable arrangements independently of overseas residence and accepts nationwide US destinations", () => {
+    const state = initialDemoState();
+    state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+    state.profile.preferredLocations = ["United States"];
+    state.profile.strictLocations = true;
+    state.profile.workArrangements = ["remote", "hybrid"];
+    state.profile.remoteOnly = false;
+    const base = { ...state.jobs[0], location: "Boston, MA", remote: false };
+    expect(assessMatchLocally(state.profile, { ...base, workArrangement: "hybrid" }).category).not.toBe("excluded");
+    expect(assessMatchLocally(state.profile, { ...base, remote: true, workArrangement: "remote" }).category).not.toBe("excluded");
+    expect(assessMatchLocally(state.profile, { ...base, workArrangement: "on-site" })).toMatchObject({ category: "excluded" });
+    expect(assessMatchLocally(state.profile, base).uncertainty).toContain("The posting does not confirm whether this role meets your work arrangement preferences.");
+    expect(matchKey(state.profile, { ...base, workArrangement: "hybrid" })).not.toBe(matchKey(state.profile, { ...base, workArrangement: "on-site" }));
+  });
   it("rejects explicit hard-rule conflicts and leaves missing details uncertain", () => {
     const state = initialDemoState();
     state.profile.remoteOnly = true;

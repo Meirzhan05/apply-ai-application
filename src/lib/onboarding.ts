@@ -62,6 +62,11 @@ export function saveOnboarding(
     const questionnaire = input.questionnaire;
     profile.onboarding!.questionnaire = {
       ...profile.onboarding!.questionnaire,
+      ...(questionnaire.immigrationStatus !== undefined ? { immigrationStatus: questionnaire.immigrationStatus } : {}),
+      ...(questionnaire.visaType !== undefined ? { visaType: questionnaire.visaType.trim().slice(0, 200) } : {}),
+      ...(questionnaire.immigrationStatusDetails !== undefined ? { immigrationStatusDetails: questionnaire.immigrationStatusDetails.trim().slice(0, 500) } : {}),
+      ...(questionnaire.sponsorshipNow !== undefined ? { sponsorshipNow: questionnaire.sponsorshipNow } : {}),
+      ...(questionnaire.sponsorshipFuture !== undefined ? { sponsorshipFuture: questionnaire.sponsorshipFuture } : {}),
       ...(questionnaire.workAuthorization !== undefined
         ? { workAuthorization: questionnaire.workAuthorization }
         : {}),
@@ -75,6 +80,8 @@ export function saveOnboarding(
         ? { graduationYear: questionnaire.graduationYear.trim().slice(0, 20) }
         : {}),
     };
+    if (profile.onboarding!.questionnaire.immigrationStatus !== "visa-holder") delete profile.onboarding!.questionnaire.visaType;
+    if (profile.onboarding!.questionnaire.immigrationStatus !== "other") delete profile.onboarding!.questionnaire.immigrationStatusDetails;
     if (questionnaire.graduationYear?.trim()) profile.graduationYear = questionnaire.graduationYear.trim().slice(0, 20);
     if (questionnaire.workAuthorization === "yes") profile.workAuthorization = "Authorized to work in the US";
     if (questionnaire.workAuthorization === "no") profile.workAuthorization = "Not authorized to work in the US";
@@ -91,6 +98,7 @@ export function reusableFactualAnswers(profile: Profile): Record<string, string>
   ensureOnboardingDefaults(profile);
   const values: Record<string, string> = { ...profile.sensitiveAnswers };
   const questionnaire = profile.onboarding!.questionnaire;
+  for (const key of ["immigrationStatus", "visaType", "immigrationStatusDetails", "sponsorshipNow", "sponsorshipFuture", "sponsorshipEither"]) delete values[key];
   const declaration = (value: FactualDeclaration | undefined): string | undefined =>
     value === "yes" ? "Yes" : value === "no" ? "No" : undefined;
   const sponsorship = declaration(questionnaire.requiresSponsorship);
@@ -99,8 +107,48 @@ export function reusableFactualAnswers(profile: Profile): Record<string, string>
   const authorization = declaration(questionnaire.workAuthorization);
   if (authorization) values.workAuthorization = authorization;
   else if (questionnaire.workAuthorization === "unknown") delete values.workAuthorization;
+  const statusLabels = { "us-citizen": "US citizen", "permanent-resident": "Permanent resident", "visa-holder": "Visa holder", other: "Other" };
+  if (questionnaire.immigrationStatus) values.immigrationStatus = statusLabels[questionnaire.immigrationStatus];
+  if (questionnaire.immigrationStatus === "visa-holder" && questionnaire.visaType?.trim()) values.visaType = questionnaire.visaType.trim();
+  if (questionnaire.immigrationStatus === "other" && questionnaire.immigrationStatusDetails?.trim()) values.immigrationStatusDetails = questionnaire.immigrationStatusDetails.trim();
+  const now = declaration(questionnaire.sponsorshipNow);
+  const future = declaration(questionnaire.sponsorshipFuture);
+  if (now) values.sponsorshipNow = now;
+  if (future) values.sponsorshipFuture = future;
+  // An either-period question is negative only when both declared periods are negative.
+  if (now === "Yes" || future === "Yes") values.sponsorshipEither = "Yes";
+  else if (now === "No" && future === "No") values.sponsorshipEither = "No";
+  else if (questionnaire.sponsorshipNow === undefined && questionnaire.sponsorshipFuture === undefined && /^(Yes|No)$/i.test(values.requiresSponsorship ?? "")) values.sponsorshipEither = values.requiresSponsorship;
   if (questionnaire.availability?.trim() && !values.availability) values.availability = questionnaire.availability.trim();
+  if (typeof profile.willingToRelocate === "boolean") values.willingToRelocate = profile.willingToRelocate ? "Yes" : "No";
+  if (profile.currentLocation) {
+    const { city, region, country } = profile.currentLocation;
+    if (city.trim()) values.currentCity = city.trim();
+    if (region.trim()) values.currentRegion = region.trim();
+    if (country.trim()) values.currentCountry = country.trim();
+    if (city.trim() && region.trim() && country.trim()) values.currentLocation = [city, region, country].map((value) => value.trim()).join(", ");
+  }
   return values;
+}
+
+export function factualAnswerKeyForQuestion(question: string): string | undefined {
+  const label = question.toLowerCase().trim().replace(/\s+/g, " ");
+  const sponsorship = /sponsor/.test(label);
+  const authorization = /authorized.*work|work.*authoriz/.test(label);
+  if (sponsorship && authorization) return undefined;
+  if (sponsorship) {
+    const now = /\bnow\b|current|present|\btoday\b|at this time/.test(label);
+    const future = /future|later|eventually/.test(label);
+    if ((now && future) || /at any (?:point|time)|ever require|ever need/.test(label)) return "sponsorshipEither";
+    if (future) return "sponsorshipFuture";
+    if (now) return "sponsorshipNow";
+    return "requiresSponsorship";
+  }
+  if (authorization) return "workAuthorization";
+  if (/visa.*(?:type|category)|(?:type|category).*visa/.test(label)) return "visaType";
+  if (/immigration.*(?:details|explain)|(?:details|explain).*immigration/.test(label)) return "immigrationStatusDetails";
+  if (/(?:immigration|citizenship).*status/.test(label)) return "immigrationStatus";
+  return undefined;
 }
 
 export function updateAutomationSettings(

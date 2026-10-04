@@ -41,6 +41,13 @@ async function main() {
       await page.getByRole("button", { name: "Profile", exact: true }).click();
       const authorization = page.locator("select").filter({ has: page.locator(`option[value="${statusOnly}"]`) });
       assert.equal(await authorization.inputValue(), statusOnly, "An explicit student status must remain visible in the selector");
+      await page.getByLabel("Current city", { exact: true }).fill("Almaty");
+      await page.getByLabel("Current state or region", { exact: true }).fill("Almaty Region");
+      await page.getByLabel("Current country", { exact: true }).fill("Kazakhstan");
+      await page.getByLabel("Anywhere in the United States", { exact: true }).check();
+      await page.getByLabel("Remote", { exact: true }).check();
+      await page.getByLabel("Hybrid", { exact: true }).check();
+      await page.getByLabel("Willing to relocate (optional)", { exact: true }).selectOption("no");
       let saved: Record<string, unknown> | undefined;
       await page.route("**/api/actions", async (route) => {
         const body = route.request().postDataJSON();
@@ -53,6 +60,10 @@ async function main() {
       assert.ok(saved, "The actual form must send its profile payload");
       assert.equal(saved.workAuthorization, statusOnly);
       assert.deepEqual(saved.sensitiveAnswers, {}, "Saving F-1 status must not invent legal authorization or sponsorship answers");
+      assert.deepEqual(saved.currentLocation, { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" });
+      assert.ok((saved.preferredLocations as string[]).includes("United States"));
+      assert.deepEqual(saved.workArrangements, ["remote", "hybrid"]);
+      assert.equal(saved.willingToRelocate, false);
       await page.screenshot({ path: `.data/profile-status-only-${label}.png`, fullPage: true });
       await page.unroute("**/api/actions");
       console.log(`PASS ${label}: F-1 status displays and round-trips without creating authorization answers`);

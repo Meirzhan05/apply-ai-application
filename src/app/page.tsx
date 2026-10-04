@@ -9,6 +9,7 @@ import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
+import { ImmigrationQuestionnaireFields } from "@/components/immigration-questionnaire-fields";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceFactsNotice, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { mergeCurrentSourceFacts } from "@/lib/profile-source-facts";
 import { LiveBrowser } from "@/app/live-browser";
@@ -1752,6 +1753,18 @@ export default function Dashboard() {
                     <textarea rows={3} value={(profileDraft.links ?? []).join("\n")} onChange={(event) => setProfileDraft({ ...profileDraft, links: event.target.value.split("\n") })} />
                   </label>
                 </div>
+                <h3>Current Location</h3>
+                <div className="form-grid">
+                  {(["city", "region", "country"] as const).map((key) => (
+                    <label key={key}>
+                      {{ city: "Current city", region: "Current state or region", country: "Current country" }[key]}
+                      <input maxLength={120} value={profileDraft.currentLocation?.[key] ?? ""} onChange={(event) => setProfileDraft({
+                        ...profileDraft,
+                        currentLocation: { city: "", region: "", country: "", ...profileDraft.currentLocation, [key]: event.target.value },
+                      })} />
+                    </label>
+                  ))}
+                </div>
                 <h3>Search preferences</h3>
                 <div className="form-grid">
                   {(
@@ -1795,54 +1808,47 @@ export default function Dashboard() {
                     <small>Student or visa status does not answer employment authorization or sponsorship. Enter those answers separately below.</small>
                   </label>
                 </div>
-                <label className="checkline">
-                  <input
-                    type="checkbox"
-                    checked={profileDraft.remoteOnly}
-                    onChange={(event) =>
-                      setProfileDraft({
-                        ...profileDraft,
-                        remoteOnly: event.target.checked,
-                      })
-                    }
-                  />{" "}
-                  Show only remote roles
+                <label className="checkline"><input type="checkbox" checked={profileDraft.preferredLocations.includes("United States")} onChange={(event) => setProfileDraft({
+                  ...profileDraft,
+                  preferredLocations: event.target.checked ? [...profileDraft.preferredLocations.filter((location) => location !== "United States"), "United States"] : profileDraft.preferredLocations.filter((location) => location !== "United States"),
+                })} /> Anywhere in the United States</label>
+                <h3>Acceptable work arrangements</h3>
+                <div role="group" aria-label="Acceptable work arrangements">
+                  {(["remote", "hybrid", "on-site"] as const).map((arrangement) => (
+                    <label className="checkline" key={arrangement}>
+                      <input type="checkbox" checked={(profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote"] : [])).includes(arrangement)} onChange={(event) => {
+                        const current = profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote" as const] : []);
+                        const workArrangements = event.target.checked ? [...current, arrangement] : current.filter((value) => value !== arrangement);
+                        setProfileDraft({ ...profileDraft, workArrangements, remoteOnly: workArrangements.length === 1 && workArrangements[0] === "remote" });
+                      }} />
+                      {{ remote: "Remote", hybrid: "Hybrid", "on-site": "On-site" }[arrangement]}
+                    </label>
+                  ))}
+                </div>
+                <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for hybrid and on-site roles</label>
+                <label>
+                  Willing to relocate (optional)
+                  <select aria-label="Willing to relocate (optional)" value={profileDraft.willingToRelocate === undefined ? "" : profileDraft.willingToRelocate ? "yes" : "no"} onChange={(event) => setProfileDraft({ ...profileDraft, willingToRelocate: event.target.value === "" ? undefined : event.target.value === "yes" })}>
+                    <option value="">Unanswered</option><option value="yes">Yes</option><option value="no">No</option>
+                  </select>
                 </label>
-                <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
                 <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
-                {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
+                {(["gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
                   <label key={key}>
-                    {{ requiresSponsorship: "Will you require sponsorship?", workAuthorization: "Work authorization answer", gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
+                    {{ gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
                     <input maxLength={200} value={profileDraft.sensitiveAnswers[key] ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, sensitiveAnswers: { ...profileDraft.sensitiveAnswers, [key]: event.target.value } })} placeholder="Leave blank for manual entry" />
                   </label>
                 ))}
                 <h3>Required onboarding answers</h3>
                 <p className="muted">These answers are stored as explicit declarations. Leaving one blank keeps it missing; “No” is saved as a real answer.</p>
+                <ImmigrationQuestionnaireFields
+                  questionnaire={profileDraft.onboarding?.questionnaire ?? {}}
+                  onChange={questionnaire => setProfileDraft({ ...profileDraft, onboarding: { ...profileDraft.onboarding, questionnaire } })}
+                />
                 <label>
-                  Are you authorized to work in the United States?
-                  <select
-                    id="setup-workAuthorization"
-                    value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
-                    onChange={(event) => setProfileDraft({
-                      ...profileDraft,
-                      onboarding: {
-                        questionnaire: {
-                          ...profileDraft.onboarding?.questionnaire,
-                          workAuthorization: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
-                        },
-                      },
-                    })}
-                  >
-                    <option value="">Choose an answer</option>
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                    <option value="unknown">I’m not sure yet</option>
-                  </select>
-                </label>
-                <label>
-                  Will you require sponsorship for employment?
+                  Will you need employer sponsorship now or in the future?
                   <select
                     id="setup-requiresSponsorship"
                     value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
@@ -1863,7 +1869,7 @@ export default function Dashboard() {
                   </select>
                 </label>
                 <label>
-                  When are you available to start?
+                  When are you available to start? (optional)
                   <input
                     maxLength={200}
                     value={profileDraft.onboarding?.questionnaire.availability ?? ""}
@@ -1900,7 +1906,7 @@ export default function Dashboard() {
                   onClick={() =>
                     act(
                       "profile",
-                      profileDraft as unknown as Record<string, unknown>,
+                      { ...profileDraft, willingToRelocate: profileDraft.willingToRelocate ?? null } as unknown as Record<string, unknown>,
                     )
                   }
                 >
@@ -2028,7 +2034,7 @@ export default function Dashboard() {
                   onClick={() =>
                     act(
                       "profile",
-                      profileDraft as unknown as Record<string, unknown>,
+                      { ...profileDraft, willingToRelocate: profileDraft.willingToRelocate ?? null } as unknown as Record<string, unknown>,
                     )
                   }
                 >
@@ -2203,7 +2209,7 @@ const labels: Record<string, string> = {
   graduationYear: "Graduation year",
   headline: "Short headline",
   preferredTitles: "Preferred job titles",
-  preferredLocations: "Preferred locations",
+  preferredLocations: "Preferred US job locations",
   skills: "Skills",
 };
 function relative(input: string) {

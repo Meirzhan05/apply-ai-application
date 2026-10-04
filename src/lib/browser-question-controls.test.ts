@@ -9,6 +9,7 @@ import { approveFill, setFormSnapshot, setPacket } from "@/lib/workflow";
 import { withPacketFiles } from "@/lib/packet-files";
 import { approveBrowserAnswers } from "@/lib/browser-question-approval";
 import { essayContentHash, essayEvidenceHash } from "@/lib/answer-policy";
+import { saveOnboarding } from "@/lib/onboarding";
 import type { Application, ScreeningAnswer } from "@/lib/types";
 
 const transport = vi.hoisted(() => ({ connect: vi.fn(), launch: vi.fn() }));
@@ -87,6 +88,25 @@ it.each([41, 201])("fills saved contact details on a form with %s controls", asy
   expect(result.form.fields.slice(-4, -1).map(field => field.value)).toEqual([profile.name, profile.email, profile.phone]);
   expect(browserQuestions({ ...result.form, hash: "observed" }).map(question => question.label)).toEqual(["Pronouns"]);
   expect(result.form.blockers?.some(blocker => /control limit|more than 40/.test(blocker))).toBe(false);
+  expect(employer.observations().submitClicks).toBe(0);
+});
+
+it("fills current and future sponsorship separately and leaves unknown declarations for the candidate", async () => {
+  const questions = ["US Immigration Status", "Visa Type", "Are you authorized to work in the United States?", "Do you require sponsorship now?", "Will you require sponsorship in the future?", "Will you now or in the future require sponsorship?"];
+  const { app, employer } = fixture(questions.map((label, index) => `<label for="declaration-${index}">${label}</label><input required id="declaration-${index}" name="declaration-${index}">`).join(""));
+  transport.launch.mockResolvedValue(employer.browser);
+  const state = initialDemoState();
+  const profile = state.profile;
+  saveOnboarding(profile, { questionnaire: { immigrationStatus: "visa-holder", visaType: "F-1 OPT", workAuthorization: "unknown", sponsorshipNow: "no", sponsorshipFuture: "yes", requiresSponsorship: "no" } });
+  const job = { ...state.jobs[0], applyUrl: "https://jobs.example/apply", url: "https://jobs.example/apply" };
+  state.jobs = [job]; state.applications = [app]; app.userId = profile.id; app.jobId = job.id; app.status = "selected";
+  const fact = profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Declared immigration fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [] });
+  for (const file of packet.files ?? []) if (file.storageKey) files.push(`.data/application-files/${file.storageKey}`);
+  setPacket(state, app, packet); approveFill(app, profile.id, app.packetHash!, job.applyUrl);
+  const result = await prepareBrowser(app, job, profile);
+  expect(result.form.fields.map(field => field.value)).toEqual(["Visa holder", "F-1 OPT", "", "No", "Yes", "Yes"]);
+  expect(browserQuestions({ ...result.form, hash: "observed" }).map(question => question.label)).toEqual([questions[2]]);
   expect(employer.observations().submitClicks).toBe(0);
 });
 

@@ -4,7 +4,8 @@ import { draftPacket } from "@/lib/drafting";
 import { hashJson } from "@/lib/crypto";
 import { prepareApiApplication, submitApiApplication } from "@/lib/ats-application";
 import { formDigest, selectApplication, setPacket } from "@/lib/workflow";
-import type { AppState, Application, Job } from "@/lib/types";
+import { saveOnboarding } from "@/lib/onboarding";
+import type { AppState, Application, Job, OnboardingQuestionnaire } from "@/lib/types";
 
 let state: AppState, app: Application, job: Job;
 const ashbyId = "e9ed20fd-d45f-4aad-8a00-a19bfba0083e";
@@ -102,6 +103,57 @@ it("maps exact approved choice labels to the provider's native option value", as
   const form = await review();
   expect(form.apiSubmission?.values.question_55).toBe("0");
   expect(form.fields.find((field) => field.identifier === "question_55")?.value).toBe("No");
+});
+
+it("prepares actual overseas residence and explicitly saved optional answers rather than job destinations", async () => {
+  configure("greenhouse");
+  state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+  state.profile.preferredLocations = ["United States"];
+  state.profile.willingToRelocate = false;
+  state.profile.onboarding = { questionnaire: { availability: "June 2027" } };
+  const residenceQuestions = ["Current city", "Current state or region", "Country of residence", "Are you willing to relocate?", "When are you available to start?"];
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [
+    ...greenhousePosting().questions,
+    ...residenceQuestions.map((label, index) => ({ label, required: true, fields: [{ name: `question_${index}`, type: "input_text" }] })),
+  ] })));
+  const form = await review();
+  expect(form.fields.filter((field) => residenceQuestions.includes(field.label)).map((field) => field.value))
+    .toEqual(["Almaty", "Almaty Region", "Kazakhstan", "No", "June 2027"]);
+  expect(JSON.stringify(form.apiSubmission?.values)).not.toContain("United States");
+});
+
+it("reuses declared immigration and distinct sponsorship periods in the employer form", async () => {
+  configure("greenhouse");
+  saveOnboarding(state.profile, { questionnaire: { immigrationStatus: "visa-holder", visaType: "F-1 OPT", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "yes" } });
+  const questions = ["US Immigration Status", "Visa Type", "Are you authorized to work in the United States?", "Do you need sponsorship now?", "Will you need sponsorship in the future?", "Will you now or in the future require sponsorship?"];
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [...greenhousePosting().questions,
+    ...questions.map((label, index) => ({ label, required: true, fields: [{ name: `declaration_${index}`, type: "input_text" }] }))] })));
+  const form = await review();
+  expect(form.fields.slice(-6).map(field => field.value)).toEqual(["Visa holder", "F-1 OPT", "Yes", "No", "Yes", "Yes"]);
+});
+
+it.each([
+  [{ requiresSponsorship: "no" }, "Do you need sponsorship now?", undefined],
+  [{ requiresSponsorship: "no" }, "Will you need sponsorship in the future?", undefined],
+  [{ requiresSponsorship: "no" }, "Will you now or in the future need sponsorship?", "No"],
+  [{ sponsorshipNow: "no" }, "Will you now or in the future need sponsorship?", undefined],
+  [{ sponsorshipNow: "no", sponsorshipFuture: "unknown", requiresSponsorship: "no" }, "Will you now or in the future need sponsorship?", undefined],
+  [{ sponsorshipNow: "no", sponsorshipFuture: "no" }, "Will you now or in the future need sponsorship?", "No"],
+  [{ sponsorshipNow: "yes", sponsorshipFuture: "unknown" }, "Will you now or in the future need sponsorship?", "Yes"],
+  [{ immigrationStatus: "us-citizen" }, "Are you authorized to work in the United States?", undefined],
+  [{ immigrationStatus: "permanent-resident" }, "Visa Type", undefined],
+  [{ immigrationStatus: "other", immigrationStatusDetails: "Pending adjustment" }, "US Immigration Status details", "Pending adjustment"],
+] as Array<[OnboardingQuestionnaire, string, string | undefined]>)("keeps the meaning of saved %j when answering %s", async (questionnaire, label, expected) => {
+  configure("greenhouse");
+  saveOnboarding(state.profile, { questionnaire });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [...greenhousePosting().questions,
+    { label, required: true, fields: [{ name: "declaration", type: "input_text" }] }] })));
+  const prepared = await prepareApiApplication(app, job, state.profile);
+  if (expected === undefined) expect(prepared.kind).toBe("browser");
+  else {
+    expect(prepared.kind).toBe("api");
+    if (prepared.kind === "api") expect(prepared.form.fields.at(-1)?.value).toBe(expected);
+  }
 });
 
 it("uses the browser for required consent rather than inventing consent", async () => {

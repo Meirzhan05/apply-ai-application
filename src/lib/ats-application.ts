@@ -2,11 +2,13 @@ import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
 import { importedPosting } from "@/lib/import-jobs";
 import { canonicalJobUrl } from "@/lib/sources";
+import { savedLocationAnswerKey } from "@/lib/location-answers";
 import { answerNeedsAction } from "@/lib/answer-responsibility";
 import { profileLinkAnswers, profileLinkQuestion } from "@/lib/profile-links";
 import { reviewedPacketFile } from "@/lib/packet-files";
 import { bytesHash } from "@/lib/resume-artifacts";
 import { formDigest } from "@/lib/workflow";
+import { factualAnswerKeyForQuestion, reusableFactualAnswers } from "@/lib/onboarding";
 import type { ApiSubmissionPlan, Application, FormSnapshot, Job, Profile } from "@/lib/types";
 
 const optionSchema = z.object({ label: z.string().min(1), value: z.union([z.string(), z.number()]).transform(String) });
@@ -158,13 +160,17 @@ function fieldValue(field: Field, application: Application, profile: Profile): s
     answer.question.trim().toLowerCase() === field.label.trim().toLowerCase());
   if (matches.length === 1 && (!answerNeedsAction(matches[0]) || Boolean(application.autonomousAuthorization && matches[0].autonomousEssayAuthorization)))
     return matches[0].answer.trim();
-  // Only explicit contact fields are reusable without an exact question match.
+  const factualKey = factualAnswerKeyForQuestion(field.label);
+  if (factualKey) return reusableFactualAnswers(profile)[factualKey] ?? "";
+  // Contact fields are identified by the provider's explicit field names.
   const name = profile.name.trim().split(/\s+/);
   const contact: Record<string, string> = { first_name: name[0] ?? "", last_name: name.slice(1).join(" "),
     name: profile.name, _systemfield_name: profile.name, email: profile.email, _systemfield_email: profile.email,
     phone: profile.phone, _systemfield_phone: profile.phone };
   const link = profileLinkQuestion(field.label);
-  return contact[field.name] ?? (link ? profileLinkAnswers(profile)[link] : undefined) ?? "";
+  const locationKey = savedLocationAnswerKey(field.label);
+  return contact[field.name] ?? (locationKey ? reusableFactualAnswers(profile)[locationKey] : undefined) ??
+    (link ? profileLinkAnswers(profile)[link] : undefined) ?? "";
 }
 
 /** Read/prepare only: never uploads files, creates an application, or allocates a browser. */

@@ -26,11 +26,17 @@ export interface VerifiedFact {
 }
 
 export type FactualDeclaration = "yes" | "no" | "unknown";
+export type WorkArrangement = "remote" | "hybrid" | "on-site";
 export type CoverLetterMode = "disabled" | "required-only" | "enabled";
 export type EssayMode = "automatic-truthful";
 
 export interface OnboardingQuestionnaire {
+  immigrationStatus?: "us-citizen" | "permanent-resident" | "visa-holder" | "other";
+  visaType?: string;
+  immigrationStatusDetails?: string;
   workAuthorization?: FactualDeclaration;
+  sponsorshipNow?: FactualDeclaration;
+  sponsorshipFuture?: FactualDeclaration;
   requiresSponsorship?: FactualDeclaration;
   availability?: string;
   graduationYear?: string;
@@ -193,6 +199,9 @@ export interface Profile {
   skills: string[];
   preferredTitles: string[];
   preferredLocations: string[];
+  currentLocation?: { city: string; region: string; country: string };
+  workArrangements?: WorkArrangement[];
+  willingToRelocate?: boolean;
   remoteOnly: boolean;
   strictLocations?: boolean;
   searchPreferencesConfirmedAt?: string;
@@ -222,6 +231,7 @@ export interface Job {
   title: string;
   location: string;
   remote: boolean | null;
+  workArrangement?: WorkArrangement;
   employmentType: string;
   salary?: string;
   description: string;

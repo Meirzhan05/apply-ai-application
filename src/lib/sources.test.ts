@@ -14,6 +14,19 @@ import { explicitConflict } from "@/lib/matching";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("public source normalization", () => {
+  it("retains provider-declared hybrid work arrangements for matching", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [{
+      id: "hybrid-role", text: "Engineer", hostedUrl: "https://jobs.lever.co/acme/hybrid-role",
+      workplaceType: "hybrid", categories: { location: "Boston, MA" },
+    }] }));
+    const [job] = await fetchBoard({ source: "lever", slug: "acme" });
+    const profile = initialDemoState().profile;
+    profile.workArrangements = ["hybrid"];
+    expect(job).toMatchObject({ workArrangement: "hybrid" });
+    expect(explicitConflict(profile, job)).toBeNull();
+    profile.workArrangements = ["remote", "on-site"];
+    expect(explicitConflict(profile, job)).toMatch(/work arrangement/);
+  });
   it("shows Greenhouse's current hosted posting destination before approval", () => {
     const old = "https://boards.greenhouse.io/acme/jobs/42?gh_jid=42#app";
     const current = "https://job-boards.greenhouse.io/acme/jobs/42?gh_jid=42#app";

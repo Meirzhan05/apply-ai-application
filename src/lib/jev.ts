@@ -36,6 +36,7 @@ export function redactedProfile(profile: Profile): Profile {
   };
   return {
     ...profile, id: "evaluation", name: "", email: "", phone: "", school: "",
+    currentLocation: undefined, willingToRelocate: undefined,
     headline: redact(profile.headline),
     skills: profile.skills.map(redact),
     graduationYear: redact(profile.graduationYear),

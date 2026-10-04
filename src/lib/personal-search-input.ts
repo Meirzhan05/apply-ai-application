@@ -9,6 +9,7 @@ export function personalSearchInput(profile: Profile) {
   return {
     preferredTitles: safe.preferredTitles, preferredLocations: safe.preferredLocations,
     remoteOnly: safe.remoteOnly, strictLocations: safe.strictLocations ?? false,
+    workArrangements: safe.workArrangements,
     headline: safe.headline, skills: safe.skills, graduationYear: safe.graduationYear,
     confirmedExperience: safe.facts.map((fact) => fact.text),
   };

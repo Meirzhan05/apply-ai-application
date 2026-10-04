@@ -65,6 +65,7 @@ import {
 } from "@/lib/workflow";
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 import { enrollPilot, withdrawPilot } from "@/lib/pilot";
+import { onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -131,14 +132,7 @@ async function perform(
   }
   if (action === "onboarding") {
     return mutateState(userId, (state) => {
-      const questionnaire = z
-        .object({
-          workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-          requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-          availability: z.string().max(200).optional(),
-          graduationYear: z.string().max(20).optional(),
-        })
-        .parse(payload.questionnaire ?? payload);
+      const questionnaire = onboardingQuestionnaireSchema.parse(payload.questionnaire ?? payload);
       const facts = payload.facts === undefined
         ? undefined
         : z
@@ -228,6 +222,14 @@ async function perform(
       if ("remoteOnly" in payload)
         profile.remoteOnly = payload.remoteOnly === true;
       if ("strictLocations" in payload) profile.strictLocations = payload.strictLocations === true;
+      if ("currentLocation" in payload) profile.currentLocation = z.object({
+        city: z.string().trim().max(120), region: z.string().trim().max(120), country: z.string().trim().max(120),
+      }).parse(payload.currentLocation);
+      if ("workArrangements" in payload) {
+        profile.workArrangements = [...new Set(z.array(z.enum(["remote", "hybrid", "on-site"])).max(3).parse(payload.workArrangements))];
+        profile.remoteOnly = profile.workArrangements.length === 1 && profile.workArrangements[0] === "remote";
+      }
+      if ("willingToRelocate" in payload) profile.willingToRelocate = z.boolean().nullable().parse(payload.willingToRelocate) ?? undefined;
       if ("timeZone" in payload) {
         const timeZone = z.string().max(100).parse(payload.timeZone);
         new Intl.DateTimeFormat("en-US", { timeZone });
@@ -253,12 +255,7 @@ async function perform(
       if ("sensitiveAnswers" in payload)
         profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
       const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
-      const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
-        workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-        requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-        availability: z.string().max(200).optional(),
-        graduationYear: z.string().max(20).optional(),
-      }).parse(questionnaire);
+      const parsedQuestionnaire = questionnaire === undefined ? undefined : onboardingQuestionnaireSchema.parse(questionnaire);
       const settings = payload.automationSettings && typeof payload.automationSettings === "object" ? z.object({
         resumeTailoring: z.boolean().optional(),
         coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
@@ -267,7 +264,7 @@ async function perform(
       if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
       if (settings) updateAutomationSettings(profile, settings);
       if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
-      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations", "workArrangements"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
