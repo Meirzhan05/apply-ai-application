@@ -66,6 +66,7 @@ import {
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 import { enrollPilot, withdrawPilot } from "@/lib/pilot";
 import { onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
+import { finishResumeOnboarding, OnboardingCompletionError, saveOnboardingDraft } from "@/lib/onboarding-completion";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -117,6 +118,15 @@ async function perform(
   payload: Record<string, unknown>,
 ) {
   const ownerContext = { actor: { kind: "owner" as const, userId }, action };
+  if (action === "onboardingDraft" || action === "finishOnboarding") {
+    return mutateState(userId, (state) => {
+      if (action === "onboardingDraft") saveOnboardingDraft(state.profile, payload);
+      else finishResumeOnboarding(state.profile, z.string().length(64).parse(payload.reviewHash));
+      state.matchCache = {};
+      activity(state, action === "finishOnboarding" ? "Onboarding completed" : "Onboarding draft saved",
+        action === "finishOnboarding" ? "Reviewed imported information and job preferences were confirmed." : "Your progress is saved for your next visit.");
+    }, ownerContext);
+  }
   if (action === "enrollPilot") {
     return mutateState(userId, (state) => {
       const input = z.object({ consentVersion: z.string().max(80), confirmed: z.literal(true) }).parse(payload);
@@ -701,7 +711,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Action failed.";
     return NextResponse.json(
-      { error: message },
+      { error: message, ...(error instanceof OnboardingCompletionError ? { missing: error.missing } : {}) },
       { status: message === "AUTH_REQUIRED" ? 401 : error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
   }

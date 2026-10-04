@@ -1,6 +1,7 @@
 import { assessMatchLocally } from "@/lib/matching";
 import { matchKey } from "@/lib/match-cache";
-import { automationStatus, onboardingCompleteness } from "@/lib/onboarding";
+import { automationStatus } from "@/lib/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { packetProfileHash } from "@/lib/packet-profile";
 import type { AppState } from "@/lib/types";
 
@@ -8,7 +9,7 @@ export function publicState(state: AppState) {
   const profileHash = packetProfileHash(state.profile);
   return {
     ...state,
-    onboarding: onboardingCompleteness(state.profile),
+    onboarding: resumeOnboardingStatus(state.profile),
     automation: automationStatus(state.profile),
     applications: state.applications.map((application) => {
       const safe = { ...application };

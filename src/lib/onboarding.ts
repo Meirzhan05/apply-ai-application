@@ -41,6 +41,21 @@ export function onboardingCompleteness(profile: Profile): {
 }
 
 const missingLabels: Record<string, string> = {
+  resume: "successfully parsed resume",
+  resumeImport: "resume import still in progress",
+  name: "full name",
+  email: "valid email",
+  phone: "phone number",
+  "currentLocation.city": "current city",
+  "currentLocation.region": "current state or region",
+  "currentLocation.country": "current country",
+  preferredLocations: "preferred US job locations",
+  workArrangements: "work arrangement",
+  immigrationStatus: "US Immigration Status",
+  visaType: "Visa Type",
+  immigrationStatusDetails: "US Immigration Status details",
+  sponsorshipNow: "current Sponsorship Need answer",
+  sponsorshipFuture: "future Sponsorship Need answer",
   workAuthorization: "work authorization answer",
   requiresSponsorship: "sponsorship answer",
   confirmedResumeFact: "one confirmed résumé fact",
