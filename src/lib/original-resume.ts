@@ -7,7 +7,7 @@ import type { Profile, ResumeSource } from "@/lib/types";
 
 export type OriginalResume = ResumeSource & { filename: string };
 export function originalResumeManifest(profile: Profile): OriginalResume {
-  if (!profile.resumeSource || !profile.resumeFileName) throw new Error("Upload and confirm your original résumé before applying with tailoring disabled.");
+  if (!profile.resumeSource || !profile.resumeFileName) throw new Error("Upload your original résumé before applying with tailoring disabled.");
   const original = { ...profile.resumeSource, filename: profile.resumeFileName };
   validateOriginalResume(profile.id, original); return original;
 }
@@ -23,7 +23,7 @@ export async function readOriginalResume(owner: string, original: OriginalResume
   if (isDemo()) bytes = await readFile(path.join(process.cwd(), ".data", "resumes", original.storageKey!));
   else {
     const { data, error } = await adminSupabase().storage.from("resumes").download(original.storageKey!);
-    if (error || !data) throw new Error("The confirmed original résumé is unavailable. Upload and confirm it again.");
+    if (error || !data) throw new Error("The saved original résumé is unavailable. Upload it again.");
     bytes = Buffer.from(await data.arrayBuffer());
   }
   if (bytes.length !== original.size || bytesHash(bytes) !== original.sha256) throw new Error("The confirmed original résumé bytes changed. No replacement or conversion is allowed.");

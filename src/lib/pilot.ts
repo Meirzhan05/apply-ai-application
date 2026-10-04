@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { canonicalJobUrl } from "@/lib/sources";
 import { hashJson, newId } from "@/lib/crypto";
 import { onboardingCompleteness } from "@/lib/onboarding";
@@ -45,7 +46,7 @@ function profileSnapshot(profile: Profile): PilotProfileSnapshot {
     facts: profile.facts.slice(0, 80).map((fact) => ({
       id: bounded(fact.id, 120),
       text: bounded(fact.text, 500),
-      verified: fact.verified,
+      verified: isUsableFact(fact),
       source: fact.source,
     })),
     skills: profile.skills.slice(0, 40).map((skill) => bounded(skill, 120)),

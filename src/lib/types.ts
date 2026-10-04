@@ -23,6 +23,32 @@ export interface VerifiedFact {
   verified: boolean;
   source: "resume" | "user";
   sourceAnchorId?: string;
+  status?: "accepted";
+  category?: ResumeFactCategory;
+  context?: string;
+  grounding?: {
+    version: 1;
+    sourceHash: string;
+    model: string;
+    acceptedText: string;
+    evidence: Array<{ anchorId: string; quote: string }>;
+  };
+}
+
+export type ResumeFactCategory = "experience" | "project" | "education" | "skill" | "certification" | "publication" | "other";
+
+export interface ResumeExtraction {
+  id: string;
+  status: "queued" | "extracting" | "checking" | "ready" | "failed" | "budget_limited";
+  requestedAt: string;
+  updatedAt: string;
+  attempts: number;
+  uploadSequence?: number;
+  filename: string;
+  error?: string;
+  /** Verified basic details are saved independently of the experience snapshot. */
+  profileSourceHash?: string;
+  pending?: { source: ResumeSource; document?: ResumeSourceDocument };
 }
 
 export type FactualDeclaration = "yes" | "no" | "unknown";
@@ -66,6 +92,7 @@ export interface ResumeSource {
 export interface ResumeSourceAnchorBase {
   id: string;
   text: string;
+  links?: Array<{ label: string; url: string }>;
   sectionId: string;
   sectionHeading: string;
   entryId: string;
@@ -181,6 +208,15 @@ export interface PdfSourceRepresentation {
 export type ResumeSourceAnchor = DocxSourceAnchor | PdfSourceAnchor;
 export type ResumeSourceDocument = DocxSourceRepresentation | PdfSourceRepresentation;
 
+export type ProfileDetailKey = "name" | "contactEmail" | "phone" | "school" | "graduationYear" | "headline" | "location" | "linkedinUrl" | "githubUrl" | "portfolioUrl";
+export interface SavedProfileAnswer {
+  key: ProfileDetailKey | "languages" | "namePronunciation";
+  question: string;
+  value: string;
+  applicationId: string;
+  savedAt: string;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -189,6 +225,17 @@ export interface Profile {
   phone: string;
   graduationYear: string;
   headline: string;
+  /** Application contact email is independent of the authenticated account email. */
+  contactEmail?: string;
+  location?: string;
+  linkedinUrl?: string;
+  githubUrl?: string;
+  portfolioUrl?: string;
+  detailSources?: Partial<Record<ProfileDetailKey, { source: "user" | "resume"; value: string; sourceHash?: string; anchorId?: string; quote?: string }>>;
+  resumeDetailsVersion?: number;
+  resumeSkills?: { sourceHash: string; values: string[] };
+  skillsEdited?: boolean;
+  savedAnswers?: SavedProfileAnswer[];
   skills: string[];
   preferredTitles: string[];
   preferredLocations: string[];
@@ -203,6 +250,8 @@ export interface Profile {
   resumeText?: string;
   resumeSource?: ResumeSource;
   resumeSourceDocument?: ResumeSourceDocument;
+  resumeExtraction?: ResumeExtraction;
+  resumeUploadSequence?: number;
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;
@@ -664,6 +713,9 @@ export interface Application {
   status: ApplicationStatus;
   packet?: ApplicationPacket;
   packetHash?: string;
+  /** Frozen reusable personal values; subsequent learning affects future applications. */
+  profileMemory?: Record<string, string>;
+  profileMemoryVersion?: number;
   form?: FormSnapshot;
   approvals: Approval[];
   autonomousAuthorization?: {

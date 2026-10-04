@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { hashJson } from "@/lib/crypto";
 import type { Profile, ScreeningAnswer } from "@/lib/types";
 import { answerOwner } from "@/lib/answer-responsibility";
@@ -8,7 +9,7 @@ export function essayContentHash(answer: ScreeningAnswer): string {
 }
 
 export function essaySources(profile: Profile, preferenceSources = false): Array<{ id: string; text: string }> {
-  const facts = profile.facts.filter((fact) => fact.verified && (!preferenceSources || !fact.id.startsWith("profile-preference:"))).map(({ id, text }) => ({ id, text }));
+  const facts = profile.facts.filter((fact) => isUsableFact(fact) && (!preferenceSources || !fact.id.startsWith("profile-preference:"))).map(({ id, text }) => ({ id, text }));
   if (!preferenceSources || !profile.onboarding?.completedAt || profile.automationAuthorization?.status !== "enabled" || profile.automationAuthorization.version !== profile.automationVersion) return facts;
   return [...facts,
     ...(profile.preferredTitles.length ? [{ id: "profile-preference:titles", text: `Preferred role titles: ${profile.preferredTitles.join(", ")}.` }] : []),

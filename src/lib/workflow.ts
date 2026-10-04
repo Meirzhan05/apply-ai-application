@@ -1,3 +1,4 @@
+import { profileMemorySnapshot } from "@/lib/profile-memory";
 import { hashJson, newId } from "@/lib/crypto";
 import { answerNeedsAction } from "@/lib/answer-responsibility";
 import { validatePacket } from "@/lib/drafting";
@@ -72,6 +73,10 @@ export function setPacket(
     ["selected", "drafting", "draft_review"],
     "draft_review",
   );
+  if (!application.profileMemory || application.profileMemoryVersion !== state.profile.automationVersion) {
+    application.profileMemory = profileMemorySnapshot(state.profile);
+    application.profileMemoryVersion = state.profile.automationVersion;
+  }
   application.packet = packet;
   application.packetHash = hashJson(packet);
   application.approvals = [];

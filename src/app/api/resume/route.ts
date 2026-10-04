@@ -4,9 +4,9 @@ import { newId } from "@/lib/crypto";
 import { adminSupabase } from "@/lib/supabase-admin";
 import { currentUserId, isDemo, loadState, mutateState } from "@/lib/repository";
 import { sameOrigin } from "@/lib/request-security";
-import { parseDocxSource, suggestDocxFacts } from "@/lib/docx-source";
-import { parsePdfSource, suggestPdfFacts } from "@/lib/pdf-source";
-import { bumpAutomationVersion } from "@/lib/onboarding";
+import { parseDocxSource } from "@/lib/docx-source";
+import { parsePdfSource } from "@/lib/pdf-source";
+import { dispatchResumeExtraction, queuedResumeExtraction, retryResumeExtraction } from "@/lib/resume-extraction-jobs";
 import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
 
 import { saveDemoOriginalResume } from "@/lib/original-resume";
@@ -37,6 +37,10 @@ export async function POST(request: Request) {
         file.type === "application/octet-stream");
     if (!pdf && !docx)
       throw new Error("Only PDF and DOCX resumes are supported.");
+    const uploadSequence = await mutateState(userId, state => {
+      state.profile.resumeUploadSequence = (state.profile.resumeUploadSequence ?? 0) + 1;
+      return state.profile.resumeUploadSequence;
+    });
     const buffer = Buffer.from(await file.arrayBuffer());
     let extracted = "";
     let sourceDocument: ResumeSourceDocument | undefined;
@@ -54,9 +58,6 @@ export async function POST(request: Request) {
       throw new Error(
         "This resume has no readable text. Add facts manually in your profile.",
       );
-    const suggestions: Array<{ text: string; sourceAnchorId?: string }> = sourceDocument?.format === "docx"
-      ? suggestDocxFacts(sourceDocument)
-      : sourceDocument?.format === "pdf" ? suggestPdfFacts(sourceDocument) : [];
     const sha256 = createHash("sha256").update(buffer).digest("hex");
     let storageKey: string | undefined;
     if (isDemo()) { storageKey = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`; await saveDemoOriginalResume(storageKey, buffer); }
@@ -74,51 +75,19 @@ export async function POST(request: Request) {
       if (error) throw error;
       storageKey = key;
     }
-    await mutateState(userId, (state) => {
-      state.profile.resumeFileName = name;
-      state.profile.resumeText = extracted;
-      state.profile.resumeSourceDocument = sourceDocument;
-      state.profile.resumeSource = {
-        ...(storageKey ? { storageKey } : {}),
-        sha256,
-        size: buffer.byteLength,
-        mimeType: pdf
-          ? "application/pdf"
-          : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      };
-      bumpAutomationVersion(state.profile);
-      state.profile.facts = state.profile.facts.map((fact) => {
-        if (fact.source !== "resume" || !fact.sourceAnchorId) return fact;
-        const { sourceAnchorId: _oldAnchor, ...withoutOldAnchor } = fact;
-        void _oldAnchor;
-        return withoutOldAnchor;
-      });
-      const existing = new Set(state.profile.facts.map((fact) => fact.text.toLowerCase()));
-      for (const suggestion of suggestions)
-        if (!existing.has(suggestion.text.toLowerCase())) {
-          if (state.profile.facts.length < 80) {
-            state.profile.facts.push({
-              id: newId(),
-              text: suggestion.text,
-              verified: false,
-              source: "resume",
-              ...(suggestion.sourceAnchorId ? { sourceAnchorId: suggestion.sourceAnchorId } : {}),
-            });
-            existing.add(suggestion.text.toLowerCase());
-          }
-        } else if (suggestion.sourceAnchorId) {
-          const existingFact = state.profile.facts.find((fact) => fact.text.toLowerCase() === suggestion.text.toLowerCase());
-          if (existingFact && !existingFact.sourceAnchorId) existingFact.sourceAnchorId = suggestion.sourceAnchorId;
-        }
-      state.profile.updatedAt = new Date().toISOString();
-      state.activity.unshift({
-        id: newId(),
-        at: new Date().toISOString(),
-        label: "Resume imported",
-        detail: "Review and confirm facts before using them in an application.",
-      });
+    const extraction = queuedResumeExtraction(name, { source: {
+      ...(storageKey ? { storageKey } : {}), sha256, size: buffer.byteLength,
+      mimeType: pdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }, document: sourceDocument });
+    extraction.uploadSequence = uploadSequence;
+    const current = await mutateState(userId, state => {
+      if ((state.profile.resumeExtraction?.uploadSequence ?? 0) > uploadSequence) return false;
+      state.profile.resumeExtraction = extraction;
+      return true;
     });
-    return NextResponse.json({ ok: true, extracted, ...(sourceDocument ? { sourceStatus: sourceDocument.support } : {}) });
+    if (!current) return NextResponse.json({ ok: true, status: "superseded" }, { status: 202 });
+    await dispatchResumeExtraction(userId, extraction.id);
+    return NextResponse.json({ ok: true, requestId: extraction.id, status: "queued" }, { status: 202 });
     }, "api/resume");
   } catch (error) {
     return NextResponse.json(
@@ -128,5 +97,16 @@ export async function POST(request: Request) {
       },
       { status: error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
+  }
+}
+
+export async function PATCH(request: Request) {
+  if (!sameOrigin(request)) return NextResponse.json({ error: "Cross-origin request rejected." }, { status: 403 });
+  try {
+    const userId = await currentUserId();
+    await withAccountOperation(userId, "request", () => retryResumeExtraction(userId), "resume-extraction-retry");
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Extraction retry failed." }, { status: error instanceof AccountDeletionInProgressError ? 409 : 400 });
   }
 }

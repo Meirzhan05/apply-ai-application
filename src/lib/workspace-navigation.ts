@@ -4,6 +4,7 @@ export type WorkspaceNavigation = {
   applicationId: string | null;
   search: string;
   attentionOnly: boolean;
+  applicationOrder?: "stage" | "recent";
 };
 type SessionStore = Pick<Storage, "getItem" | "setItem">;
 const key = (owner: string) => `apply-ai:navigation:${owner}`;
@@ -17,6 +18,7 @@ export function readWorkspaceNavigation(storage: SessionStore, owner: string, ap
       applicationId: typeof saved.applicationId === "string" && applicationIds.includes(saved.applicationId) ? saved.applicationId : null,
       search: typeof saved.search === "string" ? saved.search.slice(0, 200) : "",
       attentionOnly: saved.attentionOnly === true,
+      ...(saved.applicationOrder === "stage" || saved.applicationOrder === "recent" ? { applicationOrder: saved.applicationOrder } : {}),
     };
   } catch { return null; }
 }

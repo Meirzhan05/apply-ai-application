@@ -3,6 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
 const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), afterSession: undefined as undefined | (() => void | Promise<void>), budget: true, storageDemo: false, captureAttachment: false, attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>, originalKey: "", originalBytes: null as Buffer | null, extractedText: "Confirmed experience from the uploaded résumé.", beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
+vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(), extractResumeProfile: async () => [] }));
+vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
+  (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
+vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {
+  const actual = await importOriginal<typeof import("@/lib/resume-extraction-jobs")>();
+  return { ...actual, dispatchResumeExtraction: async (userId: string, requestId: string) => actual.runResumeExtraction({ userId, requestId }) };
+});
+
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
   return { ...fs, writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
@@ -65,7 +73,7 @@ async function uploadAndConfirmPdfSource() {
   fixture.storageDemo = true;
   const uploaded = await uploadResume(resumeUploadRequest("pdf", bytes));
   fixture.storageDemo = false;
-  expect(uploaded.status, await uploaded.clone().text()).toBe(200);
+  expect(uploaded.status, await uploaded.clone().text()).toBe(202);
   const confirmedFacts = profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await action("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
@@ -296,7 +304,7 @@ it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual prep
   fixture.extractedText = "Work Experience\nOrbit Labs\nMachine Learning Engineer\n2024-2025\n• Built a vector retrieval service with Python that improved ranking quality by 22%.";
   fixture.storageDemo = true;
   const upload = await uploadResume(resumeUploadRequest(extension, bytes));
-  expect(upload.status).toBe(200);
+  expect(upload.status).toBe(202);
   const sourceKey = profile.resumeSource!.storageKey!;
   try {
     expect(profile.facts.some((fact) => !fact.verified)).toBe(true);
@@ -546,7 +554,10 @@ it("retains an allocated session when cancellation wins before the form is durab
   const known = fixture.prepare.getMockImplementation()!;
   fixture.prepare.mockImplementationOnce(async (...args) => {
     const result = await known(...args);
-    fixture.state!.applications[0].status = "cancelled";
+    const app = fixture.state!.applications[0];
+    app.autonomousHumanAnswers = [{ version: 1, userId: app.userId, applicationId: app.id, targetUrl: fixture.state!.jobs[0].applyUrl, profileHash: app.autonomousAuthorization!.profileHash!, formHash: "prior", question: { identifier: "github", label: "GitHub profile", kind: "url", options: [] }, value: "https://github.com/cancelled-output", confirmedAt: new Date().toISOString() }];
+    result.form.fields.push({ identifier: "github", label: "GitHub profile", kind: "url", required: true, value: "https://github.com/cancelled-output", valid: true });
+    app.status = "cancelled";
     return result;
   });
   fixture.cancel.mockRejectedValueOnce(new Error("provider release timeout"));
@@ -554,6 +565,7 @@ it("retains an allocated session when cancellation wins before the form is durab
   await progress();
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("cancelled");
+  expect(fixture.state!.profile.savedAnswers).toBeUndefined();
   expect(app.browserSessionId).toBe("session");
   expect(app.browserReleasePending?.sessionId).toBe("session");
   expect(app.blockers?.some((item) => item.reason === "resource_hold")).toBe(true);

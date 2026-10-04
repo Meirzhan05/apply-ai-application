@@ -1,5 +1,6 @@
 "use client";
 
+import { isUsableFact } from "@/lib/fact-evidence";
 import { useEffect, useState } from "react";
 import type { ApplicationPacket, LatexResumeArtifact, Profile, ResumeArtifact, ResumeDraftDiagnostics, ResumeDraftAttempts, VerifiedFact } from "@/lib/types";
 
@@ -40,7 +41,7 @@ function outcomeLabel(outcome: ResumeDraftDiagnostics["findings"][number]["outco
     case "supported": return "Supported";
     case "unsupported": return "Needs evidence";
     case "uncertain": return "Evidence is uncertain";
-    case "contradiction": return "Conflicts with confirmed facts";
+    case "contradiction": return "Conflicts with available profile facts";
   }
 }
 
@@ -48,7 +49,7 @@ function freshnessMessage(freshness: Freshness, reasons: string[] = []): string 
   switch (freshness) {
     case "checking": return "Checking whether this saved résumé matches the current source, facts, settings, and job…";
     case "current": return "This saved version matches the current résumé inputs and passed its layout and grounding checks.";
-    case "stale": return `This saved version is from an earlier set of résumé inputs${reasons.length ? ` (${reasons.map(staleReasonLabel).join(", ")})` : ""}. Rebuild it from the current source and confirmed facts before comparing previews.`;
+    case "stale": return `This saved version is from an earlier set of résumé inputs${reasons.length ? ` (${reasons.map(staleReasonLabel).join(", ")})` : ""}. Rebuild it from the current source and available profile facts before comparing previews.`;
     case "unavailable": return "The saved comparison could not be verified. Preview links are disabled until the current version can be checked.";
   }
 }
@@ -58,7 +59,7 @@ function staleReasonLabel(reason: string): string {
     case "source": return "source changed";
     case "representation": return "source representation changed";
     case "profile": return "profile changed";
-    case "facts": return "confirmed facts changed";
+    case "facts": return "available profile facts changed";
     case "settings": return "résumé settings changed";
     case "job": return "job details changed";
     default: return reason.replaceAll("_", " ");
@@ -303,9 +304,9 @@ export function ResumeComparisonView({
                 {anchor && <p><span className="resume-change-label">Original wording</span>{anchor.text}</p>}
                 <p><span className="resume-change-label">Tailored wording</span>{edit.text}</p>
                 <details>
-                  <summary>Confirmed profile facts ({edit.factIds.length})</summary>
-                  <ul>{edit.factIds.map((factId) => <li key={factId}>{factsById.get(factId)?.text ?? "This fact is no longer in the current profile."}{factsById.get(factId)?.verified ? <small> · Confirmed profile fact</small> : <small> · No longer confirmed</small>}</li>)}</ul>
-                  {onCorrectClaim && <button type="button" className="text-button" onClick={() => onCorrectClaim(edit.factIds, edit.text)}>Correct or unconfirm these facts</button>}
+                  <summary>Available profile facts ({edit.factIds.length})</summary>
+                  <ul>{edit.factIds.map((factId) => <li key={factId}>{factsById.get(factId)?.text ?? "This fact is no longer in the current profile."}{(factsById.get(factId) && isUsableFact(factsById.get(factId)!)) ? <small> · Available profile fact</small> : <small> · No longer available</small>}</li>)}</ul>
+                  {onCorrectClaim && <button type="button" className="text-button" onClick={() => onCorrectClaim(edit.factIds, edit.text)}>Correct source facts these facts</button>}
                 </details>
               </li>;
             })}

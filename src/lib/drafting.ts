@@ -1,7 +1,10 @@
+import { personalQuestionKey, profileMemorySnapshot } from "@/lib/profile-memory";
+import { isUsableFact, factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -40,7 +43,7 @@ function relevantFacts(profile: Profile, job: Job): VerifiedFact[] {
   const terms =
     `${job.title} ${job.description} ${job.requirements.join(" ")}`.toLowerCase();
   return profile.facts
-    .filter((fact) => fact.verified)
+    .filter((fact) => isUsableFact(fact))
     .sort((a, b) => {
       const score = (fact: VerifiedFact) =>
         fact.text
@@ -55,14 +58,14 @@ export async function draftPacket(
   profile: Profile,
   job: Job,
   previous?: ApplicationPacket,
-  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; beforeModelCall?: () => Promise<void> },
+  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; personalValues?: Record<string, string>; beforeModelCall?: () => Promise<void> },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
   const originalResumeOnly = profile.automationSettings?.resumeTailoring === false;
   const originalResume = originalResumeOnly ? originalResumeManifest(profile) : undefined;
   if (!originalResumeOnly && profile.resumeSource && !profile.resumeSourceDocument) {
     const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
-    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
+    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect its original layout and extract facts before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
   }
   if (!originalResumeOnly && options && profile.resumeSourceDocument && !(options.preserveResume && previous?.resumeArtifact))
     assertSourceInformationComplete(profile.resumeSourceDocument, profile);
@@ -73,7 +76,7 @@ export async function draftPacket(
   }
   if (facts.length === 0 && !originalResumeOnly)
     throw new Error(
-      "Confirm at least one profile fact before preparing an application.",
+      "Upload a resume or add at least one experience fact before preparing an application.",
     );
   let preparedDocxBaseline: PreparedDocxResumeBaseline | undefined;
   let validatedSourceRender: { plan: NonNullable<ApplicationPacket["resumeSourcePlan"]>; format: "pdf"; rendered: Awaited<ReturnType<typeof renderPdfResume>> }
@@ -115,9 +118,10 @@ export async function draftPacket(
   let model = sourcePlan?.model ?? resumeDocument?.model ?? (originalResumeOnly ? "confirmed-original-upload" : "verified-facts-template");
 
   if (!originalResumeOnly && !options && process.env.OPENAI_API_KEY && !previous) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
+    const deadline = Date.now() + 180_000;
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: resumeModelTimeout(deadline), maxRetries: 0 });
     try {
-      const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", DEFAULT_AI_MODEL, () => client.responses.parse({
+      const response = await withResumeModelRetry(() => meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", DEFAULT_AI_MODEL, () => client.responses.parse({
         model: DEFAULT_AI_MODEL,
         service_tier: "default",
         store: false,
@@ -141,7 +145,7 @@ export async function draftPacket(
           },
         ],
         text: { format: zodTextFormat(DraftSchema, "application_draft") },
-      }));
+      }, { timeout: resumeModelTimeout(deadline) })), { deadline });
       const value = response.output_parsed;
       if (value) {
         const byId = new Map(facts.map((fact) => [fact.id, fact]));
@@ -173,6 +177,14 @@ export async function draftPacket(
   if (previous) {
     answers = previous.answers.map((answer) => answerOwner(answer.question) === "ai" || answer.factIds.every((id) => facts.some((f) => f.id === id)) ? answer :
       { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "human" });
+  }
+  if (!options?.knownAnswersOnly) {
+    const personal = options?.personalValues ?? profileMemorySnapshot(profile);
+    answers = answers.map(answer => {
+      const key = personalQuestionKey(answer.question);
+      const value = key ? personal[key] : undefined;
+      return answer.requiresUserInput && value ? { question: answer.question, answer: value, factIds: [], author: "human", userProvided: true, requiresUserInput: false } : answer;
+    });
   }
   if (options?.regenerateEssays) answers = answers.map((answer) => answerOwner(answer.question) === "ai" ? { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "ai" } : answer);
   const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&
@@ -241,7 +253,7 @@ export function validatePacket(
     }
   }
   if (packet.profileHash && packet.profileHash !== packetProfileHash(profile)) throw new Error("Your confirmed profile changed. Prepare and review a new packet.");
-  const verified = profile.facts.filter((fact) => fact.verified);
+  const verified = profile.facts.filter((fact) => isUsableFact(fact));
   const verifiedIds = new Set(verified.map((fact) => fact.id));
   if (packet.resumeMode === "original" && (!packet.originalResume || hashJson(packet.originalResume) !== hashJson(originalResumeManifest(profile)) || packet.resumeDocument || packet.resumeSourcePlan || packet.resumeArtifact || packet.resumeLines.length || packet.files?.find((file) => file.kind === "resume")?.storageKey !== packet.originalResume.storageKey)) throw new Error("The confirmed original résumé changed. Prepare a new application.");
   if (packet.resumeMode !== "original" && !packet.resumeLines.length)
@@ -254,7 +266,7 @@ export function validatePacket(
     validateResumeArtifact(profile, packet);
     const source = profile.resumeSourceDocument;
     const plan = packet.resumeSourcePlan;
-    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    const factsHash = hashJson(factEvidenceSnapshot(profile.facts));
     if (!source || source.support.status !== "candidate" || !plan || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
       plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||

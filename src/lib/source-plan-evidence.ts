@@ -1,3 +1,4 @@
+import { isUsableFact, factAnchorIds, evidenceBelongsToEntry } from "@/lib/fact-evidence";
 import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim, ResumeRepairIssue } from "@/lib/types";
 import { canonicalPdfSourceFactText, evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
@@ -16,8 +17,9 @@ export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(
 
 export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSourceAnchor, source?: ResumeSourceDocument): string[] {
   const sourceText = normalized(anchor.text);
-  const directlyConfirmed = profile.facts.filter((fact) => fact.verified && (
-    fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText))
+  const directlyConfirmed = profile.facts.filter((fact) => isUsableFact(fact) && (
+    (fact.grounding ? fact.grounding.evidence.some(item => item.anchorId === anchor.id && normalized(item.quote).includes(sourceText))
+      : fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText)))
   )).map((fact) => fact.id);
   if (directlyConfirmed.length || source?.format !== "pdf" || anchor.kind !== "entry") return directlyConfirmed;
 
@@ -25,7 +27,7 @@ export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSource
   const targetComponent = normalizedContextComponent(anchor.text);
   if (!targetComponent) return [];
   return profile.facts.filter((fact) => {
-    if (!fact.verified || fact.source !== "resume" || !fact.sourceAnchorId) return false;
+    if (!isUsableFact(fact) || fact.source !== "resume" || !fact.sourceAnchorId) return false;
     const evidenceAnchor = anchorsById.get(fact.sourceAnchorId);
     if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId || fact.text !== canonicalPdfSourceFactText(evidenceAnchor)) return false;
     return evidenceAnchor.entryHeading.split(/[·|]/u).some((component) => normalizedContextComponent(component) === targetComponent);
@@ -54,7 +56,7 @@ function validateLegacySourcePlan(input: {
 }): boolean {
   const anchors = sourceEvidenceAnchors(input.source, 1);
   const anchorById = new Map(input.source.anchors.map((anchor) => [anchor.id, anchor]));
-  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const verified = new Map(input.profile.facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact]));
   const claims = new Map(input.claims.map((claim) => [claim.anchorId, claim]));
   const edits = new Map(input.edits.map((edit) => [edit.anchorId, edit]));
   if (claims.size !== input.claims.length || edits.size !== input.edits.length || anchors.length !== input.claims.length ||
@@ -95,7 +97,7 @@ export function sourcePlanEvidenceIssues(input: SourcePlanEvidenceInput): Resume
   }
   const issues: ResumeRepairIssue[] = [];
   const add = (code: string, message: string, anchorId?: string) => issues.push({ stage: "structure", code, message, ...(anchorId ? { anchorId } : {}) });
-  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const verified = new Map(input.profile.facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact]));
   const allAnchors = new Map(input.source.anchors.map((anchor) => [anchor.id, anchor]));
   const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
   const seen = new Set<string>();
@@ -114,10 +116,14 @@ export function sourcePlanEvidenceIssues(input: SourcePlanEvidenceInput): Resume
     if (claim.text !== anchor.text && !anchor.editable) add("uneditable_anchor", "Restore the original text; this source statement cannot be edited.", anchor.id);
     for (const id of claim.factIds) {
       const fact = verified.get(id);
-      if (!fact?.sourceAnchorId) continue;
-      const evidenceAnchor = allAnchors.get(fact.sourceAnchorId);
-      if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId)
-        add("different_entry", "Use confirmed facts from this same résumé entry; restore the original supported wording if necessary.", anchor.id);
+      if (!fact) continue;
+      if (fact.grounding && fact.grounding.sourceHash !== input.source.sourceHash)
+        add("different_source", "Use facts grounded in this same source résumé.", anchor.id);
+      for (const sourceAnchorId of factAnchorIds(fact)) {
+        const evidenceAnchor = allAnchors.get(sourceAnchorId);
+        if (!evidenceAnchor || !evidenceBelongsToEntry(evidenceAnchor, anchor))
+          add("different_entry", "Use confirmed facts from this same résumé entry; restore the original supported wording if necessary.", anchor.id);
+      }
     }
   }
   const editById = new Map<string, ResumeSourceEdit>();

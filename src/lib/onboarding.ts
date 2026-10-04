@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import type {
   AutomationAuthorization,
   AutomationSettings,
@@ -35,7 +36,7 @@ export function onboardingCompleteness(profile: Profile): {
   const questionnaire = profile.onboarding!.questionnaire;
   if (!questionnaire.workAuthorization || questionnaire.workAuthorization === "unknown") missing.push("workAuthorization");
   if (!questionnaire.requiresSponsorship || questionnaire.requiresSponsorship === "unknown") missing.push("requiresSponsorship");
-  const confirmedFactCount = profile.facts.filter((fact) => fact.verified).length;
+  const confirmedFactCount = profile.facts.filter((fact) => isUsableFact(fact)).length;
   if (!confirmedFactCount) missing.push("confirmedResumeFact");
   return { complete: missing.length === 0, missing, confirmedFactCount };
 }
@@ -43,7 +44,7 @@ export function onboardingCompleteness(profile: Profile): {
 const missingLabels: Record<string, string> = {
   workAuthorization: "work authorization answer",
   requiresSponsorship: "sponsorship answer",
-  confirmedResumeFact: "one confirmed résumé fact",
+  confirmedResumeFact: "resume experience",
 };
 
 export function onboardingMissingLabel(key: string): string {
@@ -131,7 +132,7 @@ export function activateAutomation(profile: Profile, reason: string): Automation
   const completeness = onboardingCompleteness(profile);
   if (!completeness.complete) {
     if (completeness.missing.includes("confirmedResumeFact"))
-      throw new Error("Confirm at least one resume fact before enabling automation.");
+      throw new Error("Upload a resume or add at least one experience fact before enabling automation.");
     throw new Error(`Complete onboarding before enabling automation: ${completeness.missing.map(onboardingMissingLabel).join(", ")}.`);
   }
   const now = new Date().toISOString();

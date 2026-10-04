@@ -15,6 +15,7 @@ it("returns font guidance from a typed support diagnostic", async () => {
   const page = {
     rotate: 0,
     getViewport: () => ({ width: 612, height: 792 }),
+    getAnnotations: async () => [],
     getTextContent: async () => ({ items: [item], styles: { "unresolved-font": { fontFamily: "" } } }),
     getOperatorList: async () => ({ fnArray: [OPS.showText], argsArray: [[[{ unicode: text }]]] }),
     commonObjs: { get: () => { throw new Error("font descriptor is unavailable"); } },

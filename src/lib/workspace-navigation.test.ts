@@ -29,3 +29,11 @@ it("handles removed applications, malformed values, and disabled storage", () =>
   expect(readWorkspaceNavigation(unavailable, "alice", [])).toBeNull();
   expect(() => writeWorkspaceNavigation(unavailable, "alice", { section: "matches", applicationId: null, search: "", attentionOnly: false })).not.toThrow();
 });
+
+it("restores the chosen application order with account-scoped navigation", () => {
+  const storage = store();
+  const navigation: WorkspaceNavigation = { section: "applications", applicationId: "cedar", search: "", attentionOnly: false, applicationOrder: "recent" };
+  writeWorkspaceNavigation(storage, "alice", navigation);
+  expect(readWorkspaceNavigation(storage, "alice", ["cedar"])).toEqual(navigation);
+  expect(readWorkspaceNavigation(storage, "bob", ["cedar"])).toBeNull();
+});

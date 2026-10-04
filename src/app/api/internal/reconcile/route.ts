@@ -1,3 +1,4 @@
+import { ensureResumeExtraction, recoverResumeExtraction } from "@/lib/resume-extraction-jobs";
 import { mutateState, loadState, isDemo } from "@/lib/repository";
 import { readAllAppStateOwners } from "@/lib/app-state-owners";
 import { newId } from "@/lib/crypto";
@@ -22,6 +23,8 @@ export async function POST(request: Request) {
   for (const row of data ?? []) {
     try {
     marked += await withAccountOperation(row.user_id, "maintenance", async () => {
+    await recoverResumeExtraction(row.user_id);
+    await ensureResumeExtraction(row.user_id, (await loadState(row.user_id)).profile);
     const closed = await mutateState(row.user_id, (current) => {
       const recovered = recoverStaleRuns(current);
       for (const app of recovered) current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Run needs review", detail: current.applications.find((item) => item.id === app.id)!.error! });

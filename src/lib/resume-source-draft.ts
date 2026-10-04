@@ -1,3 +1,4 @@
+import { isUsableFact, factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { z } from "zod";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -10,6 +11,7 @@ import type { Job, Profile, ResumeDraftAttempts, ResumeGroundingFinding, ResumeS
 import { pdfSourceLayout, sourceLayoutHash } from "@/lib/resume-source-layout";
 import { confirmedFactIdsForAnchor, sourceWithCurrentEvidenceClaims, sourcePlanEvidenceIssues } from "@/lib/source-plan-evidence";
 import { isResumeRendererDiagnostic } from "@/lib/resume-renderer-diagnostics";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 
 const PlanSchema = z.object({
   edits: z.array(z.object({ anchorId: z.string().min(1).max(200), text: z.string().trim().min(1).max(500), factIds: z.array(z.string().min(1).max(160)).min(1).max(80) }).strict()).max(80),
@@ -21,11 +23,11 @@ const AuditSchema = z.object({ findings: z.array(z.object({
   claimId: z.string().min(1).max(200), outcome: z.enum(["supported", "unsupported", "uncertain", "contradiction"]),
   reason: z.string().trim().min(1).max(500), evidenceFactIds: z.array(z.string().min(1).max(160)).max(80),
   requiredInformation: z.string().trim().min(1).max(500).nullable(),
-}).strict()).max(80), sourceActivityPreservations: z.array(z.object({
+}).strict()).max(400), sourceActivityPreservations: z.array(z.object({
   sourceClaimId: z.string().min(1).max(200), outcome: z.enum(["preserved", "substituted", "missing", "uncertain"]),
   preservedClaimId: z.string().min(1).max(200).nullable(), reason: z.string().trim().min(1).max(500),
   requiredInformation: z.string().trim().min(1).max(500).nullable(),
-}).strict()).max(80) }).strict();
+}).strict()).max(400) }).strict();
 
 type Counts = ResumeDraftAttempts;
 type LayoutValidator = (plan: ResumeSourcePlan) => Promise<ResumeLayoutFeedback | undefined>;
@@ -35,7 +37,7 @@ type SourceActivityFailure = { check: SourceActivityCheck; reason: string; requi
 type ValidatedAudit = { findings: ResumeGroundingFinding[]; preservationFailures: SourceActivityFailure[] };
 const normalize = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
-function verifiedFacts(profile: Profile) { return profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })); }
+function verifiedFacts(profile: Profile) { return factEvidenceSnapshot(profile.facts); }
 function factHash(profile: Profile) { return hashJson(verifiedFacts(profile)); }
 function settingsHash(profile: Profile) { return hashJson(profile.automationSettings ?? null); }
 export function sourceJobHash(job: Job, policyVersion: 1 | 2 = 1) {
@@ -54,8 +56,8 @@ export function sourceProfileHash(profile: Profile) {
 export function assertSourceInformationComplete(source: ResumeSourceDocument, profile: Profile): void {
   source = sourceWithCurrentEvidenceClaims(source, profile.name);
   const findings: ResumeGroundingFinding[] = source.anchors.filter((anchor) => anchor.candidateClaim && confirmedFactIdsForAnchor(profile, anchor, source).length === 0).map((anchor) => ({
-    claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has not been confirmed as a fact.", evidenceFactIds: [],
-    requiredInformation: `Confirm this source claim in your profile facts: “${anchor.text}”`,
+    claimId: anchor.id, affectedText: anchor.text, outcome: "unsupported", reason: "This original résumé claim has no usable source-grounded fact.", evidenceFactIds: [],
+    requiredInformation: `Retry resume extraction or restore the source fact in your profile: “${anchor.text}”`,
   }));
   if (findings.length) throw new ResumeDraftError({ version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0, findings,
     requiredInformation: [...new Set(findings.map((finding) => finding.requiredInformation!))] });
@@ -143,17 +145,17 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
   const counts: Counts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0, checkerRetries: 0, attempts: [] };
   if (source.support.status !== "candidate") throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "renderer" }, source.support.reason ?? "This source résumé layout is unsupported.");
   if ((source.format === "docx" && source.version !== 1) || (source.format === "pdf" && source.version !== 1 && source.version !== 2 && source.version !== 3) ||
-    source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 80)
+    source.sourceHash !== profile.resumeSource?.sha256 || source.text.length > 20_000 || source.anchors.filter((anchor) => anchor.candidateClaim).length > 400)
     throw new Error("The inspected source résumé is missing, stale, or outside the supported context limit.");
   assertSourceInformationComplete(source, profile);
   const sourceLayout = baselineLayout ?? (source.format === "pdf" ? pdfSourceLayout(source) : undefined);
   const layoutHash = sourceLayout ? sourceLayoutHash(sourceLayout) : undefined;
   const facts = verifiedFacts(profile);
-  if (!facts.length) throw new Error("Confirm resume facts in your profile before drafting.");
+  if (!facts.length) throw new Error("Upload a resume or add facts in your profile before drafting.");
   if (!dependencies && !process.env.OPENAI_API_KEY) throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "provider" }, "Resume drafting is unavailable. Configure OpenAI, then retry; your last valid packet is preserved.");
   const remaining = () => {
     if (deadline - Date.now() < 1_000) throw providerFailure(counts, deadline);
-    return Math.min(45_000, deadline - Date.now());
+    return resumeModelTimeout(deadline);
   };
   let provider: ResumeSourceResponses;
   try { provider = dependencies?.responses ?? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: remaining() }).responses; }
@@ -193,19 +195,22 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
     while (true) {
       await verifyCurrentRun();
       let parsed: unknown;
+      const operation = counts.writerAttempts ? "resume-repair" : "resume-generation";
+      let started = false;
       try {
-        const result = await meter({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, counts.writerAttempts ? "resume-repair" : "resume-generation", DEFAULT_AI_MODEL, async () => {
-          await verifyCurrentRun();
-          if (counts.writerAttempts) counts.repairAttempts++;
-          counts.writerAttempts++;
-          return provider.parse({
+        const result = await withResumeModelRetry(() => {
+          if (!started) {
+            if (counts.writerAttempts) counts.repairAttempts++;
+            counts.writerAttempts++; started = true;
+          }
+          return meter({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, operation, DEFAULT_AI_MODEL, () => provider.parse({
             model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
             input: [
               { role: "system", content: `${writerPrompt}${repair === "layout" ? " This is a layout fit repair. Shorten only the identified bullet; preserve its activity, result and exact fact IDs." : repair === "grounding" ? " This is a factual grounding repair. Correct only flagged wording and preserve the original work activity." : ""} Follow the precise feedback to correct rejected edits. Never relax the source or evidence rules.` },
               { role: "user", content: JSON.stringify({ ...context, ...(currentDraft ? { currentDraft } : {}), ...(findings ? { findings } : {}), ...(layoutFeedback ? { layoutFeedback } : {}), feedback, ...(rejectedCandidate !== undefined ? { rejectedCandidate } : {}), sourceActivityPreservationChecks: preservationChecks }) },
             ], text: { format: zodTextFormat(PlanSchema, "anchored_resume_edit_plan") },
-          }, { timeout: remaining() });
-        });
+          }, { timeout: remaining() }));
+        }, { deadline, beforeModelCall: verifyCurrentRun });
         parsed = result.output_parsed;
         record("writer");
       } catch (error) {
@@ -234,7 +239,7 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       feedback = issues;
     }
   };
-  const callAudit = async (claims: DraftClaim[], preservationChecks: SourceActivityCheck[]): Promise<ValidatedAudit> => {
+  const callAuditBatch = async (claims: DraftClaim[], preservationChecks: SourceActivityCheck[]): Promise<ValidatedAudit> => {
     let checkerFeedback: ResumeRepairIssue[] = [];
     let rejectedAudit: unknown;
     while (true) {
@@ -242,28 +247,43 @@ export async function draftResumeSourcePlan(profile: Profile, job: Job, source: 
       const auditClaims = claims.map(({ anchor, text, factIds }) => ({ claimId: anchor.id, affectedText: text, factIds, sectionHeading: anchor.sectionHeading, entryHeading: anchor.entryHeading }));
       let parsed: unknown;
       try {
-        const result = await meter({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, async () => {
-          await verifyCurrentRun();
-          counts.checkerAttempts++;
-          return provider.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
+        const result = await withResumeModelRetry(() => {
+          return meter({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, () => provider.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
             input: [{ role: "system", content: auditPrompt }, { role: "user", content: JSON.stringify({ ...context, claims: auditClaims, sourceActivityPreservationChecks: preservationChecks, checkerFeedback, ...(rejectedAudit !== undefined ? { rejectedAudit } : {}) }) }],
             text: { format: zodTextFormat(AuditSchema, "anchored_resume_grounding_audit") },
-          }, { timeout: remaining() });
-        });
+          }, { timeout: remaining() }));
+        }, { deadline, beforeModelCall: verifyCurrentRun });
         parsed = result.output_parsed;
       } catch (error) {
         if (error instanceof ResumeDraftError) throw error;
         if (!isMalformedResponse(error)) throw providerFailure(counts, deadline);
         parsed = null;
       }
-      const audit = auditFindings(parsed, claims, new Map(profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact])), preservationChecks);
+      const audit = auditFindings(parsed, claims, new Map(profile.facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact])), preservationChecks);
       if (audit) return audit;
       checkerFeedback = [{ stage: "audit", code: "malformed_audit", message: "Return exactly one finding per supplied claim and one preservation result per supplied source check; cite only the confirmed fact IDs supplied on that claim." }];
       record("audit", checkerFeedback);
       if (counts.checkerRetries! >= 1) throw malformed(counts, "The résumé checker returned invalid results twice. Retry drafting; no new materials were saved.");
       counts.checkerRetries!++;
+      counts.checkerAttempts++;
       rejectedAudit = parsed;
     }
+  };
+  const callAudit = async (claims: DraftClaim[], preservationChecks: SourceActivityCheck[]): Promise<ValidatedAudit> => {
+    await verifyCurrentRun();
+    remaining();
+    // Diagnostics count complete semantic passes, not batches or transport retries.
+    counts.checkerAttempts++;
+    const findings: ResumeGroundingFinding[] = [];
+    const preservationFailures: SourceActivityFailure[] = [];
+    for (let offset = 0; offset < claims.length; offset += 10) {
+      const batch = claims.slice(offset, offset + 10);
+      const ids = new Set(batch.map(claim => claim.anchor.id));
+      const audit = await callAuditBatch(batch, preservationChecks.filter(check => ids.has(check.sourceClaimId)));
+      findings.push(...audit.findings);
+      preservationFailures.push(...audit.preservationFailures);
+    }
+    return { findings, preservationFailures };
   };
   const sourceActivityChecks: SourceActivityCheck[] = source.anchors.filter((anchor) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor) => ({
     sourceClaimId: anchor.id, experienceEntryId: anchor.entryId, originalClaimText: anchor.text,

@@ -136,3 +136,32 @@ it("keeps saved policy-2 separator claims readable while policy-3 plans exclude 
   expect(validateSourcePlanEvidence({ ...input, evidencePolicyVersion: 3 })).toBe(false);
   expect(validateSourcePlanEvidence({ ...input, claims: [], evidencePolicyVersion: 3 })).toBe(true);
 });
+
+
+it("retains accepted AI-grounded facts under the merged evidence policy without human confirmation", async () => {
+  const source = await parseDocxSource(await createDocxSourceFixture({ secondExperience: true }));
+  const profile = initialDemoState().profile;
+  const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
+  profile.facts = anchors.map((anchor, index) => ({ id: `accepted-${index}`, text: anchor.text, verified: false,
+    source: "resume", sourceAnchorId: anchor.id, status: "accepted", grounding: { version: 1, sourceHash: source.sourceHash,
+      model: "fixture", acceptedText: anchor.text, evidence: [{ anchorId: anchor.id, quote: anchor.text }] } }));
+  const input = { source, profile, evidencePolicyVersion: 3 as const, edits: [],
+    claims: anchors.map((anchor, index) => ({ anchorId: anchor.id, text: anchor.text, factIds: [`accepted-${index}`] })) };
+  expect(validateSourcePlanEvidence(input)).toBe(true);
+  profile.facts[0].grounding!.sourceHash = "f".repeat(64);
+  expect(validateSourcePlanEvidence(input)).toBe(false);
+});
+
+it("rejects an accepted fact whose additional grounded excerpt comes from another employer", async () => {
+  const source = await parseDocxSource(await createDocxSourceFixture({ secondExperience: true }));
+  const profile = initialDemoState().profile;
+  const anchors = source.anchors.filter((anchor) => anchor.candidateClaim);
+  profile.facts = anchors.map((anchor, index) => ({ id: `accepted-${index}`, text: anchor.text, verified: false,
+    source: "resume", sourceAnchorId: anchor.id, status: "accepted", grounding: { version: 1, sourceHash: source.sourceHash,
+      model: "fixture", acceptedText: anchor.text, evidence: [{ anchorId: anchor.id, quote: anchor.text }] } }));
+  const first = anchors.findIndex((anchor) => anchor.kind === "bullet");
+  const other = anchors.find((anchor) => anchor.kind === "bullet" && anchor.entryId !== anchors[first].entryId)!;
+  profile.facts[first].grounding!.evidence.push({ anchorId: other.id, quote: other.text });
+  expect(validateSourcePlanEvidence({ source, profile, evidencePolicyVersion: 3, edits: [],
+    claims: anchors.map((anchor, index) => ({ anchorId: anchor.id, text: anchor.text, factIds: [`accepted-${index}`] })) })).toBe(false);
+});

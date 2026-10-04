@@ -81,13 +81,13 @@ describe("ResumeComparison", () => {
     expect(markup).toContain("Original wording");
     expect(markup).toContain(changedAnchor.text);
     expect(markup).toContain(fact.text);
-    expect(markup).toContain("Confirmed profile fact");
+    expect(markup).toContain("Available profile fact");
     expect(markup).toContain("Layout check passed");
     expect(markup).toContain("1 page");
     expect(markup).toContain(source.format.toUpperCase());
   });
 
-  it("shows precise latest grounding blockers and routes fact confirmation to the profile", async () => {
+  it("shows precise latest grounding blockers and routes source corrections to the profile", async () => {
     const { profile, packet, changedAnchor } = await fixture();
     const diagnostics: ResumeDraftDiagnostics = {
       version: 1, outcome: "needs_information", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2,
@@ -101,7 +101,7 @@ describe("ResumeComparison", () => {
 
     expect(markup).toContain("Résumé needs more information");
     expect(markup).toContain("Evidence is uncertain");
-    expect(markup).toContain("Conflicts with confirmed facts");
+    expect(markup).toContain("Conflicts with available profile facts");
     expect(markup).toContain("Confirm whether the project reached production.");
     expect(markup).toContain("Review profile facts");
   });

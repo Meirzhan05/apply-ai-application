@@ -1,6 +1,6 @@
 import { prepareAutonomousFormEssays } from "@/lib/autonomous-essays";
 import { withModelUsageContext } from "@/lib/model-usage";
-import { assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
+import { autonomyProfileHash, assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
 import { queueAutonomousSubmission, saveAutonomousSubmission } from "@/lib/autonomous-application";
 import { hashJson, newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
@@ -12,6 +12,7 @@ import { sendActionNeeded } from "@/lib/email";
 import { writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { browserQuestions } from "@/lib/browser-questions";
 import { recordBrowserUsageEvent, withBrowserUsageContext } from "@/lib/browser-usage";
+import { rememberPersonalAnswer } from "@/lib/profile-memory";
 import { formDigest, setFormSnapshot, setPacket, transition } from "@/lib/workflow";
 import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBlockers } from "@/lib/application-blockers";
 import { importedAutonomyJob } from "@/lib/import-compatibility";
@@ -25,7 +26,7 @@ export type RunPayload = { userId: string; applicationId: string; runToken?: str
 
 async function assertTailoringSourceReady(profile: Profile): Promise<void> {
   if (!profile.resumeSource || !profile.resumeFileName)
-    throw new Error("Upload and confirm your original PDF or DOCX résumé before tailoring. Choose the original-résumé setting only when you want to attach unchanged source bytes.");
+    throw new Error("Upload your original PDF or DOCX résumé and wait for fact extraction before tailoring. Choose the original-résumé setting only when you want to attach unchanged source bytes.");
   const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
   if (!profile.resumeSourceDocument)
     throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
@@ -131,7 +132,7 @@ async function currentDraftRun(userId: string, applicationId: string, runToken: 
     const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     const eligibilityJob = importedAutonomyJob(app, job);
-    if (Boolean(app.autonomousAuthorization) !== expected.autonomous || hashJson(state.profile) !== expected.profileHash ||
+    if (Boolean(app.autonomousAuthorization) !== expected.autonomous || autonomyProfileHash(state.profile) !== expected.profileHash ||
       hashJson(eligibilityJob) !== expected.jobHash || app.packetHash !== expected.packetHash || hashJson(app.packet ?? null) !== expected.packetContentHash)
       throw new Error("The profile, job, or prior packet changed before provider work. Start a new draft.");
     assertJobEligible(state.profile, eligibilityJob);
@@ -175,7 +176,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");
     const expectedRunInputs = {
       claimedAt: app.runWorkerClaimedAt,
-      profileHash: hashJson(state.profile),
+      profileHash: autonomyProfileHash(state.profile),
       jobHash: hashJson(eligibilityJob),
       packetHash: app.packetHash,
       packetContentHash: hashJson(app.packet ?? null),
@@ -183,7 +184,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     };
     const beforeModelCall = () => currentDraftRun(userId, applicationId, runToken, expectedRunInputs);
     await beforeModelCall();
-    const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, eligibilityJob, app.packet, { resumeFormat: "latex", deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
+    const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, eligibilityJob, app.packet, { resumeFormat: "latex", personalValues: app.profileMemoryVersion === state.profile.automationVersion ? app.profileMemory : undefined, deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
     await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "drafting" || target.runToken !== runToken) return;
@@ -305,6 +306,11 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       validatePacket(current.profile, target.packet!);
+      for (const answer of target.autonomousHumanAnswers ?? []) {
+        const field = result.form.fields.find(item => item.identifier === answer.question.identifier && item.label === answer.question.label && item.kind === answer.question.kind);
+        if (["text", "email", "tel", "url"].includes(answer.question.kind) && field?.valid !== false && field?.value === answer.value)
+          rememberPersonalAnswer(current.profile, applicationId, answer.question.label, answer.value);
+      }
       target.browserSessionId = result.sessionId;
       target.browserProvider = result.provider;
       target.browserSessionExpiresAt = result.expiresAt;

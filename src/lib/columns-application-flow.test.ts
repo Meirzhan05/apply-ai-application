@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -14,6 +15,14 @@ const flow = vi.hoisted(() => ({
   layoutMode: "none" as "none" | "repair" | "exhaust",
   layoutRepairCount: 0,
 }));
+
+vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(), extractResumeProfile: async () => [] }));
+vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
+  (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
+vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {
+  const actual = await importOriginal<typeof import("@/lib/resume-extraction-jobs")>();
+  return { ...actual, dispatchResumeExtraction: async (userId: string, requestId: string) => actual.runResumeExtraction({ userId, requestId }) };
+});
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
   flow.tasks.push({ task, payload }); return { id: `dispatch-${flow.tasks.length}` };
@@ -174,7 +183,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], `source.${format}`, { type: mimeType }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
+  expect(upload.status, await upload.clone().text()).toBe(202);
   const source = flow.state!.profile.resumeSourceDocument!;
   expect(source.support).toMatchObject({ status: "candidate" });
   expect(source.text).toContain("Orbit Labs — Search Engineer, 2023–2024");
@@ -184,10 +193,10 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   if (format === "pdf") expect((source as { layout: { columns: number; pageCount: number } }).layout).toMatchObject({ columns: 2, pageCount: 2 });
   else expect((source as { layout: { columns: number } }).layout.columns).toBe(2);
 
-  const confirmedFacts = flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const confirmedFacts = flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId);
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
-  expect(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  expect(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every(isUsableFact)).toBe(true);
 
   flow.demo = false;
   const selected = await publicAction("select", { jobId: flow.state!.jobs[0].id });
@@ -260,7 +269,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   expect(orbitLayout!.readingOrder).toBeLessThan(campusLayout!.readingOrder);
   const sourceFacts = new Map(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => [fact.id, fact.sourceAnchorId]));
   const confirmedContinuationFact = flow.state!.profile.facts.find((fact) => fact.sourceAnchorId === continuation!.id);
-  expect(confirmedContinuationFact?.verified).toBe(true);
+  expect(confirmedContinuationFact && isUsableFact(confirmedContinuationFact)).toBe(true);
   expect(flow.editClaims.every((claim) => claim.factIds.every((id) => sourceFacts.get(id) === claim.anchorId))).toBe(true);
 
   const essayIndex = application.packet!.answers.findIndex((answer) => answer.aiDraft);

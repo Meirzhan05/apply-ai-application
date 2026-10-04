@@ -1,3 +1,4 @@
+import { isUsableFact } from "../src/lib/fact-evidence";
 import { withModelUsageContext } from "../src/lib/model-usage";
 import { newId } from "../src/lib/crypto";
 import { task } from "@trigger.dev/sdk";
@@ -20,7 +21,7 @@ function authorizationContext(profile: Awaited<ReturnType<typeof loadState>>["pr
   return JSON.stringify({
     status: profile.automationAuthorization?.status ?? null,
     version: profile.automationAuthorization?.version ?? null,
-    facts: profile.facts.map((fact) => ({ id: fact.id, text: fact.text, verified: fact.verified })),
+    facts: profile.facts.map((fact) => ({ id: fact.id, text: fact.text, verified: isUsableFact(fact) })),
   });
 }
 
@@ -39,7 +40,7 @@ export const assessUserMatches = task({
     const runId = options?.ctx.run.id ?? newId();
     if (!process.env.OPENAI_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
-    if (!state.profile.facts.some((fact) => fact.verified)) return { assessed: 0 };
+    if (!state.profile.facts.some(isUsableFact)) return { assessed: 0 };
     if (continuationToken) {
       const marker = state.discovery?.matchContinuation;
       if (!marker || marker.token !== continuationToken || marker.profileUpdatedAt !== state.profile.updatedAt)

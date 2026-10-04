@@ -3,7 +3,8 @@ import type { MatchCollection, MatchFilter } from "./match-view";
 export type BrowseView = { collection: MatchCollection; filter: MatchFilter; search: string; sort: "relevant" | "newest" };
 export type ImportDraft = { url: string; company: string; title: string; location: string };
 export const emptyImport: ImportDraft = { url: "", company: "", title: "", location: "" };
-type MatchesSession = { view: BrowseView; draft: ImportDraft; importOpen: boolean };
+export const dismissalReasons = ["", "Wrong role", "Location is not right", "Experience level is not right", "Not interested in this employer", "Other"];
+type MatchesSession = { view: BrowseView; draft: ImportDraft; importOpen: boolean; shortcutsEnabled?: boolean; dismissDraft?: { jobId: string; reason: string; open: boolean } };
 type SessionStore = Pick<Storage, "getItem" | "setItem">;
 
 const key = (owner: string) => `apply-ai:matches:${owner}`;
@@ -16,6 +17,8 @@ export function readMatchesSession(storage: SessionStore, owner: string): Matche
     const view = stored.view ?? {};
     const draft = stored.draft ?? {};
     const fields = { url: text(draft.url, 2048), company: text(draft.company, 120), title: text(draft.title, 160), location: text(draft.location, 160) };
+    const reason = stored.dismissDraft;
+    const validReason = reason && typeof reason.jobId === "string" && reason.jobId.length > 0 && reason.jobId.length <= 200 && dismissalReasons.includes(reason.reason);
     return {
       view: {
         collection: ["all", "saved", "dismissed"].includes(view.collection) ? view.collection : "all",
@@ -25,6 +28,8 @@ export function readMatchesSession(storage: SessionStore, owner: string): Matche
       },
       draft: fields,
       importOpen: stored.importOpen === true && Object.values(fields).some(value => value.trim()),
+      ...(typeof stored.shortcutsEnabled === "boolean" ? { shortcutsEnabled: stored.shortcutsEnabled } : {}),
+      ...(validReason ? { dismissDraft: { jobId: reason.jobId, reason: reason.reason, open: reason.open === true } } : {}),
     };
   } catch { return null; }
 }
@@ -32,6 +37,6 @@ export function readMatchesSession(storage: SessionStore, owner: string): Matche
 export function writeMatchesSession(storage: SessionStore, owner: string, session: MatchesSession): void {
   try {
     const hasDraft = Object.values(session.draft).some(value => value.trim());
-    storage.setItem(key(owner), JSON.stringify({ version: 1, view: session.view, ...(hasDraft ? { draft: session.draft, importOpen: session.importOpen } : {}) }));
+    storage.setItem(key(owner), JSON.stringify({ version: 1, view: session.view, ...(hasDraft ? { draft: session.draft, importOpen: session.importOpen } : {}), ...(typeof session.shortcutsEnabled === "boolean" ? { shortcutsEnabled: session.shortcutsEnabled } : {}), ...(session.dismissDraft ? { dismissDraft: session.dismissDraft } : {}) }));
   } catch { /* The interface remains usable when session storage is unavailable. */ }
 }

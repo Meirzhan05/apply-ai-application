@@ -29,9 +29,12 @@ export function createWorkspaceRefresh<T>(onState: (state: T) => void, onConnect
         cache: "no-store",
         signal: abort.signal,
         headers: conditional && etag ? { "If-None-Match": etag } : {},
-      });
+      }).catch(() => { throw new Error("Workspace updates could not be reached. Check your connection and try again."); });
       if (response.status === 304 && state !== undefined) { if (running && !abort.signal.aborted) connected(); return state; }
-      const body = await response.json();
+      if (response.status === 401) throw new Error("AUTH_REQUIRED");
+      const unreadable = "The workspace response could not be read. Try refreshing your workspace; the last received data is preserved.";
+      const body = await response.json().catch(() => { throw new Error(unreadable); });
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(unreadable);
       if (!response.ok) throw new Error(body.error || "Could not load workspace.");
       if (running && !abort.signal.aborted) {
         connected();

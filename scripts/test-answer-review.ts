@@ -1,3 +1,4 @@
+import { saveOnboarding } from "../src/lib/onboarding";
 import { applyFactCorrection } from "../src/lib/fact-corrections";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
@@ -16,7 +17,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   await mkdir(".data", { recursive: true });
   try {
-    for (const [label, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
+    for (const [label, width, height] of ([["desktop", 1440, 1000], ["mobile", 390, 844], ["narrow", 320, 740]] as const).filter(([label]) => !process.env.TEST_VIEWPORT || label === process.env.TEST_VIEWPORT)) {
       const state = initialDemoState();
       const app = selectApplication(state, state.jobs[0].id, state.profile.id);
       const fact = state.profile.facts[0];
@@ -30,7 +31,8 @@ async function main() {
       page.on("pageerror", (error) => failures.push(error.message));
       await page.route("**/api/state", (route) => route.fulfill({ json: publicState(state) }));
       await page.route("**/api/status", (route) => route.fulfill({ contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(publicState(state))}\n\n` }));
-      let confirmations = 0; let failFactSave = true;
+      let confirmations = 0; let failFactSave = true; let failAnswerSave = true;
+      let failAmbiguousAnswerSave = false; let answerSaveRequests = 0;
       let edits = 0;
       await page.route("**/api/actions", async (route) => {
         const { action, payload } = route.request().postDataJSON();
@@ -51,8 +53,11 @@ async function main() {
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, answers }));
         } else if (action === "profile") {
           if (failFactSave) { failFactSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
-          state.profile.facts = applyFactCorrection(state.profile.facts, payload.factPatch);
+          saveOnboarding(state.profile, { facts: applyFactCorrection(state.profile.facts, payload.factPatch) });
         } else if (action === "editPacket") {
+          answerSaveRequests++;
+          if (failAmbiguousAnswerSave) { failAmbiguousAnswerSave = false; return route.fulfill({ status: 502, contentType: "text/html", body: "<html>Temporary gateway failure</html>" }); }
+          if (failAnswerSave) { failAnswerSave = false; return route.fulfill({ status: 503, json: { error: "The save service is temporarily unavailable. Try again in a moment." } }); }
           const answers = applyHumanAnswerEdits(app.packet!.answers, payload.answers);
           setPacket(state, app, await withPacketFiles(state.profile, { ...app.packet!, version: app.packet!.version + 1, profileHash: packetProfileHash(state.profile), answers }));
           edits++;
@@ -74,10 +79,17 @@ async function main() {
       const summaryBox = await orientation.boundingBox(); const resumeBox = await page.locator(".resume-preview").boundingBox();
       assert.ok(summaryBox && resumeBox && summaryBox.y < resumeBox.y, "Remaining tasks must precede the document review");
       assert.ok(summaryBox.y < height, "The task summary must begin in the first viewport");
-      if (width <= 650) assert.ok(summaryBox.y + summaryBox.height <= height - 100, "The pending tasks must fit on phone with space to begin reviewing");
+      if (width <= 650) {
+        if (summaryBox.y + summaryBox.height > height - 100) await page.screenshot({ path: `.data/answer-review-layout-failure-${label}.png`, fullPage: false });
+        assert.ok(summaryBox.y + summaryBox.height <= height - 100, `The pending tasks must fit on phone with space to begin reviewing (bottom ${summaryBox.y + summaryBox.height}px; limit ${height - 100}px)`);
+      }
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), true);
       assert.equal(await humanInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await humanInput.inputValue(), "");
+      const formatHint = page.getByText("Answer Yes or No. Add details only if the question asks for them.", { exact: true });
+      assert.equal(await formatHint.isVisible(), true);
+      assert.equal(await humanInput.getAttribute("aria-describedby"), await formatHint.getAttribute("id"));
+      assert.equal(await page.getByText("Your answer is needed", { exact: true }).isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByText("Before approving", { exact: true }).waitFor();
       assert.equal(await page.locator(".packet-readiness").getByRole("link", { name: "Answer 1 personal question" }).count(), 1);
@@ -97,19 +109,52 @@ async function main() {
       assert.equal(await orientation.getByRole("link", { name: "1 personal answer", exact: true }).count(), 0, "An entered answer needs saving rather than answering again");
       await page.getByRole("link", { name: "Save your changed answers" }).waitFor();
       assert.equal(await page.getByRole("button", { name: "Confirm essay", exact: true }).isDisabled(), true, "Unsaved answers must be saved first");
-      await page.getByRole("button", { name: "Save my answers", exact: true }).click();
+      const saveAnswers = page.getByRole("button", { name: "Save my answers", exact: true });
+      await saveAnswers.focus(); await saveAnswers.press("Enter");
+      const localError = page.locator(".packet-readiness .application-save-error"); await localError.waitFor();
+      assert.equal(await page.locator(".inline-error").count(), 0, "Local save recovery must not compete with global refresh guidance");
+      await page.waitForFunction(id => document.activeElement?.id === id, `save-answers-${app.id}`);
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
+      const errorBox = await localError.boundingBox(); const viewport = page.viewportSize()!;
+      assert.ok(errorBox && errorBox.y >= 0 && errorBox.y + errorBox.height <= viewport.height, "Save failure must be visible beside the initiating action");
+      await saveAnswers.click();
       await page.getByRole("button", { name: "Confirm essay", exact: true }).waitFor();
       await page.waitForFunction(() => !(document.querySelector(".screening-answer button") as HTMLButtonElement)?.disabled);
       assert.equal(edits, 1);
       await page.getByText("Your answers are saved.", { exact: true }).waitFor();
+      await humanInput.fill("A newer unsaved answer");
+      assert.equal(await page.getByText("Your answers are saved.", { exact: true }).count(), 0, "Previous success must not contradict a newer unsaved draft");
+      await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
       assert.equal(await essayInput.inputValue(), essay.answer);
+      await humanInput.fill("A draft with an uncertain save outcome");
+      failAmbiguousAnswerSave = true;
+      await saveAnswers.click();
+      const workspaceError = page.locator(".inline-error");
+      await workspaceError.waitFor();
+      assert.match(await workspaceError.innerText(), /Refresh your workspace to check the latest status/);
+      assert.equal(await localError.count(), 0, "An uncertain outcome needs workspace recovery, not a contradictory local save retry");
+      assert.equal(await humanInput.inputValue(), "A draft with an uncertain save outcome");
+      const requestsBeforeCheck = answerSaveRequests;
+      await saveAnswers.click();
+      assert.equal(answerSaveRequests, requestsBeforeCheck, "An uncertain save must not be repeated before checking the workspace");
+      await workspaceError.getByRole("button", { name: "Refresh workspace", exact: true }).click();
+      await workspaceError.waitFor({ state: "hidden" });
+      assert.equal(await humanInput.inputValue(), "A draft with an uncertain save outcome", "Checking saved state must preserve the local draft");
+      await page.getByRole("button", { name: "Cancel answer changes", exact: true }).click();
+      assert.equal(await humanInput.inputValue(), "My own verified answer");
       await page.getByRole("button", { name: "Confirm essay", exact: true }).click();
       await page.getByText("AI essay · confirmed by you", { exact: true }).waitFor();
       await page.waitForFunction(id => document.activeElement?.id === `readiness-${id}`, app.id);
       assert.equal(confirmations, 1);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), false);
       assert.equal(app.approvals.length, 0);
-      await page.getByRole("button", { name: "Edit wording", exact: true }).click();
+      const editWording = page.getByRole("button", { name: "Edit wording", exact: true });
+      await editWording.focus(); await editWording.press("Enter");
+      assert.equal(await essayInput.evaluate(element => element === document.activeElement), true, "Keyboard editing must enter the textarea");
+      await page.getByRole("button", { name: "Cancel editing", exact: true }).click();
+      assert.equal(await editWording.evaluate(element => element === document.activeElement), true, "Cancellation must restore the editing launcher");
+      await editWording.press("Enter");
       assert.equal(await essayInput.evaluate((el) => (el as HTMLTextAreaElement).readOnly), false);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await essayInput.fill("Discard this essay before correcting a fact.");
@@ -157,23 +202,39 @@ async function main() {
       assert.equal(await factInput.locator("..").getByRole("checkbox").isChecked(), false);
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await corrections.getByRole("alert").waitFor();
+      assert.equal(await page.locator(".inline-error").count(), 0, "Correction recovery must have one local instruction");
+      await page.waitForFunction(() => document.activeElement?.getAttribute("aria-describedby") === "correction-save-error");
+      const correctionError = await corrections.getByRole("alert").boundingBox();
+      assert.ok(correctionError && correctionError.y >= 0 && correctionError.y + correctionError.height <= height, "Correction save error must stay visible after failure");
+      await page.keyboard.press("Tab");
+      assert.equal(await corrections.getByRole("button", { name: "Cancel corrections", exact: true }).evaluate(element => element === document.activeElement), true);
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await corrections.getByRole("button", { name: "Save facts and return to application", exact: true }).evaluate(element => element === document.activeElement), true);
       assert.equal(await factInput.inputValue(), "Analyzed survey data in my Python coursework project");
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.text, fact.text);
       const checkboxWidth = await corrections.getByRole("checkbox").evaluate(element => element.getBoundingClientRect().width);
       assert.ok(checkboxWidth >= 16 && checkboxWidth <= 24, "Source confirmation must stay beside its label");
       await page.getByRole("button", { name: "Save facts and return to application", exact: true }).click();
       await page.locator(".materials-update").getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
+      assert.equal(await page.getByText("Source facts saved. Rebuild the materials and review them before approving.", { exact: true }).count(), 1, "Announce the source save once");
+      assert.equal(await page.locator(".packet-orientation span").count(), 0, "The top stale summary should link to the full explanation");
+      await page.locator(".packet-readiness").getByRole("link", { name: "Rebuild required after source changes", exact: true }).waitFor();
       assert.equal(state.profile.facts.find(item => item.id === fact.id)?.verified, false);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true);
       await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).waitFor();
       assert.equal(await page.locator(".packet-orientation a").count(), 1, "Only the available rebuild task should be linked while materials are stale");
       assert.equal(await page.locator(".packet-readiness").getByText("Ready for your approval", { exact: true }).count(), 0);
+      await page.reload();
+      await page.getByRole("button", { name: "Undo source fact changes", exact: true }).waitFor();
+      await page.getByText("Undo is available in this browser tab, including after a reload,", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Undo source fact changes", exact: true }).click();
-      await page.getByText("Source fact correction undone. Review your materials before approving.", { exact: true }).waitFor();
+      await page.locator(".materials-update").getByText("Source fact correction undone. Rebuild the materials and review them before approving.", { exact: true }).waitFor();
       assert.deepEqual(state.profile.facts.find(item => item.id === fact.id), fact);
       assert.deepEqual(state.profile.facts.filter(item => item.id !== fact.id), unrelatedFacts);
       assert.equal(await page.getByRole("button", { name: "Undo source fact changes", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "Rebuild materials from updated facts", exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "Approve materials for form filling", exact: true }).isDisabled(), true, "Undo must not imply materials are ready without rebuilding");
       assert.equal(app.approvals.length, 0);
       assert.deepEqual(failures, []);
       console.log(`PASS ${label}: editable essay with preserved original, fresh confirmation, contextual fact correction, separate approval, prerequisite guidance`);

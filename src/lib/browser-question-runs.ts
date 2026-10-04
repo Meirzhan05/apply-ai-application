@@ -1,3 +1,4 @@
+import { rememberPersonalAnswer } from "@/lib/profile-memory";
 import { withModelUsageContext } from "@/lib/model-usage";
 import { newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
@@ -95,6 +96,11 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
       target.browserQuestionRun = undefined;
       target.browserQuestionDrafts = undefined;
       setFormSnapshot(target, form);
+      for (const approval of approvals) {
+        const field = form.fields.find(item => item.identifier === approval.question.identifier && item.label === approval.question.label && item.kind === approval.question.kind);
+        if (approval.answer.author === "human" && ["text", "email", "tel", "url"].includes(approval.question.kind) && field?.valid !== false && field?.value === approval.answer.answer)
+          rememberPersonalAnswer(current.profile, applicationId, approval.question.label, approval.answer.answer);
+      }
       current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: form.readyToSubmit === false ? "More input needed" : "Form ready for review", detail: job.title });
     }, context);
   } catch (error) {

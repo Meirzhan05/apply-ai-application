@@ -115,6 +115,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     const sections: PdfSourceRepresentation["sections"] = [];
     const textLines: string[] = [];
     const parsedPages: ParsedPage[] = [];
+    const linksByPage = new Map<number, Array<{ url: string; left: number; right: number; top: number; bottom: number }>>();
     const pageLayouts: ResumeSourcePageLayout[] = [];
     let firstPageSize = { width: 0, height: 0 };
     let margins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -128,6 +129,12 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         reason = appendReason(reason, "A PDF page exceeds the bounded page-size profile. Use standard résumé page dimensions; no pages or text were removed.");
       if (pageNumber === 1) firstPageSize = { width: round(viewport.width), height: round(viewport.height) };
 
+      const linkAnnotations = (await page.getAnnotations({ intent: "display" })).flatMap(annotation => {
+        if (annotation.subtype !== "Link" || typeof annotation.url !== "string" || annotation.url.length > 2048 || !Array.isArray(annotation.rect)) return [];
+        const [x1, y1, x2, y2] = annotation.rect as number[];
+        return [{ url: annotation.url, left: Math.min(x1, x2), right: Math.max(x1, x2), top: viewport.height - Math.max(y1, y2), bottom: viewport.height - Math.min(y1, y2) }];
+      });
+      linksByPage.set(pageNumber, linkAnnotations);
       const content = await page.getTextContent({ includeMarkedContent: false, disableNormalization: false });
       const operatorList = await page.getOperatorList({ intent: "display" });
       const showText = operatorList.fnArray.flatMap((operation, index) => operation === OPS.showText ? [operatorList.argsArray[index]?.[0] as Array<{ unicode?: string }> | undefined] : []).filter((value): value is Array<{ unicode?: string }> => Boolean(value));
@@ -268,6 +275,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     let entryHasBullet = false;
     let currentColumnId: string | undefined;
     let readingOrder = 0;
+    let previousBulletLine: { item: LocatedItem; anchor: PdfSourceAnchor; bullet: PdfSourceAnchor } | undefined;
     for (const page of parsedPages) {
       const pageItems: string[] = [];
       let seenBodyItem = false;
@@ -295,7 +303,21 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         if (!repeatedRole) seenBodyItem = true;
         const claimText = clean(rawText.slice(prefix.length));
         const isHeading = isResumeSectionHeading(claimText);
-        if (!repeatedRole && isHeading) {
+        const previous = previousBulletLine;
+        const size = Math.hypot(item.item.transform[0], item.item.transform[1]);
+        const lineGap = previous ? previous.item.baseline - item.baseline : 0;
+        // Conservatively associate wrapped body text, retaining every original operator.
+        const continuation = !repeatedRole && !isHeading && !isBullet && previous &&
+          previous.anchor.pageNumber === page.pageNumber && previous.anchor.regionId === regionId &&
+          previous.anchor.entryId === currentEntryId && previous.item.fontFamily === item.fontFamily &&
+          previous.item.bold === item.bold && previous.item.italic === item.italic && !item.bold &&
+          Math.abs(previous.anchor.font.sizePt - size) < 0.2 && lineGap >= size * 0.9 && lineGap <= size * 1.6 &&
+          item.left >= previous.bullet.boundsPt.left + (previous.bullet.bulletPrefix ? size * 0.4 : -1) &&
+          item.left <= previous.bullet.boundsPt.left + 30 && !/[.!?;:]$/.test(previous.anchor.text) &&
+          !/\b(?:19|20)\d{2}\s*[–—-]|\b(?:Inc\.?|LLC|Ltd\.?|Intern|Engineer|Manager|University)\b/i.test(claimText);
+        if (continuation) {
+          previous.bullet.editable = false;
+        } else if (!repeatedRole && isHeading) {
           activeSection = { id: `pdf-section-${hashJson([sourceHash, page.pageNumber, item.index, claimText]).slice(0, 12)}`, heading: claimText.replace(/:$/, ""), anchorIds: [] };
           sections.push(activeSection);
           currentEntryId = `pdf-entry-${hashJson([activeSection.id, "intro"]).slice(0, 12)}`;
@@ -321,7 +343,12 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
           boundsPt: { left: round(item.left), top: round(item.top), right: round(item.right), bottom: round(item.bottom) },
           showOperatorIndex: item.showOperatorIndex, operatorText: item.operatorText,
           operatorFingerprint, fontResourceName: item.item.fontName, styleHash: hashJson(styleFingerprint), font: { family: item.fontFamily || "unknown", sizePt: fontSize, bold: item.bold, italic: item.italic } };
+        const links = (linksByPage.get(page.pageNumber) ?? []).filter(link => Math.min(link.right, item.right) - Math.max(link.left, item.left) > 0 && Math.min(link.bottom, item.bottom) - Math.max(link.top, item.top) > 0)
+          .map(link => ({ label: claimText, url: link.url })).slice(0, 20);
+        if (links.length) anchor.links = links;
         anchors.push(anchor);
+        previousBulletLine = !repeatedRole && isBullet ? { item, anchor, bullet: anchor }
+          : continuation ? { item, anchor, bullet: previous.bullet } : undefined;
         activeSection.anchorIds.push(id);
         pageItems.push(`${separateBulletMarker ?? ""}${separateBulletMarker ? " " : ""}${rawText}`);
         if (!repeatedRole && isBullet) entryHasBullet = true;
@@ -348,7 +375,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     for (const anchor of anchors) if (nonClaimArtifacts.has(anchor.id)) anchor.candidateClaim = false;
     if (text.length > MAX_SOURCE_TEXT) throw new Error(`This PDF contains ${text.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported version; no text was dropped.`);
     if (!text) reason = appendReason(reason, "This PDF has no extractable text and appears scanned or image-only. Upload an editable DOCX; OCR and image reconstruction are not supported.");
-    if (!anchors.some((anchor) => anchor.candidateClaim)) reason = appendReason(reason, "This PDF has no clearly separated résumé claim text to confirm and preserve. Upload an editable DOCX with ordinary text paragraphs.");
+    if (!anchors.some((anchor) => anchor.candidateClaim)) reason = appendReason(reason, "This PDF has no clearly separated résumé claim text to extract and preserve. Upload an editable DOCX with ordinary text paragraphs.");
     const duplicateBullets = new Set(anchors.filter((anchor) => anchor.kind === "bullet").map((anchor) => anchor.sourceText).filter((value, index, all) => all.indexOf(value) !== index));
     if (duplicateBullets.size) {
       reason = appendReason(reason, "This PDF repeats identical résumé bullet text, so the source operator cannot be mapped unambiguously. Edit the duplicate wording in the source PDF or upload an editable DOCX.");

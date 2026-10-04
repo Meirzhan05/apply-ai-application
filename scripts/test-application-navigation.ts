@@ -18,6 +18,7 @@ async function main() {
   setPacket(state, first, { schemaVersion: 1, files: [{ kind: "resume", filename: "tailored-resume.pdf", mimeType: "application/pdf", sha256: "a".repeat(64), size: 1, factIds: [fact.id] }], version: 1, createdAt: new Date().toISOString(), model: "fixture", summary: "Navigation verification", profileHash: packetProfileHash(state.profile), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [{ question: "Are you legally authorized to work in the United States?", answer: "", author: "human", factIds: [], requiresUserInput: true }] });
   const other = state.applications[1];
   setPacket(state, other, { ...structuredClone(first.packet!), answers: [{ ...first.packet!.answers[0], answer: "Other employer answer", userProvided: true, requiresUserInput: false }] });
+  other.updatedAt = new Date(Date.now() + 60_000).toISOString();
   assert.equal(applyHumanAnswerEdits(other.packet!.answers, [{ ...first.packet!.answers[0], answer: "Misplaced answer" }])[0].answer, "Misplaced answer", "Matching questions alone cannot establish application ownership");
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
   try {
@@ -37,7 +38,8 @@ async function main() {
       });
       await page.goto(process.env.TEST_DASHBOARD_URL || "http://localhost:3126");
       await page.getByRole("button", { name: "Applications", exact: true }).click();
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      assert.equal(await page.getByText("Review your materials before the agent fills a form. Review the filled form before submission.", { exact: true }).isVisible(), true, "Phone entry must retain the two-stage approval explanation");
+      await page.getByText("Find applications", { exact: true }).click();
       const appSearch = page.getByRole("searchbox", { name: "Search applications", exact: true });
       await appSearch.fill("Employer 2");
       await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
@@ -48,8 +50,24 @@ async function main() {
       assert.match(await page.locator(".application-active-view").innerText(), /Search: “Employer 2” · 1 of 6 applications/);
       await page.getByRole("button", { name: "Clear application filters", exact: true }).click();
       assert.equal(await page.locator(".application-collection option").count(), 6);
-      await page.getByText("Find or filter applications", { exact: true }).click();
+      await page.getByText("Find applications", { exact: true }).click();
       assert.equal(await appSearch.inputValue(), "", "The visible reset must clear the restored search");
+      const order = page.getByRole("combobox", { name: "Order within stages", exact: true });
+      assert.ok((await order.boundingBox())!.height >= 44, "Application ordering needs a usable touch target");
+      await order.selectOption("recent");
+      assert.equal(await page.locator("#application-choice option").first().getAttribute("value"), other.id, "Recent activity orders applications within their stage");
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "Changing order must retain the selected employer");
+      await page.reload();
+      await page.getByText("Find applications", { exact: true }).click();
+      assert.equal(await order.inputValue(), "recent", "Application order survives reload");
+      await order.selectOption("stage");
+      await appSearch.fill("Employer 2");
+      await page.getByRole("heading", { name: "Application role 2", exact: true }).waitFor();
+      await appSearch.fill("");
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "Clearing search should preserve a still-matching selection");
+      await page.getByRole("button", { name: "Needs your review (2)", exact: true }).click();
+      assert.equal(await page.getByRole("heading", { name: "Application role 2", exact: true }).isVisible(), true, "A filter should preserve the current application when it still matches");
+      await page.getByRole("button", { name: "All applications (6)", exact: true }).click();
       await appSearch.fill("No such employer");
       await page.getByRole("heading", { name: "No applications match this view", exact: true }).waitFor();
       await page.getByRole("button", { name: "Show all applications", exact: true }).click();
@@ -64,6 +82,7 @@ async function main() {
       await page.keyboard.press("k");
       await page.getByRole("heading", { name: "Application role 1", exact: true }).waitFor();
       await page.keyboard.press("/");
+      await page.waitForFunction(() => document.activeElement?.id === "application-search");
       assert.equal(await appSearch.evaluate(element => element === document.activeElement), true);
       await appSearch.fill("j");
       assert.equal(await appSearch.inputValue(), "j", "Shortcuts must pause while typing");
@@ -72,20 +91,20 @@ async function main() {
       const help = page.locator("#applications-help");
       const helpSearch = help.getByRole("searchbox", { name: "Find help for a task", exact: true });
       assert.equal(await help.locator(".help-task-group").count(), 3);
-      for (const query of ["sources", "source facts", "submission"]) {
+      for (const query of ["sources", "source facts", "submission", "shortcuts", "keyboard", "keys", "error", "failed", "retry", "unavailable"]) {
         await helpSearch.fill(query);
         assert.equal(await help.getByText("No matching topic.", { exact: false }).count(), 0, `Suggested query ${query} must find guidance`);
         assert.ok(await help.locator(".help-task-group details").count() > 0);
+        assert.equal(await help.locator(".help-task-group details:not([open])").count(), 0, "Matching instructions should be visible immediately");
       }
       await helpSearch.fill("consent");
       assert.equal(await help.getByText("1 topic", { exact: true }).isVisible(), true);
-      await help.getByText("Answer personal or consent questions", { exact: true }).click();
       await help.getByText(/The agent does not infer work authorization/).waitFor();
       await helpSearch.fill("no-matching-help");
       await help.getByRole("button", { name: "Show all help", exact: true }).click();
       await help.locator(":scope > summary").click();
       const picker = page.getByRole("combobox", { name: "Choose application", exact: true });
-      assert.match((await page.locator("#application-choice option").first().textContent()) ?? "", /Application role 1 · Employer 1 · Review materials/);
+      assert.match((await page.locator("#application-choice option").first().textContent()) ?? "", /Employer 1 · Application role 1 · Review materials/);
       if (width <= 900) {
         assert.equal(await page.getByText("Application 1 of 6", { exact: true }).isVisible(), true);
         assert.equal(await page.getByRole("button", { name: "Previous application", exact: true }).isDisabled(), true);
@@ -101,6 +120,7 @@ async function main() {
         await page.getByRole("heading", { name: "Application role 5", exact: true }).waitFor();
         await picker.selectOption(first.id);
       } else {
+        await page.locator(".application-stage-group > summary").filter({ hasText: "Completed attempts" }).click();
         await page.locator(".app-list-item").nth(5).click();
         await page.getByRole("heading", { name: "Application role 6", exact: true }).waitFor();
         assert.equal(await page.locator('.app-list-item[aria-pressed="true"]').count(), 1);
@@ -108,6 +128,7 @@ async function main() {
         assert.equal(await page.locator('.progress [aria-current="step"]').count(), 0);
         assert.equal(await page.locator('.progress-desktop').getByText("Submission confirmed", { exact: true }).isVisible(), true);
 
+        await page.locator(".application-stage-group > summary").filter({ hasText: "Materials" }).click();
         await page.locator(".app-list-item").first().click();
       }
       await page.getByLabel(first.packet!.answers[0].question, { exact: true }).fill("Unsaved applicant answer");
@@ -144,4 +165,4 @@ async function main() {
     }
   } finally { await browser.close(); }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => { console.error(error); process.exitCode = 1; });

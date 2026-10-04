@@ -10,9 +10,15 @@ import { renderPdfSourceBytes } from "@/lib/pdf-renderer";
 import { ResumeRendererDiagnosticError } from "@/lib/resume-renderer-diagnostics";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import OpenAI from "openai";
 
 const mocks = vi.hoisted(() => ({ parse: vi.fn() }));
-vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; } }));
+vi.mock("openai", async importOriginal => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return { ...actual, default: class extends actual.default {
+    constructor(...args: ConstructorParameters<typeof actual.default>) { super(...args); this.responses.parse = mocks.parse; }
+  } };
+});
 
 async function fixture() {
   const state = initialDemoState();
@@ -83,7 +89,62 @@ it("gives the writer full source context and saves an anchored, grounded edit pl
   expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
 });
 
-it("asks for confirmation of source claims before writing and never treats source text as evidence", async () => {
+it("recovers a grounding timeout without rewriting the valid resume or consuming a repair", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockImplementationOnce(async request => sourcePlanResponse(request as never))
+    .mockRejectedValueOnce(new OpenAI.APIConnectionTimeoutError())
+    .mockImplementationOnce(async request => auditResponse(request as never));
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 180_000);
+  expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
+  expect(mocks.parse.mock.calls.filter(([r]) => r.text.format.name === "anchored_resume_edit_plan")).toHaveLength(1);
+  expect(mocks.parse.mock.calls.every(([, options]) => options.timeout > 45_000)).toBe(true);
+});
+
+it("retries a writer timeout without treating the same request as a factual repair", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockRejectedValueOnce(new OpenAI.APIConnectionTimeoutError())
+    .mockImplementationOnce(async request => sourcePlanResponse(request as never))
+    .mockImplementationOnce(async request => auditResponse(request as never));
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 180_000);
+  expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
+});
+
+it("honors cancellation before retrying a timed-out model request", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockRejectedValue(new OpenAI.APIConnectionTimeoutError());
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 180_000, async () => {
+    if (mocks.parse.mock.calls.length) throw new Error("Application cancelled during the timeout.");
+  })).rejects.toMatchObject({ diagnostics: { technicalFailure: "other", writerAttempts: 1, checkerAttempts: 0, repairAttempts: 0 } });
+  expect(mocks.parse).toHaveBeenCalledTimes(1);
+});
+
+it("bounds repeated provider timeouts without exhausting the factual repair budget", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockRejectedValue(new OpenAI.APIConnectionTimeoutError());
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 180_000)).rejects.toMatchObject({ diagnostics: { technicalFailure: "provider", writerAttempts: 1, checkerAttempts: 0, repairAttempts: 0 } });
+  expect(mocks.parse).toHaveBeenCalledTimes(2);
+});
+
+it("checks a large resume in bounded batches and still audits every claim", async () => {
+  const { profile, job, source } = await fixture();
+  const bullet = source.anchors.find(a => a.kind === "bullet")!;
+  source.anchors = [...source.anchors.filter(a => a.id !== bullet.id), ...Array.from({ length: 24 }, (_, i) => ({ ...bullet, id: `large-bullet-${i}`, text: `Built component ${i}.` }))];
+  source.text = source.anchors.map(a => a.text).join("\n");
+  profile.facts = source.anchors.filter(a => a.candidateClaim).map((a, i) => ({ id: `large-fact-${i}`, text: a.text, source: "resume", verified: true, sourceAnchorId: a.id }));
+  mocks.parse.mockImplementation(async request => {
+    if (request.text.format.name === "anchored_resume_edit_plan") return { output_parsed: { edits: [] } };
+    const body = JSON.parse(request.input[1].content);
+    expect(body.claims.length).toBeLessThanOrEqual(10);
+    const ids = new Set(body.claims.map((c: { claimId: string }) => c.claimId));
+    expect(body.sourceActivityPreservationChecks.every((c: { sourceClaimId: string }) => ids.has(c.sourceClaimId))).toBe(true);
+    return auditResponse(request as never);
+  });
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 180_000);
+  expect(plan.grounding.findings.map(f => f.claimId).sort()).toEqual(plan.claims.map(c => c.anchorId).sort());
+  expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
+});
+
+it("requires usable source evidence before writing and never treats source text as verified evidence", async () => {
   const { profile, job, source } = await fixture();
   profile.facts[0].verified = false;
 

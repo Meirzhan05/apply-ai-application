@@ -1,3 +1,4 @@
+import { factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { hashJson } from "@/lib/crypto";
 import { ResumeDraftError } from "@/lib/resume-document";
 import { readOriginalResume, validateOriginalResume } from "@/lib/original-resume";
@@ -92,7 +93,7 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
     if (packet.schemaVersion !== 3 || !source || source.format !== "pdf" || source.support.status !== "candidate" || !plan || plan.format !== "pdf" ||
       !profile.resumeSource || profile.resumeSource.mimeType !== "application/pdf" || profile.resumeSource.sha256 !== source.sourceHash)
       throw new Error("The inspected PDF source is no longer available. Rebuild the packet from the confirmed original PDF.");
-    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    const factsHash = hashJson(factEvidenceSnapshot(profile.facts));
     const evidenceValid = validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) });
     const expectedPageCount = plan.sourceLayout?.pages.length ?? 1;
     const expectedLayoutPolicy = policyFor(plan);
@@ -126,7 +127,7 @@ export function validateResumeArtifact(profile: Profile, packet: ApplicationPack
     const source = profile.resumeSourceDocument;
     const plan = packet.resumeSourcePlan;
     if (packet.schemaVersion !== 3 || !source || source.support.status !== "candidate" || !plan || !profile.resumeSource) throw new Error("The inspected DOCX source is no longer available. Rebuild the packet.");
-    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    const factsHash = hashJson(factEvidenceSnapshot(profile.facts));
     const evidenceValid = validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) });
     if (plan.version !== 1 || plan.format !== "docx" || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
@@ -373,7 +374,7 @@ export async function reviewedResumeComparisonFiles(profile: Profile, packet: Ap
   if (!source || source.support.status !== "candidate" || source.sourceHash !== plan.sourceHash || profile.resumeSource?.sha256 !== plan.sourceHash) staleReasons.push("source");
   if (!source || source.format !== plan.format || source.version !== plan.representationVersion) staleReasons.push("representation");
   if (!source || !sourceLayoutMatchesPlan(plan, source)) staleReasons.push("layout");
-  const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+  const factsHash = hashJson(factEvidenceSnapshot(profile.facts));
   if (factsHash !== plan.factsHash) staleReasons.push("facts");
   if (hashJson(profile.automationSettings ?? null) !== plan.settingsHash) staleReasons.push("settings");
   if (sourceProfileHash(profile) !== plan.profileHash) staleReasons.push("profile");
@@ -409,7 +410,7 @@ function validateResumeArtifactInputs(profile: Profile, packet: ApplicationPacke
   const source = profile.resumeSourceDocument;
   const formatLabel = plan?.format === "pdf" ? "PDF" : "DOCX";
   if (!plan || !source || source.format !== plan.format || source.support.status !== "candidate" || plan.profileHash !== sourceProfileHash(profile) || plan.sourceHash !== source.sourceHash ||
-    plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) ||
+    plan.factsHash !== hashJson(factEvidenceSnapshot(profile.facts)) ||
     plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error(`The inspected ${formatLabel} source is unavailable or stale. Re-upload and confirm it before tailoring.`);
   if (!sourceLayoutMatchesPlan(plan, source)) throw new Error(`The inspected ${formatLabel} page/region map is missing, stale, or invalid. Re-upload and confirm it before tailoring.`);
   if (!validateSourcePlanEvidence({ source, profile, claims: plan.claims, edits: plan.edits, grounding: plan.grounding, evidencePolicyVersion: planEvidencePolicy(plan) }) ||

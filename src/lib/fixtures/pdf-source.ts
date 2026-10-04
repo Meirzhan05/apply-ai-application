@@ -3,7 +3,7 @@ import path from "node:path";
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFOperator, PDFOperatorNames, lineTo, moveTo, rgb, setFontAndSize, setLineWidth, setTextMatrix, stroke } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
-export async function createPdfSourceFixture(options: { pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; fragmentedSkillCategories?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
+export async function createPdfSourceFixture(options: { wrappedBullet?: boolean; continuationBold?: boolean; nextEmployer?: boolean; pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; fragmentedSkillCategories?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
   const pdf = await PDFDocument.create({ updateMetadata: false });
   pdf.registerFontkit(fontkit);
   const regular = await pdf.embedFont(await readFile(path.join(process.cwd(), "src/assets/fonts/NotoSans-Regular.ttf")), { subset: true });
@@ -23,7 +23,7 @@ export async function createPdfSourceFixture(options: { pages?: number; pageSize
     page.pushOperators(setLineWidth(0.75), moveTo(72, 658), lineTo(540, 658), stroke());
   }
   page.drawText("Orbit Labs · Machine Learning Engineer, 2024–2025", { x: 72, y: 646, size: 10, font: bold, color: rgb(0.12, 0.17, 0.24) });
-  const firstBullet = options.longBullet ?? "Built a search index for 1,200 users.";
+  const firstBullet = options.longBullet ?? (options.wrappedBullet ? "Built a search index" : "Built a search index for 1,200 users.");
   if (options.separateBulletMarker === "same-column") {
     page.drawText("•", { x: 84, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
     page.drawText(firstBullet, { x: 102, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
@@ -56,10 +56,12 @@ export async function createPdfSourceFixture(options: { pages?: number; pageSize
       PDFOperator.of(PDFOperatorNames.ShowTextAdjusted, [text]),
       setFontAndSize(tailFontName, 10), PDFOperator.of(PDFOperatorNames.ShowText, [bold.encodeText("kept")]), PDFOperator.of(PDFOperatorNames.EndText),
     );
-  } else page.drawText(options.longBullet ?? "• Built a search index for 1,200 users.", { x: 84, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
-  page.drawText("• Improved retrieval speed by 22%.", { x: 84, y: 614, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
-  page.drawText("Education", { x: 72, y: 578, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
-  page.drawText("B.S. Computer Science, expected 2026", { x: 72, y: 556, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  } else page.drawText(options.longBullet ?? (options.wrappedBullet ? "• Built a search index" : "• Built a search index for 1,200 users."), { x: 84, y: 630, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  if (options.wrappedBullet) page.drawText("for 1,200 users.", { x: options.separateBulletMarker === "same-column" ? 102 : 91.7, y: 618, size: 10, font: options.continuationBold ? bold : regular });
+  if (options.nextEmployer) page.drawText("Nova Inc. · Software Engineer, 2025–2026", { x: 72, y: 598, size: 10, font: bold });
+  page.drawText("• Improved retrieval speed by 22%.", { x: 84, y: options.nextEmployer ? 582 : options.wrappedBullet ? 602 : 614, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  page.drawText("Education", { x: 72, y: options.nextEmployer ? 554 : 578, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
+  page.drawText("B.S. Computer Science, expected 2026", { x: 72, y: options.nextEmployer ? 532 : 556, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   if (options.qualificationText) page.drawText(options.qualificationText, { x: 72, y: 536, size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   if (options.languages) {
     page.drawText("Languages", { x: 72, y: 512, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
