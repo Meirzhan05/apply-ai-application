@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { chromium, type Browser } from "playwright-core";
+import { chromium, type Browser, type Page } from "playwright-core";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { initialDemoState } from "../src/lib/demo-data";
@@ -16,6 +16,14 @@ if (production) assert.equal(process.env.ALLOW_PRODUCTION_ONBOARDING, "true", "S
 type User = { id: string; email: string; cookie: string; storageKey?: string };
 type DatabaseClient = SupabaseClient;
 type DisposableResources = { users: User[]; browser?: Browser };
+const viewports = { desktop: { width: 1440, height: 1000 }, tablet: { width: 768, height: 1024 }, mobile: { width: 390, height: 844 }, narrow: { width: 320, height: 740 } };
+type Viewport = keyof typeof viewports;
+
+async function captureStage(page: Page, label: Viewport, stage: string) {
+  const layout = await page.evaluate(() => ({ width: window.innerWidth, contentWidth: document.documentElement.scrollWidth }));
+  assert.ok(layout.contentWidth <= layout.width, `${label}/${stage} must not overflow horizontally.`);
+  await page.screenshot({ path: `/tmp/onboarding26-${label}-${stage}.png`, fullPage: true });
+}
 
 async function resumeBytes(): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
@@ -59,8 +67,8 @@ async function createUser(db: DatabaseClient, resources: DisposableResources, no
   return user;
 }
 
-async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label: "desktop" | "mobile") {
-  const page = await browser.newPage({ viewport: label === "desktop" ? { width: 1440, height: 1000 } : { width: 390, height: 844 } });
+async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label: Viewport) {
+  const page = await browser.newPage({ viewport: viewports[label], reducedMotion: "reduce" });
   try {
     await page.context().addCookies(user.cookie.split("; ").map((value) => { const [name, ...rest] = value.split("="); return { name, value: rest.join("="), url: origin }; }));
     await page.goto(origin, { waitUntil: "domcontentloaded" });
@@ -79,6 +87,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     });
     assert.equal(blockedSelection.status, 400, "Selecting a known job must remain gated before onboarding completion.");
     assert.match(String(blockedSelection.body.error), /required onboarding/i);
+    await captureStage(page, label, "resume");
     if (user.storageKey) {
       await page.getByRole("button", { name: "Use saved resume" }).click();
     } else {
@@ -96,9 +105,10 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     await page.getByLabel("Email", { exact: true }).fill(user.email);
     await page.getByLabel("Phone", { exact: true }).fill("+1 212 555 0100");
     await page.waitForTimeout(800);
-    await page.screenshot({ path: `/tmp/onboarding26-${label}-profile.png`, fullPage: true });
+    await captureStage(page, label, "profile");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("heading", { name: "Current Location" }).waitFor({ timeout: 30000 });
+    await page.waitForFunction(() => document.activeElement?.id === "answers-heading", undefined, { timeout: 15000 });
     await page.reload({ waitUntil: "domcontentloaded" });
     try {
       await page.getByRole("heading", { name: "Current Location" }).waitFor({ timeout: 15000 });
@@ -115,7 +125,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     await page.locator("#setup-workAuthorization").selectOption("yes");
     await page.locator("#setup-sponsorshipNow").selectOption("no");
     await page.locator("#setup-sponsorshipFuture").selectOption("no");
-    await page.screenshot({ path: `/tmp/onboarding26-${label}-answers.png`, fullPage: true });
+    await captureStage(page, label, "answers");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     const finish = page.getByRole("button", { name: "Finish onboarding", exact: true });
     await finish.waitFor({ state: "visible" });
@@ -124,7 +134,11 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
       console.error(`Finish remained disabled (${label}): ${await page.locator("body").innerText()}`);
       throw new Error("Finish onboarding remained disabled in the browser journey.");
     }
-    await page.screenshot({ path: `/tmp/onboarding26-${label}-review.png`, fullPage: true });
+    await page.getByRole("button", { name: "Edit professional information", exact: true }).click();
+    await page.getByRole("heading", { name: "Contact details", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await finish.waitFor({ state: "visible" });
+    await captureStage(page, label, "review");
     await finish.click();
     await page.waitForURL((url) => url.pathname === "/");
     const state = await page.evaluate(async () => (await fetch("/api/state", { cache: "no-store" })).json());
@@ -149,13 +163,11 @@ async function main() {
   const nonce = randomUUID();
   const resources: DisposableResources = { users: [] };
   try {
-    const users = [
-      await createUser(db, resources, nonce, 0, bytes, false),
-      await createUser(db, resources, nonce, 1, bytes, true),
-    ];
+    const labels: Viewport[] = process.env.TEST_ONBOARDING_RESPONSIVE === "true" ? ["desktop", "tablet", "mobile", "narrow"] : ["desktop", "mobile"];
+    const users: User[] = [];
+    for (const [index] of labels.entries()) users.push(await createUser(db, resources, nonce, index, bytes, index > 0));
     resources.browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
-    await runJourney(resources.browser, users[0], bytes, "desktop");
-    await runJourney(resources.browser, users[1], bytes, "mobile");
+    for (const [index, label] of labels.entries()) await runJourney(resources.browser, users[index], bytes, label);
     console.log(JSON.stringify({ passed: true, mandatoryEntry: true, savedProgress: true, resumeUpload: true, resumeReuse: true, completion: true, dashboardReload: true, employerSubmissions: 0 }));
   } finally {
     const cleanupErrors: string[] = [];
