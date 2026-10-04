@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { parse } = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock("openai", () => ({ default: class { responses = { parse }; } }));
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { draftAiEssay, draftEssayAnswers } from "@/lib/essay-drafting";
 import { confirmAiEssay, validateAiEssay } from "@/lib/answer-policy";
 import { draftPacket } from "@/lib/drafting";
@@ -23,6 +24,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe("AI essay generation", () => {
   it("drafts more than five essays in one application", async () => {
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     const questions: ScreeningAnswer[] = Array.from({ length: 6 }, (_, index) => ({ question: `Why are you interested in this role? Essay ${index}`, answer: "", factIds: [], author: "ai", requiresUserInput: true }));
     questions.forEach(() => successfulResponses());
     const drafts = await draftEssayAnswers(state.profile, state.jobs[0], questions);
@@ -33,8 +35,8 @@ describe("AI essay generation", () => {
 
   it("authorizes and binds more than five automatic essays to the observed form", async () => {
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     const profile = state.profile;
-    saveOnboarding(profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
     activateAutomation(profile, "Synthetic essay test");
     const questions: ScreeningAnswer[] = Array.from({ length: 6 }, (_, index) => ({ question: `Why are you interested in this role? Essay ${index}`, answer: "", factIds: [], author: "ai", requiresUserInput: true }));
     questions.forEach(() => successfulResponses());

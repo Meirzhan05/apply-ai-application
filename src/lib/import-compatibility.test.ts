@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
 import { authorizeKnownAnswerApplication, assertAutonomousDestination } from "@/lib/autonomous-policy";
 import { createImportedCompatibilityRecord, isControlledImportedFixture } from "@/lib/import-compatibility";
@@ -8,6 +9,7 @@ import type { AppState, FormSnapshot, Job } from "@/lib/types";
 
 const makeState = (): AppState => {
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
   activateAutomation(state.profile, "compatibility test");
   return state;

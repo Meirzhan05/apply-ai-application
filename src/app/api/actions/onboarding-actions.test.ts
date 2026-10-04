@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import type { AppState } from "@/lib/types";
 import { preparePilotMutation } from "@/lib/pilot";
 import { POST } from "@/app/api/actions/route";
 import { loadState } from "@/lib/repository";
 import { publicState } from "@/lib/public-state";
-import { draftPacket } from "@/lib/drafting";
+import { draftPacket, packetProfileHash } from "@/lib/drafting";
 import { selectApplication, setPacket } from "@/lib/workflow";
 
 const mocks = vi.hoisted(() => ({
@@ -73,7 +74,12 @@ describe("onboarding action boundary", () => {
   it("keeps optional location answers clearable and invalidates prior matching and materials after a profile save", async () => {
     const state = mocks.memory.get("owner-a")!;
     const app = selectApplication(state, state.jobs[0].id, "owner-a");
-    setPacket(state, app, await draftPacket(state.profile, state.jobs[0]));
+    const legacyDraftProfile = structuredClone(state.profile);
+    delete legacyDraftProfile.resumeSource;
+    delete legacyDraftProfile.resumeSourceDocument;
+    const legacyPacket = await draftPacket(legacyDraftProfile, state.jobs[0]);
+    legacyPacket.profileHash = packetProfileHash(state.profile);
+    setPacket(state, app, legacyPacket);
     state.profile.willingToRelocate = true;
     state.matchCache = { prior: publicState(state).matches[0].assessment };
     const response = await POST(new Request("http://localhost/api/actions", {
@@ -122,6 +128,8 @@ describe("onboarding action boundary", () => {
   });
 
   it("persists onboarding, activation, settings, and pause for one owner", async () => {
+    const owner = mocks.memory.get("owner-a")!;
+    owner.profile = completeOnboardingFixture(owner.profile);
     const facts = initialDemoState().profile.facts;
     const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {
       method: "POST",

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
+import { completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
 import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { AppState, Job } from "@/lib/types";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { parsePdfSource } from "@/lib/pdf-source";
 
 type Row = { user_id: string; data: Partial<AppState>; revision: number };
 const fixture = vi.hoisted(() => ({
@@ -150,7 +153,7 @@ vi.mock("@/lib/budget", () => ({
 }));
 vi.mock("@/lib/personal-search-provider", () => ({ discoverPersonalJobs: async (_profile: unknown, guard: () => Promise<void>) => {
   await guard();
-  return Array.from({ length: 4 }, (_, index) => ({ ...initialDemoState().jobs[0], id: `personal-${index}`, source: "greenhouse", sourceId: String(index), company: "Controlled", title: `Product Analyst ${index + 1}`, url: `https://jobs.example/product-${index}`, applyUrl: `https://jobs.example/product-${index}`, requirements: ["Python", "SQL"], description: "Product Analyst: Python and SQL", remote: false, location: "New York, NY", discoveredAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString(), importCheck: { status: "verified", checkedAt: new Date().toISOString() } }));
+  return Array.from({ length: 4 }, (_, index) => ({ ...initialDemoState().jobs[0], id: `personal-${index}`, source: "greenhouse", sourceId: String(index), company: "Controlled", title: `Product Analyst ${index + 1}`, url: `https://jobs.example/product-${index}`, applyUrl: `https://jobs.example/product-${index}`, requirements: ["Python", "SQL"], description: "Product Analyst: Python and SQL", remote: false, workArrangement: "on-site" as const, location: "New York, NY", discoveredAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString(), importCheck: { status: "verified", checkedAt: new Date().toISOString() } }));
 } }));
 vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, document: unknown) => ({ document, pdf: Buffer.from("%PDF-synthetic"), source: "synthetic-resume" }) }));
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, submitBrowser: fixture.submit, cancelBrowser: vi.fn().mockResolvedValue(undefined) }));
@@ -176,13 +179,13 @@ const runMatches = (payload: { userId: string }) => runMatchesTask(payload, { ct
 
 async function runPipeline(hoursAfterRefresh: number) {
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   state.profile.id = "owner-1";
   state.profile.workAuthorization = "Authorized to work in the US";
   state.profile.preferredTitles = ["Product Analyst"];
   state.profile.automationSettings!.resumeTailoring = false;
   saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
   activateAutomation(state.profile, "synthetic controlled discovery");
-  fixture.rows = [{ user_id: "owner-1", data: { ...state, jobs: [] }, revision: 1 }];
   fixture.jobs = [];
   fixture.files = new Map();
   fixture.leases = [];
@@ -191,6 +194,9 @@ async function runPipeline(hoursAfterRefresh: number) {
   fixture.files.set(originalKey, originalBytes);
   state.profile.resumeFileName = "source.pdf";
   state.profile.resumeSource = { storageKey: originalKey, sha256: createHash("sha256").update(originalBytes).digest("hex"), size: originalBytes.length, mimeType: "application/pdf" };
+  state.profile.resumeSourceDocument = await parsePdfSource(originalBytes);
+  state.profile = completeUploadedOnboardingFixture(state.profile);
+  fixture.rows = [{ user_id: "owner-1", data: { ...state, jobs: [] }, revision: 1 }];
   fixture.calls = [];
   fixture.trigger.mockImplementation(async (task: string, payload: Record<string, unknown>) => { fixture.calls.push({ task, payload }); return { id: `${task}-accepted` }; });
   fixture.prepare.mockImplementation(async (application: { packet?: { files?: Array<{ filename: string; size: number; sha256: string }> } }, job: Job, _profile: unknown, onSession: (session: Record<string, unknown>) => Promise<unknown>, onAction: (label: string) => Promise<unknown>) => {

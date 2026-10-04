@@ -9,6 +9,7 @@ vi.mock("@/lib/repository", () => ({
 vi.mock("@/lib/application-queue", () => ({ dispatchUserQueue: fixture.queue }));
 
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { authorizeKnownAnswerApplication } from "@/lib/autonomous-policy";
 import {
   activeApplicationBlockers,
@@ -27,10 +28,11 @@ function application(): Application {
 
 beforeEach(() => {
   fixture.state = initialDemoState();
+  fixture.state.profile = completeOnboardingFixture(fixture.state.profile);
   fixture.state.profile.automationAuthorization = {
     version: 1, status: "enabled", reason: "test", authorizedAt: new Date().toISOString(),
   };
-  fixture.state.profile.onboarding = { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, completedAt: new Date().toISOString() };
+  fixture.state.profile.onboarding = { ...fixture.state.profile.onboarding!, questionnaire: { ...fixture.state.profile.onboarding!.questionnaire, requiresSponsorship: "no" } };
   fixture.state.profile.automationSettings = { version: 1, resumeTailoring: true, coverLetterMode: "required-only", essayMode: "automatic-truthful" };
   fixture.queue.mockReset();
 });

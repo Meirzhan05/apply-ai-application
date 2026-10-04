@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
 import type { AppState } from "@/lib/types";
 
 const fixture = vi.hoisted(() => ({ state: undefined as AppState | undefined, browserAllocations: 0 }));
@@ -12,12 +13,17 @@ vi.mock("playwright-core", () => ({ chromium: { launch: async () => {
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn() }));
 
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { draftPacket } from "@/lib/drafting";
+import { packetProfileHash } from "@/lib/drafting";
 import { approveFill, approveSubmit, selectApplication, setPacket, transition } from "@/lib/workflow";
 import { runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { loadState } from "@/lib/repository";
 import { bytesHash } from "@/lib/resume-artifacts";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { parsePdfSource } from "@/lib/pdf-source";
+import { saveDemoOriginalResume } from "@/lib/original-resume";
 
 const posting = { id: 12345, absolute_url: "https://job-boards.greenhouse.io/example/jobs/12345", questions: [
   { label: "First Name", required: true, fields: [{ name: "first_name", type: "input_text" }] },
@@ -32,7 +38,16 @@ beforeEach(async () => {
   vi.stubEnv("ATS_SUBMISSION_INTEGRATIONS", JSON.stringify([{ provider: "greenhouse", board: "example", apiKey: "employer-test-key" }]));
   fixture.browserAllocations = 0;
   const state = initialDemoState();
+  const sourceBytes = await createPdfSourceFixture();
+  const sourceKey = `${state.profile.id}/${randomUUID()}.pdf`;
+  await saveDemoOriginalResume(sourceKey, sourceBytes);
+  state.profile.resumeFileName = "source.pdf";
+  state.profile.resumeSource = { storageKey: sourceKey, sha256: createHash("sha256").update(sourceBytes).digest("hex"), size: sourceBytes.length, mimeType: "application/pdf" };
+  state.profile.resumeSourceDocument = await parsePdfSource(sourceBytes);
+  state.profile = completeOnboardingFixture(state.profile);
+  state.profile.automationSettings!.resumeTailoring = false;
   const packet = await draftPacket(state.profile, state.jobs[0]); packet.answers = [];
+  packet.profileHash = packetProfileHash(state.profile);
   state.jobs[0] = { ...state.jobs[0], id: "greenhouse:example:12345", source: "greenhouse", sourceId: "12345",
     url: posting.absolute_url, applyUrl: posting.absolute_url };
   const app = selectApplication(state, state.jobs[0].id, state.profile.id);

@@ -26,6 +26,8 @@ vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, prefli
 import { latexFixture } from "@/lib/latex-fixture";
 import { initialDemoState } from "@/lib/demo-data";
 import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
+import { completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { readModelUsage } from "@/lib/model-usage";
@@ -37,6 +39,7 @@ import { recordApplicationBlocker } from "@/lib/application-blockers";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { parsePdfSource } from "@/lib/pdf-source";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 
@@ -96,6 +99,16 @@ async function uploadAndConfirmPdfSource() {
   const confirmedFacts = profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await action("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  const draft = await action("onboardingDraft", {
+    name: profile.name, email: profile.email || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" },
+    preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review",
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const review = resumeOnboardingStatus(profile);
+  const finished = await action("finishOnboarding", { reviewHash: review.reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
   const settings = await action("automationSettings", { settings: { resumeTailoring: true } });
   expect(settings.status, await settings.clone().text()).toBe(200);
   const activated = await action("activateAutomation", { reason: "Confirmed the uploaded source facts." });
@@ -104,18 +117,33 @@ async function uploadAndConfirmPdfSource() {
   fixture.originalBytes = bytes;
   return { bytes, source: profile.resumeSourceDocument! };
 }
+async function finishUploadedOnboarding() {
+  const profile = fixture.state!.profile;
+  const draft = await action("onboardingDraft", {
+    name: profile.name, email: profile.email || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" },
+    preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", requiresSponsorship: "no", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review",
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const review = resumeOnboardingStatus(profile);
+  const finished = await action("finishOnboarding", { reviewHash: review.reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
+}
 beforeAll(async () => { await ensurePdfTestRuntime(); }, 150_000);
 beforeEach(async () => {
   vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.afterSession = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.storageDemo = false; fixture.captureAttachment = false; fixture.attached = []; fixture.extractedText = "Confirmed experience from the uploaded résumé."; fixture.beforeUsageStart = undefined;
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
-  saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
   const sourceBytes = await createPdfSourceFixture();
   fixture.originalBytes = sourceBytes;
   fixture.originalKey = `${fixture.state.profile.id}/${randomUUID()}.pdf`;
   await saveDemoOriginalResume(fixture.originalKey, sourceBytes);
   fixture.state.profile.resumeFileName = "my-original.pdf";
   fixture.state.profile.resumeSource = { storageKey: fixture.originalKey, sha256: createHash("sha256").update(sourceBytes).digest("hex"), size: sourceBytes.length, mimeType: "application/pdf" };
+  fixture.state.profile.resumeSourceDocument = await parsePdfSource(sourceBytes);
+  fixture.state.profile = completeUploadedOnboardingFixture(fixture.state.profile);
+  activateAutomation(fixture.state.profile, "controlled-test");
   fixture.state.profile.automationSettings!.resumeTailoring = false;
   fixture.parse.mockImplementation(async (input) => {
     const format = input.text.format.name;
@@ -345,6 +373,7 @@ it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual prep
     expect(profile.facts.some((fact) => !fact.verified)).toBe(true);
     expect((await action("profile", { facts: profile.facts.filter((fact) => !fact.verified) })).status).toBe(200);
     expect(profile.facts.some((fact) => fact.verified)).toBe(false);
+    await finishUploadedOnboarding();
     expect((await action("automationSettings", { settings: { resumeTailoring: false } })).status).toBe(200);
     fixture.storageDemo = false;
 
@@ -686,6 +715,8 @@ it.each(["pdf", "docx"])("uses the exact confirmed uploaded %s when tailoring is
   const key = `${profile.id}/00000000-0000-4000-8000-000000000001.${extension}`;
   await mkdir(`.data/resumes/${profile.id}`, { recursive: true }); await writeFile(`.data/resumes/${key}`, bytes);
   profile.resumeFileName = `my-original.${extension}`; profile.resumeSource = { storageKey: key, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  if (profile.resumeSourceDocument) profile.resumeSourceDocument = { ...profile.resumeSourceDocument, sourceHash: profile.resumeSource.sha256 };
+  Object.assign(profile, completeUploadedOnboardingFixture(profile));
   profile.automationSettings!.resumeTailoring = false; activateAutomation(profile, "original preference confirmed");
   fixture.captureAttachment = true;
   try {

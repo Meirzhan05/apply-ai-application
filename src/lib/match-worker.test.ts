@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import type { AppState } from "@/lib/types";
 import { assessUserMatches } from "../../trigger/matches";
 import { matchKey } from "@/lib/match-cache";
@@ -19,6 +20,7 @@ let state: AppState;
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "synthetic-test-key");
   state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   state.jobs = state.jobs.slice(0, 2);
   state.matchCache = {};
   mocks.load.mockImplementation(async () => structuredClone(state));

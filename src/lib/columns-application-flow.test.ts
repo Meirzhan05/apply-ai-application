@@ -40,6 +40,8 @@ vi.mock("playwright-core", () => ({ chromium: { launch: async () => flow.browser
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn().mockResolvedValue(undefined) }));
 
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { createTwoColumnDocxFixture, createTwoColumnPdfFixture } from "@/lib/fixtures/two-column-resume";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { POST as uploadResume } from "@/app/api/resume/route";
@@ -71,6 +73,16 @@ const sofficeRuntime = (() => {
 const publicAction = (action: string, payload: Record<string, unknown>) => actionRoute(new Request("https://apply.example/api/actions", {
   method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action, payload }),
 }));
+
+async function finishFixtureOnboarding() {
+  const profile = flow.state!.profile;
+  const draft = await publicAction("onboardingDraft", { name: profile.name, email: profile.email || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" }, preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review" });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const finished = await publicAction("finishOnboarding", { reviewHash: resumeOnboardingStatus(profile).reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
+}
 
 type ModelRequest = { input: Array<{ content: string }>; text: { format: { name: string } }; model: string };
 type AnchoredPlanInput = {
@@ -132,6 +144,7 @@ beforeEach(() => {
   flow.demo = true; flow.tasks = []; flow.editClaims = [];
   flow.layoutMode = "none"; flow.layoutRepairCount = 0;
   flow.state = initialDemoState();
+  flow.state.profile = completeOnboardingFixture(flow.state.profile);
   flow.state.profile.id = "columns-flow-owner";
   flow.state.applications = [];
   flow.state.jobs[0].url = "https://jobs.example/apply";
@@ -188,6 +201,7 @@ async function exerciseTwoColumnFlow(format: "pdf" | "docx", options: { layoutRe
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   expect(flow.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  await finishFixtureOnboarding();
 
   flow.demo = false;
   const selected = await publicAction("select", { jobId: flow.state!.jobs[0].id });

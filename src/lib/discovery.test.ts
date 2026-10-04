@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import type { AppState } from "@/lib/types";
 import type { DiscoveryRefreshReport } from "@/lib/discovery";
 
@@ -37,6 +38,7 @@ describe("discovery policy and telemetry", () => {
   it("keeps missing legal facts and uncertain postings out of autonomous matching", () => {
     const state = initialDemoState();
     const job = state.jobs[0];
+    job.workArrangement = "on-site";
     const assessment = { version: 1 as const, category: "strong" as const, score: 90, evidence: ["confirmed"], gaps: [], uncertainty: [], evaluatedAt: "2026-10-01T12:00:00.000Z", model: "fixture" };
     expect(autonomousMatchBlockReason(state.profile, job, assessment)).toMatch(/work authorization/i);
     state.profile.workAuthorization = "Authorized to work in the US";
@@ -56,8 +58,10 @@ describe("discovery policy and telemetry", () => {
 
   it("queues one current strong match and replays it without a duplicate", async () => {
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     state.profile.workAuthorization = "Authorized to work in the US";
     const job = state.jobs[0];
+    job.workArrangement = "on-site";
     state.matchCache = { [`${job.id}:fixture`]: { version: 1, category: "strong", score: 90, evidence: ["SQL"], gaps: [], uncertainty: [], evaluatedAt: "2026-10-01T12:00:00.000Z", model: "fixture" } };
     mocks.assertAutomation.mockImplementation(() => undefined);
     mocks.mutate.mockImplementation(async (_user: string, change: (current: AppState) => unknown) => change(state));
@@ -93,8 +97,10 @@ describe("discovery policy and telemetry", () => {
 
   it("does not recreate a cancelled canonical application on refresh replay", async () => {
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     state.profile.workAuthorization = "Authorized to work in the US";
     const job = state.jobs[0];
+    job.workArrangement = "on-site";
     const cancelled = selectApplication(state, job.id, state.profile.id);
     cancelled.status = "cancelled";
     state.matchCache = { [`${job.id}:fixture`]: { version: 1, category: "strong", score: 90, evidence: ["confirmed"], gaps: [], uncertainty: [], evaluatedAt: "2026-10-01T12:00:00.000Z", model: "fixture" } };
@@ -109,9 +115,11 @@ describe("discovery policy and telemetry", () => {
   it("keeps controlled fixture owners from matching or queueing real catalog jobs", async () => {
     vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic-controlled-secret");
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     state.profile.id = "11111111-1111-4111-8111-111111111111";
     state.profile.workAuthorization = "Authorized to work in the US";
     const fixtureJob = { ...state.jobs[0], id: "controlled-fixture-job", url: "https://apply.example/api/internal/controlled-form", applyUrl: "https://apply.example/api/internal/controlled-form" };
+    fixtureJob.workArrangement = "on-site";
     state.jobs = [fixtureJob, { ...state.jobs[0], id: "real-catalog-job", sourceId: "real-catalog-job", url: "https://employer.example/jobs/real", applyUrl: "https://employer.example/jobs/real" }];
     const fixtureApplication = selectApplication(state, fixtureJob.id, state.profile.id);
     const issued = issueControlledTestGrant(state.profile.id, fixtureApplication.id);
@@ -133,7 +141,9 @@ describe("discovery policy and telemetry", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
     const state = initialDemoState();
+    state.profile = completeOnboardingFixture(state.profile);
     const job = state.jobs[0];
+    job.workArrangement = "on-site";
     state.profile.workAuthorization = "Authorized to work in the US";
     state.discovery = { sources: [], events: [] };
     recordDiscoveryRefresh(state, {

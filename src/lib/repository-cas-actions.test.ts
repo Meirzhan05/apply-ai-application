@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { enrollPilot } from "@/lib/pilot";
 import { selectApplication } from "@/lib/workflow";
 
@@ -78,8 +79,9 @@ beforeEach(() => {
   mocks.conflicts = 0;
   mocks.writes.length = 0;
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   state.profile.id = "owner-a";
-  state.profile.onboarding = { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, completedAt: new Date().toISOString() };
+  state.profile.onboarding = { ...state.profile.onboarding!, questionnaire: { ...state.profile.onboarding!.questionnaire, requiresSponsorship: "no" } };
   enrollPilot(state, "owner-a", { consentVersion: "pilot-consent-v1", confirmed: true });
   selectApplication(state, state.jobs[1].id, "owner-a");
   mocks.state = state;
@@ -129,7 +131,7 @@ it("returns an idle approved attempt to materials review and rejects a started s
 });
 
 it("automatically dispatches the authenticated student's search after saving explicit preferences", async () => {
-  const response = await POST(post("profile", { preferredTitles: [], preferredLocations: [], remoteOnly: false, userId: "other-student", searchPreferencesConfirmedAt: "untrusted" }));
+  const response = await POST(post("profile", { preferredTitles: [], preferredLocations: ["New York"], remoteOnly: false, userId: "other-student", searchPreferencesConfirmedAt: "untrusted" }));
   expect(response.status).toBe(200);
   expect(mocks.state?.profile.searchPreferencesConfirmedAt).toMatch(/^\d{4}-/);
   expect(mocks.state?.profile.searchPreferencesConfirmedAt).not.toBe("untrusted");

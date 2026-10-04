@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { AppState, Job } from "@/lib/types";
 
@@ -15,6 +16,7 @@ import { runImportedPreflight, preflightStatus } from "@/lib/import-preflight";
 
 function setup() {
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
   activateAutomation(state.profile, "preflight test");
   const job: Job = { ...state.jobs[0], id: "imported-public", source: "imported", sourceId: "public-42", sourceLabel: "Imported link", company: "Example Employer", title: "Data Analyst", url: "https://careers.example.com/jobs/42", applyUrl: "https://careers.example.com/jobs/42/apply", importUrl: "https://careers.example.com/jobs/42", importCheck: { status: "manual", checkedAt: "2026-10-01T00:00:00.000Z" } };
