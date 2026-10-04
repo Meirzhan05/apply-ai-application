@@ -240,6 +240,19 @@ it("carries a successful resume repair through artifact preview, download, and e
   expect(preview.headers.get("content-disposition")).toContain("inline");
   expect(download.headers.get("content-disposition")).toContain("attachment");
 }, 30_000);
+it("keeps corrected imported names and source claims stable after fresh authorization and preparation", async () => {
+  await uploadAndConfirmPdfSource();
+  const corrected = await action("profile", { name: "Avery Example" });
+  expect(corrected.status, await corrected.clone().text()).toBe(200);
+  const activated = await action("activateAutomation", { reason: "Use my corrected profile name." });
+  expect(activated.status, await activated.clone().text()).toBe(200);
+  const importedProfile = structuredClone(fixture.state!.profile);
+  const started = await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  expect(started.status, await started.clone().text()).toBe(200);
+  await step();
+  expect(fixture.state!.profile).toEqual(importedProfile);
+  expect(fixture.state!.applications[0]).toMatchObject({ status: "filling", packet: { resumeArtifact: { format: "pdf" } } });
+}, 30_000);
 it("stops repeated unsupported AI wording with an actionable blocker and schedules no attachment", async () => {
   const { source } = await uploadAndConfirmPdfSource();
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
