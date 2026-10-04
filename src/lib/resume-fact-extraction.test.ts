@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
+import OpenAI from "openai";
 import { parseDocxSource, applyDocxEdits } from "@/lib/docx-source";
+import { parsePdfSource } from "@/lib/pdf-source";
+import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { extractResumeFacts, type ResumeFactModel } from "@/lib/resume-fact-extraction";
 import { isUsableFact } from "@/lib/fact-evidence";
@@ -49,6 +52,39 @@ it("repairs unsupported metrics before accepting the complete snapshot", async (
   const result = await extractResumeFacts(source, { userId: "owner", trustedName: "Riley Example", modelCall });
   expect(extractions).toBe(2);
   expect(result[1].text).toContain("92% precision");
+});
+
+it("recovers from a provider timeout without asking the applicant to retry", async () => {
+  const { source, facts, audit } = await fixture();
+  let timedOut = false;
+  const result = await extractResumeFacts(source, { userId: "owner", trustedName: "Riley Example", modelCall: async request => {
+    if (!timedOut) { timedOut = true; throw new OpenAI.APIConnectionTimeoutError(); }
+    return request.operation === "resume-fact-extraction" ? { facts } : audit;
+  } });
+  expect(result.map(f => f.text)).toEqual(facts.map(f => f.text));
+  expect(result.every(isUsableFact)).toBe(true);
+});
+
+it("retries a transient grounding failure without regenerating accepted extraction output", async () => {
+  const { source, facts, audit } = await fixture();
+  let checks = 0;
+  let extractions = 0;
+  const result = await extractResumeFacts(source, { userId: "owner", trustedName: "Riley Example", modelCall: async request => {
+    if (request.operation === "resume-fact-extraction") { extractions++; return { facts }; }
+    if (++checks === 1) throw new OpenAI.APIConnectionTimeoutError();
+    return audit;
+  } });
+  expect(result.every(isUsableFact)).toBe(true);
+  expect(extractions).toBe(1);
+});
+
+it("bounds repeated provider timeouts and does not retry authorization errors", async () => {
+  const { source } = await fixture();
+  for (const [error, expected] of [[new OpenAI.APIConnectionTimeoutError(), 2], [new OpenAI.AuthenticationError(401, {}, "unauthorized", new Headers()), 1]] as const) {
+    let calls = 0;
+    await expect(extractResumeFacts(source, { userId: "owner", modelCall: async () => { calls++; throw error; } })).rejects.toThrow(error.message);
+    expect(calls).toBe(expected);
+  }
 });
 
 it("rejects fabricated excerpts, missing source claims, and evidence from another entry", async () => {
@@ -105,8 +141,41 @@ it("covers more than 80 source spans using complete grouped facts", async () => 
     text: source.anchors.slice(i * 10, i * 10 + 10).map(a => a.text).join(" "),
     evidence: source.anchors.slice(i * 10, i * 10 + 10).map(a => ({ anchorId: a.id, quote: a.text })),
   }));
-  const result = await extractResumeFacts(source, { userId: "owner", modelCall: async request => request.operation === "resume-fact-extraction" ? { facts } : { findings: facts.map(f => ({ anchorId: f.anchorId, supported: true, reason: "All components are cited." })) } });
+  const result = await extractResumeFacts(source, { userId: "owner", modelCall: async request => {
+    const input = request.input as { anchors: Array<{ id: string; candidateClaim: boolean }>; facts?: typeof facts };
+    // A large entry is processed in bounded pieces, retaining complete evidence.
+    expect(input.anchors.filter(a => a.candidateClaim).length).toBeLessThanOrEqual(10);
+    const ids = new Set(input.anchors.filter(a => a.candidateClaim).map(a => a.id));
+    const selected = facts.filter(f => ids.has(f.anchorId));
+    return request.operation === "resume-fact-extraction" ? { facts: selected } : { findings: input.facts!.map(f => ({ anchorId: f.anchorId, supported: true, reason: "All components are cited." })) };
+  } });
   expect(result).toHaveLength(9);
+});
+
+it("retains a wrapped PDF achievement when its continuation crosses a batch boundary", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ wrappedBullet: true }), "Avery Chen");
+  const section = source.anchors.find(a => a.text === "Work Experience")!;
+  const employer = source.anchors.find(a => a.text.startsWith("Orbit Labs"))!;
+  const head = source.anchors.find(a => a.text === "Built a search index")!;
+  const tail = source.anchors.find(a => a.text === "for 1,200 users.")!;
+  source.anchors = [section, employer, ...Array.from({ length: 8 }, (_, i) => ({ ...head, id: `filler-${i}`, text: `Built component ${i}.`, sourceText: `Built component ${i}.` })), head, tail];
+  source.text = source.anchors.map(a => a.text).join("\n");
+  let checkedContinuation = false;
+  const facts = await extractResumeFacts(source, { userId: "owner", trustedName: "Avery Chen", modelCall: async request => {
+    const input = request.input as { anchors: Array<{ id: string; text: string; candidateClaim: boolean }>; facts?: Array<{ anchorId: string }> };
+    if (request.operation === "resume-fact-grounding") return { findings: input.facts!.map(f => ({ anchorId: f.anchorId, supported: true, reason: "Complete original text." })) };
+    if (input.anchors.some(a => a.id === tail.id && a.candidateClaim)) {
+      checkedContinuation = true;
+      expect(input.anchors.find(a => a.id === head.id)).toMatchObject({ text: "Built a search index", candidateClaim: false });
+      expect(input.anchors.some(a => a.id === employer.id)).toBe(true);
+    }
+    return { facts: input.anchors.filter(a => a.candidateClaim).map(a => ({ anchorId: a.id, category: "experience", context: "Orbit Labs",
+      text: a.id === tail.id ? "Built a search index for 1,200 users." : a.text,
+      evidence: [{ anchorId: a.id, quote: a.text }, ...(a.id === tail.id ? [{ anchorId: head.id, quote: head.text }] : [])],
+    })) };
+  } });
+  expect(checkedContinuation).toBe(true);
+  expect(facts.some(f => f.text === "Built a search index for 1,200 users." && isUsableFact(f))).toBe(true);
 });
 
 

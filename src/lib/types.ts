@@ -46,6 +46,8 @@ export interface ResumeExtraction {
   uploadSequence?: number;
   filename: string;
   error?: string;
+  /** Verified basic details are saved independently of the experience snapshot. */
+  profileSourceHash?: string;
   pending?: { source: ResumeSource; document?: ResumeSourceDocument };
 }
 

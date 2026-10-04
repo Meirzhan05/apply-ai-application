@@ -11,7 +11,7 @@ import { extractResumeFacts } from "@/lib/resume-fact-extraction";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import { readOriginalResume } from "@/lib/original-resume";
-import { saveOnboarding } from "@/lib/onboarding";
+import { bumpAutomationVersion, saveOnboarding } from "@/lib/onboarding";
 import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import type { Profile, ResumeExtraction } from "@/lib/types";
@@ -94,9 +94,10 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
   const profile = (await loadState(userId)).profile;
   const job = profile.resumeExtraction!;
   const pending = job.pending!;
+  let extractionName = profile.name;
   const assertCurrent = async () => {
     const current = (await loadState(userId)).profile;
-    if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status) || current.name !== profile.name)
+    if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status) || current.name !== extractionName)
       throw new Error("The uploaded resume or profile name changed during extraction.");
   };
   try {
@@ -111,7 +112,7 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
       });
       return { budgetLimited: true };
     }
-    const deadline = Date.now() + 210_000;
+    const deadline = Date.now() + 480_000;
     let source = pending.document;
     if (!source || source.sourceHash !== pending.source.sha256 || (source.format === "pdf" && source.version < 3)) {
       const bytes = await readOriginalResume(userId, { ...pending.source, filename: job.filename });
@@ -119,9 +120,24 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
     }
     source = sourceWithCurrentEvidenceClaims(source, profile.name);
     if (source.sourceHash !== pending.source.sha256) throw new Error("The resume no longer matches its stored original. Upload it again.");
-    const details = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeProfile(source!, { userId, beforeModelCall: assertCurrent }));
+    if (job.profileSourceHash !== source.sourceHash) {
+      const details = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeProfile(source!, { userId, beforeModelCall: assertCurrent, deadline }));
+      const savedName = await mutateState(userId, state => {
+        const current = state.profile;
+        const extraction = current.resumeExtraction;
+        if (extraction?.id !== requestId || !processing.has(extraction.status)) return undefined;
+        if (current.name !== extractionName) throw new Error("Your profile name changed. Retry extraction using the current name.");
+        applyResumeProfile(current, source!, details);
+        extraction.profileSourceHash = source!.sourceHash;
+        current.updatedAt = extraction.updatedAt = new Date().toISOString();
+        bumpAutomationVersion(current);
+        return current.name;
+      });
+      if (savedName === undefined) return { ready: false };
+      extractionName = savedName;
+    }
     const facts = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeFacts(source!, {
-      userId, trustedName: profile.name, deadline, beforeModelCall: assertCurrent,
+      userId, trustedName: extractionName, deadline, beforeModelCall: assertCurrent,
       onProgress: async status => { await mutateState(userId, state => {
         const current = state.profile.resumeExtraction;
         if (current?.id !== requestId || !processing.has(current.status)) throw new Error("The uploaded resume changed during extraction.");
@@ -131,12 +147,11 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
     const published = await mutateState(userId, state => {
       const current = state.profile;
       if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status)) return false;
-      if (current.name !== profile.name) throw new Error("Your profile name changed. Retry extraction using the current name.");
+      if (current.name !== extractionName) throw new Error("Your profile name changed. Retry extraction using the current name.");
       const manual = current.facts.filter(fact => fact.source === "user");
       if (manual.length + facts.length > 80) throw new Error("The resume and manually added facts exceed 80 facts. Shorten the resume or remove unused manual facts, then retry.");
       current.resumeFileName = job.filename; current.resumeSource = pending.source;
       current.resumeSourceDocument = source; current.resumeText = source.text;
-      applyResumeProfile(current, source!, details);
       saveOnboarding(current, { facts: [...manual, ...facts] });
       const now = new Date().toISOString();
       current.resumeExtraction = { ...current.resumeExtraction, status: "ready", pending: undefined, error: undefined, updatedAt: now };

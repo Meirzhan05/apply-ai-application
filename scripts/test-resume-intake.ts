@@ -19,16 +19,16 @@ async function main() {
     assert.equal(response.status, 200); return await response.json() as AppState;
   };
   const waitForFacts = async (index: number, requestId: string) => {
-    const deadline = Date.now() + 240_000;
+    const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
       const state = await read(index);
       const job = state.profile.resumeExtraction;
       assert.equal(job?.id, requestId);
       if (job.status === "ready") return state;
-      if (job.status === "failed" || job.status === "budget_limited") throw new Error(job.error || "Extraction failed.");
+      if (job.status === "budget_limited" || (job.status === "failed" && job.attempts >= 2)) throw new Error(job.error || "Extraction failed.");
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    throw new Error("The extraction worker did not complete within four minutes.");
+    throw new Error("The extraction worker did not complete within its retry window.");
   };
   const upload = async (index: number, extension: "pdf" | "docx", bytes: Buffer) => {
     const form = new FormData();

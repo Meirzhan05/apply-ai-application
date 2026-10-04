@@ -6,7 +6,7 @@ export const extractUploadedResume = task({
   id: "extract-uploaded-resume",
   machine: "small-1x",
   retry: { maxAttempts: 2, minTimeoutInMs: 1500, maxTimeoutInMs: 5000 },
-  maxDuration: 240,
+  maxDuration: 540,
   run: async (payload: Parameters<typeof runResumeExtraction>[0], { ctx }) =>
     withAccountOperation(payload.userId, "worker", () => runResumeExtraction(payload), ctx.run.id),
 });

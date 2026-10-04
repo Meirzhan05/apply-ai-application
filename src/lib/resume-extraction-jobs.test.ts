@@ -65,6 +65,25 @@ it("retains the complete previous snapshot on model failure and retries with a f
   expect(await runResumeExtraction({ userId: "owner", requestId: retryId })).toMatchObject({ ready: true });
 });
 
+it("keeps verified basic details when experience times out and does not extract them again on automatic retry", async () => {
+  const profile = fixture.state!.profile;
+  const source = profile.resumeExtraction!.pending!.document!;
+  const anchor = source.anchors.find(item => item.text.includes("riley@example.com"))!;
+  fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text }]);
+  const previousFacts = structuredClone(profile.facts);
+  const version = profile.automationVersion;
+  fixture.extract.mockRejectedValueOnce(new Error("Request timed out."));
+  const request = { userId: "owner", requestId: profile.resumeExtraction!.id };
+  await expect(runResumeExtraction(request)).rejects.toThrow("Request timed out.");
+  expect(profile.contactEmail).toBe("riley@example.com");
+  expect(profile.facts).toEqual(previousFacts);
+  expect(profile.resumeFileName).toBe("old.pdf");
+  expect(profile.automationVersion).toBeGreaterThan(version);
+  fixture.details.mockRejectedValue(new Error("Basic details should already be saved."));
+  expect(await runResumeExtraction(request)).toMatchObject({ ready: true });
+  expect(profile.contactEmail).toBe("riley@example.com");
+});
+
 it("does not allow an older upload to replace a newer pending upload", async () => {
   const oldId = fixture.state!.profile.resumeExtraction!.id;
   fixture.extract.mockImplementationOnce(async () => {
@@ -129,6 +148,46 @@ it("publishes basic details with facts and preserves edits made while extraction
   expect(fixture.state!.profile.contactEmail).toBe("riley@example.com");
   expect(fixture.state!.profile.phone).toBe("+1 (212) 555-0199");
   expect(fixture.state!.profile.resumeDetailsVersion).toBe(1);
+});
+
+it("preserves explicit clears made after basic details are saved", async () => {
+  const profile = fixture.state!.profile;
+  const anchor = profile.resumeExtraction!.pending!.document!.anchors.find(item => item.text.includes("riley@example.com"))!;
+  fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text }]);
+  fixture.extract.mockImplementationOnce(async () => {
+    expect(profile.contactEmail).toBe("riley@example.com");
+    profile.contactEmail = "";
+    profile.detailSources!.contactEmail = { source: "user", value: "" };
+    return [];
+  });
+  expect(await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id })).toMatchObject({ ready: true });
+  expect(profile.contactEmail).toBe("");
+});
+
+it("continues fact extraction after the resume fills an empty applicant name", async () => {
+  const profile = fixture.state!.profile;
+  profile.name = "";
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "name", value: "Riley Example", anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  fixture.extract.mockImplementationOnce(async (_source, options) => {
+    await options.beforeModelCall();
+    expect(options.trustedName).toBe("Riley Example");
+    return [];
+  });
+  expect(await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id })).toMatchObject({ ready: true });
+  expect(profile.name).toBe("Riley Example");
+});
+
+it("discards basic details from an upload superseded while its profile check runs", async () => {
+  const profile = fixture.state!.profile;
+  const requestId = profile.resumeExtraction!.id;
+  fixture.details.mockImplementationOnce(async () => {
+    profile.resumeExtraction = { ...profile.resumeExtraction!, id: "newer", status: "queued" };
+    return [{ key: "githubUrl", value: "https://github.com/stale" }];
+  });
+  expect(await runResumeExtraction({ userId: "owner", requestId })).toMatchObject({ ready: false });
+  expect(profile.githubUrl).toBeUndefined();
+  expect(fixture.extract).not.toHaveBeenCalled();
 });
 
 it("keeps all active profile details and facts when the profile grounding check fails", async () => {
