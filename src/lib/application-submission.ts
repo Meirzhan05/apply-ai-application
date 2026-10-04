@@ -1,4 +1,4 @@
-import { hashJson, newId } from "@/lib/crypto";
+import { newId } from "@/lib/crypto";
 import {
   refreshBrowserSnapshot,
   submitBrowser,
@@ -7,11 +7,10 @@ import {
 import { ApplicationEligibilityError, assertJobEligible } from "@/lib/application-policy";
 import { sendActionNeeded } from "@/lib/email";
 import { loadState, mutateState } from "@/lib/repository";
-import { formDigest, hasSubmissionApproval, setFormSnapshot, transition } from "@/lib/workflow";
+import { hasSubmissionApproval, setFormSnapshot, transition } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
-import { ApiPreparationError, submitApiApplication } from "@/lib/ats-application";
 
-import { assertAutonomous, autonomyJobHash } from "@/lib/autonomous-policy";
+import { assertAutonomous } from "@/lib/autonomous-policy";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { Application } from "@/lib/types";
 
@@ -73,27 +72,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
       if (!app.packet) throw new Error("The approved packet is unavailable.");
       validatePacket(state.profile, app.packet);
       if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((job) => job.id === app.jobId), "submit");
-      const result = app.form?.apiSubmission ? await submitApiApplication(app,
-        state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot!, state.profile,
-        (attemptedAt) => mutateState(userId, (current) => {
-          const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
-          if (!target || target.status !== "submitting" || !target.submissionWorkerClaimedAt || target.submissionAttemptedAt ||
-            target.form?.hash !== app.form?.hash || target.packetHash !== app.packetHash || !target.form?.apiSubmission ||
-            formDigest(target.form) !== app.form!.hash || hashJson(current.profile) !== hashJson(state.profile)) return false;
-          const currentJob = current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot;
-          assertJobEligible(current.profile, currentJob);
-          const initialJob = state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot;
-          if (!currentJob?.active || !initialJob || autonomyJobHash(currentJob) !== autonomyJobHash(initialJob)) return false;
-          validatePacket(current.profile, target.packet!);
-          if (target.autonomousAuthorization) assertAutonomous(target, current.profile, currentJob, "submit");
-          else if (!hasSubmissionApproval(target)) return false;
-          target.submissionMaterials = { resumeMode: target.packet!.resumeMode ?? "tailored", coverLetterMode: current.profile.automationSettings?.coverLetterMode,
-            files: structuredClone(target.packet!.files ?? []), capturedAt: attemptedAt };
-          target.submissionAttemptedAt = attemptedAt;
-          if (target.jobSnapshot?.source === "imported") target.importedOutcome = { version: 1, kind: "attempted", at: attemptedAt,
-            evidence: "The durable API submission attempt was saved.", synthetic: Boolean(target.controlledTest) };
-          return true;
-        })) : await submitBrowser(app, {
+      const result = await submitBrowser(app, {
         ...(app.autonomousAuthorization ? { profile: state.profile, job: state.jobs.find((job) => job.id === app.jobId) } : {}),
         beforeAttempt: (baseline) => mutateState(userId, (current) => {
           const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
@@ -153,20 +132,6 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
       return { confirmed: result.confirmed, awaitingVerification: Boolean(result.verification) };
     } catch (error) {
       const latest = (await loadState(userId)).applications.find((item) => item.id === applicationId);
-      if (error instanceof ApiPreparationError && !latest?.submissionAttemptedAt) {
-        await mutateState(userId, (current) => {
-          const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
-          if (!target || target.status !== "submitting" || target.submissionAttemptedAt) return;
-          transition(target, ["submitting"], target.autonomousAuthorization ? "needs_user_action" : "authorized_to_fill");
-          target.form = undefined;
-          target.approvals = target.approvals.filter((approval) => approval.kind !== "submit");
-          target.submissionStartedAt = target.submissionWorkerClaimedAt = undefined;
-          target.submissionDispatch = undefined;
-          target.error = `${error.message} No application was sent.`;
-          if (target.autonomousAuthorization) recordApplicationBlocker(target, "other", target.error, { packetHash: target.packetHash, targetUrl: target.jobSnapshot?.applyUrl });
-        });
-        return { formChanged: true };
-      }
       if (error instanceof Error && error.message === "FORM_CHANGED") {
         const form = await refreshBrowserSnapshot(app);
         const released = await releaseSubmissionBrowser(userId, app);

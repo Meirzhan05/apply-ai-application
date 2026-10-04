@@ -5,7 +5,7 @@ Reviewed September 29, 2026. Technical access does not establish a general conte
 ## Current ATS sources
 
 - [Greenhouse Job Board API](https://docs.greenhouse.io/job-board.html) documents public posting reads and authenticated submission. The app uses reads and hosted application forms. Employer/partner permissions and beta redistribution terms remain unconfirmed.
-- [Lever Postings API](https://github.com/lever/postings-api) supports public JSON postings and hosted-form links; API submissions require an employer-generated key. No direct submission adapter is enabled.
+- [Lever Postings API](https://github.com/lever/postings-api) supports public JSON postings and hosted-form links; API submissions require an employer-generated key. Applications use hosted browser forms.
 - [Ashby Job Postings API](https://developers.ashbyhq.com/docs/public-job-posting-api) documents published postings for an organization's careers page. That documentation does not by itself confirm rights to aggregate employers' content for this beta.
 
 The interface identifies the source and links to its original posting. Failed requests preserve existing listings instead of treating the source as empty. Beta launch still requires confirming usage rights and any required attribution for configured boards.

@@ -24,7 +24,7 @@ Checked September 30, 2026 against the approved product and agent plan. The depl
 | Three applications/day; one active browser; no per-user monthly cap; $500 global queue | Durable queues, daily initiation limit, one active browser, Postgres projected cost reservations and idempotency, reconciliation/watchdog tasks. Match reservations distinguish owners and changed postings; per-owner match queues avoid overlapping cache misses. Two production fixture runs were serialized with no model calls. | Actual invoices and calibrated estimates. The projected ceiling is not proof of a billed-cost ceiling. |
 | Metrics: feedback, confirmed/uncertain submissions, takeovers, time saved, run cost | Recorded state/history, run cost estimates, feedback and user-reported time saved shown in the app. | Real usage measurements and provider cost reconciliation. |
 | Evaluate Jev before matcher enablement | Anonymous bounded typed experience/skills assessments; labels/export and parallel comparison workflow; privacy tests and one synthetic provider call. Production ranking remains disabled for Jev. | Real labels and quality/latency/actual-cost comparison. Synthetic labels cannot replace this. |
-| Authorized broader feed and later direct ATS submission | Adzuna terms and attribution reviewed; source disabled. Direct submission credentials are not configured and no ATS submission adapter is active. | Written access/usage consent or applicable partner credentials before implementation/enablement. |
+| Authorized broader feed | Adzuna terms and attribution reviewed; source disabled. Applications use the employer’s hosted browser form. | Written access/usage consent before enabling additional feeds. |
 
 ## Contract compatibility
 

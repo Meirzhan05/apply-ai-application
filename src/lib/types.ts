@@ -556,22 +556,6 @@ export interface FormSnapshot {
   readyToSubmit?: boolean;
   blockers?: string[];
   submitControl?: { label: string; identifier: string; action?: string; method?: string; encoding?: string };
-  apiSubmission?: ApiSubmissionPlan;
-}
-
-/** Server-prepared request bound to the same reviewed form and file manifest. Never contains credentials. */
-export interface ApiSubmissionPlan {
-  version: 1;
-  provider: "greenhouse" | "lever" | "ashby";
-  board: string;
-  postingId: string;
-  region?: "eu";
-  endpoint: string;
-  definitionHash: string;
-  integrationHash: string;
-  packetHash: string;
-  values: Record<string, string | number | boolean>;
-  files: Record<string, "resume" | "cover-letter">;
 }
 
 export type ImportedCompatibilityStatus = "reachable" | "blocked" | "uncertain";

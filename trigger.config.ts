@@ -20,7 +20,7 @@ const pdfRoot = "/app/pdf-runtime";
 const pdfEnv = { PDFBOX_RUNTIME_ROOT: pdfRoot, PDFBOX_JAVA_BIN: `${pdfRoot}/jre/bin/java` };
 const pdfjsWorkerPath = "/app/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs";
 const pdfjsEnv = { PDFJS_WORKER_PATH: pdfjsWorkerPath };
-const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "ATS_SUBMISSION_INTEGRATIONS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];
+const syncedEnvironmentNames = ["APP_ORIGIN", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "BROWSER_PROVIDER", "BROWSER_USE_API_KEY", "BROWSER_USE_SOLVE_CAPTCHAS", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "INTERNAL_TASK_SECRET", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_TEST_RECIPIENT", "JOB_BOARDS", "MONTHLY_SPEND_LIMIT_USD", "PROJECTED_BROWSER_RUN_USD", "PROJECTED_DRAFT_USD"];
 const productionOriginError = "Refusing production environment sync: set APP_ORIGIN and NEXT_PUBLIC_APP_URL to matching HTTPS production origins.";
 
 function isLoopback(hostname: string): boolean {
@@ -97,7 +97,7 @@ export default defineConfig({
       },
       syncEnvVars(({ environment }) => {
         if (isProductionEnvironment(environment)) assertProductionOrigins();
-        return syncedEnvironmentNames.flatMap((name) => process.env[name] ? [{ name, value: process.env[name]!, isSecret: /KEY|SECRET|INTEGRATIONS/.test(name) }] : []).concat([
+        return syncedEnvironmentNames.flatMap((name) => process.env[name] ? [{ name, value: process.env[name]!, isSecret: /KEY|SECRET/.test(name) }] : []).concat([
         { name: "DEMO_MODE", value: "false", isSecret: false },
         ...Object.entries(latexEnv).map(([name, value]) => ({ name, value, isSecret: false })),
         ...Object.entries(docxEnv).map(([name, value]) => ({ name, value, isSecret: false })),

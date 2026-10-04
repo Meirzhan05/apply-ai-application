@@ -73,7 +73,7 @@ Scripts use synthetic applicants. Cloud submission is confined to a signed, temp
 - [ ] Validate broader employer forms and an applicant completing login/CAPTCHA takeover. Rejected, delayed, stalled, and network-interrupted uploads and operator editing through the remote viewer are tested on controlled forms; real applicant authentication and employer-side uploads are not.
 - [ ] Reconcile reservations with provider invoices and calibrate estimates before admitting 50–100 users. Ceiling, idempotency, and queue resumption are tested; actual billed-cost control is not proven.
 - [ ] Confirm sender-domain ownership and inbox delivery before broader sending. The owner currently requests test-inbox-only email.
-- [ ] Confirm discovery-feed usage rights and attribution for the beta. [Feed terms review](FEED-USAGE.md) is complete; authorization for AI matching remains unconfirmed. Adzuna stays disabled; no direct ATS submission adapter is enabled.
+- [ ] Confirm discovery-feed usage rights and attribution for the beta. [Feed terms review](FEED-USAGE.md) is complete; authorization for AI matching remains unconfirmed. Adzuna stays disabled; applications use hosted browser forms.
 - [ ] Verify the six-hour freshness target and reliability over sustained runs. A successful refresh proves ingestion, not a long-term service guarantee.
 
 The controlled-demo portion passed. The owner-approved live application and private-beta release remain pending.
@@ -192,3 +192,11 @@ The final candidate is committed in `d4ccbba0ef96b78cb88643db6b40a70f32ceca61` a
 The implementation does not claim the real 20-application pilot gate. Actual invited participants, owner identity, authorized friends/cohorts and the required real employer applications remain pending. Controlled fixtures, intercepted browser checks and synthetic reports are excluded from that denominator.
 
 The separate Standards and Spec review is recorded in [docs/reviews/autonomy-2026-10-01.md](reviews/autonomy-2026-10-01.md). Both review axes report zero remaining software findings; the external real-20 evidence limitation is recorded separately.
+
+## October 4: remove direct employer submission APIs
+
+Application preparation, review refresh, and submission now use the employer's browser form. Removed the credentialed Greenhouse, Lever, and Ashby submission adapters, their request-plan types and UI branches, the employer-key environment configuration and worker sync, and their dedicated tests and setup documentation. Public posting discovery and verification APIs remain in use.
+
+New worker regression cases verify browser preparation and submission for all three ATS sources, final-approval enforcement, and duplicate-task rejection. TypeScript, ESLint, and diff checks passed. The general suite excluding the two native DOCX browser-flow files passed 875 tests with eight skipped; those two files passed all eight tests separately with the installed macOS LibreOffice alpha runtime configured. The default full run could not render two DOCX fixtures without that configuration. Applying the alpha configuration to the entire suite instead conflicts with the existing production-version probe and fixed-version comparison fixture; the exact pinned Linux DOCX runtime remains a production check.
+
+Web deployment `apply-osa1pb0pk-meirzhans-projects.vercel.app` is live at https://apply-ai-chi.vercel.app; its production build passed. Trigger.dev production worker `20261004.12` was deployed and confirmed current. The production browser-question and review UI passed desktop, mobile, and narrow-width checks with synthetic intercepted state. The real cloud controlled-form test passed browser filling, both bound approvals, one submit click, confirmation, a persisted receipt and private screenshot, duplicate-task rejection, and receiver replay denial. The disposable test account and browser were cleaned up; no employer received an application. Anonymous `/api/state` still returns 401.

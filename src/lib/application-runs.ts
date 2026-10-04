@@ -17,7 +17,6 @@ import { blockerReason, recordApplicationBlocker, resolveResumingApplicationBloc
 import { importedAutonomyJob } from "@/lib/import-compatibility";
 import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
-import { prepareApiApplication } from "@/lib/ats-application";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { unconfirmedPdfFactSuggestions, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { AppState, Application, Profile } from "@/lib/types";
@@ -238,32 +237,6 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     validatePacket(state.profile, app.packet);
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "fill");
     if (app.autonomousAuthorization) await currentAutonomousRun(userId, applicationId, runToken, "fill");
-    const api = await prepareApiApplication(app, job, state.profile);
-    if (api.kind === "api" && (!app.autonomousAuthorization || !unsupportedAutonomousForm(api.form, app))) {
-      const saved = await mutateState(userId, (current) => {
-        const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
-        if (!target || target.status !== "filling" || target.runToken !== runToken || target.packetHash !== app.packetHash ||
-          hashJson(target.packet) !== app.packetHash || hashJson(current.profile) !== hashJson(state.profile)) return false;
-        const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
-        if (!currentJob?.active || currentJob.applyUrl !== job.applyUrl || currentJob.url !== job.url) return false;
-        assertJobEligible(current.profile, currentJob);
-        assertSourceJobCurrent(target, currentJob);
-        validatePacket(current.profile, target.packet!);
-        if (target.autonomousAuthorization) assertAutonomous(target, current.profile, currentJob, "fill");
-        setFormSnapshot(target, api.form);
-        target.error = undefined;
-        if (target.autonomousAuthorization) {
-          resolveResumingApplicationBlockers(target);
-          saveAutonomousSubmission(current, target);
-        }
-        current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Application prepared", detail: `${job.title} · direct employer submission` });
-        return true;
-      });
-      if (!saved) return { cancelled: true };
-      if (app.autonomousAuthorization) await queueAutonomousSubmission(userId, applicationId);
-      else if (process.env.EMAIL_FROM) await sendActionNeeded(await loadState(userId), "An application is ready for review").catch(() => undefined);
-      return { needsAction: false, transport: "api" as const };
-    }
     session = await withBrowserUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareBrowser(app, job, state.profile, async (opened) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;

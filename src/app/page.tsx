@@ -1399,9 +1399,9 @@ export default function Dashboard() {
                       <div className="step-card">
                         <h3>Ready to prepare the employer form</h3>
                         <p>
-                          The agent enters only the materials you approved, using
-                          direct employer access when available or a browser when
-                          needed. You will review the application before submission.
+                          The agent enters only the materials you approved into
+                          the employer’s browser form. You will review the
+                          application before submission.
                         </p>
                         <button
                           className="dark-button"
@@ -1514,9 +1514,8 @@ export default function Dashboard() {
                             <h3>Final form review</h3>
                           </div>
                           <p className="muted">
-                            {activeApp.form.apiSubmission ? "Review the answers and files prepared for direct submission to " : "Review the actual fields and attachments on "}
+                            Review the actual fields and attachments on{" "}
                             {new URL(activeApp.form.url).hostname}. Approval is tied to this exact state.
-                            {activeApp.form.apiSubmission && " This application can be sent without opening a browser."}
                           </p>
                           {activeApp.form.submitControl?.action && (
                             <p className="muted" style={{ overflowWrap: "anywhere" }}>
@@ -1555,9 +1554,7 @@ export default function Dashboard() {
                           </div>
                           <p style={{ overflowWrap: "anywhere" }}>
                             <strong>Attachments:</strong>{" "}
-                            {(activeApp.form.apiSubmission
-                              ? activeApp.form.fields.filter((field) => field.kind === "file" && field.value).map((field) => field.value).join(", ")
-                              : activeApp.form.attachments.join(", ")) || "None"}
+                            {activeApp.form.attachments.join(", ") || "None"}
                           </p>
                           {activeApp.status === "final_review" && (
                             <>
@@ -1575,7 +1572,7 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                {activeApp.form.apiSubmission ? "Refresh application details" : "Refresh form state"}
+                                Refresh form state
                               </button>
                               <button
                                 className="dark-button"
