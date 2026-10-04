@@ -190,4 +190,36 @@ describe("resume onboarding completion through authenticated actions", () => {
     expect((await act("onboardingDraft", { expectedReviewHash: current.onboarding.reviewHash, factPatch: { expected: [unrelated], updated: [{ ...unrelated, text: "Unreviewed replacement" }] } })).status).toBe(400);
     expect(await loadState("owner-a")).toEqual(before);
   });
+
+  it("uses the same bounded and normalized profile draft contract at both authenticated action boundaries", async () => {
+    const before = await loadState("owner-a");
+    expect((await act("profile", { email: `${"a".repeat(245)}@example.com` })).status).toBe(400);
+    expect(await loadState("owner-a")).toEqual(before);
+    expect((await act("onboardingDraft", { links: Array.from({ length: 21 }, () => "https://example.com") })).status).toBe(400);
+    expect(await loadState("owner-a")).toEqual(before);
+
+    expect((await act("profile", {
+      name: "  Synthetic Applicant  ", email: "synthetic@example.com", phone: " +1 212 555 0100 ",
+      links: ["linkedin.com/in/synthetic", "https://linkedin.com/in/synthetic"],
+      currentLocation: { city: " New York ", region: " NY ", country: " United States " },
+      preferredLocations: [" United States ", "United States"], workArrangements: ["remote", "remote"],
+      willingToRelocate: null,
+    })).status).toBe(200);
+    let saved = await loadState("owner-a");
+    expect(saved.profile).toMatchObject({
+      name: "Synthetic Applicant", email: "synthetic@example.com", phone: "+1 212 555 0100",
+      links: ["https://linkedin.com/in/synthetic"],
+      currentLocation: { city: "New York", region: "NY", country: "United States" },
+      preferredLocations: ["United States"], workArrangements: ["remote"], remoteOnly: true,
+    });
+
+    expect((await act("onboardingDraft", {
+      email: "draft@example.com", links: ["github.com/synthetic", "https://github.com/synthetic"],
+      preferredLocations: [" United States ", "United States"],
+    })).status).toBe(200);
+    saved = await loadState("owner-a");
+    expect(saved.profile.email).toBe("draft@example.com");
+    expect(saved.profile.links).toEqual(["https://github.com/synthetic"]);
+    expect(saved.profile.preferredLocations).toEqual(["United States"]);
+  });
 });

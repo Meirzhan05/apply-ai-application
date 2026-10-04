@@ -23,7 +23,7 @@ import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { checkSubmissionResult } from "@/lib/submission-verification";
 import { sameOrigin } from "@/lib/request-security";
 import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
-import { normalizeProfileLinks } from "@/lib/resume-profile-basics";
+import { applyProfileDraft, parseProfileDraft } from "@/lib/profile-draft";
 import {
   refreshBrowserSnapshot,
   repairEducationFields,
@@ -203,9 +203,8 @@ async function perform(
   if (action === "profile") {
     return mutateState(userId, (state) => {
       const profile = state.profile;
+      applyProfileDraft(profile, parseProfileDraft(payload));
       const fields: Array<keyof Profile> = [
-        "name",
-        "phone",
         "school",
         "graduationYear",
         "headline",
@@ -215,12 +214,9 @@ async function perform(
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
       });
-      if ("email" in payload) profile.email = z.union([z.email().max(254), z.literal("")]).parse(text(payload.email, 254));
-      if ("links" in payload) profile.links = normalizeProfileLinks(z.array(z.string().max(500)).max(30).parse(payload.links));
       for (const key of [
         "skills",
         "preferredTitles",
-        "preferredLocations",
       ] as const) {
         if (key in payload)
           profile[key] = z
@@ -230,17 +226,9 @@ async function perform(
             .map((item) => item.trim())
             .filter(Boolean);
       }
-      if ("remoteOnly" in payload)
+      if ("remoteOnly" in payload && !("workArrangements" in payload))
         profile.remoteOnly = payload.remoteOnly === true;
       if ("strictLocations" in payload) profile.strictLocations = payload.strictLocations === true;
-      if ("currentLocation" in payload) profile.currentLocation = z.object({
-        city: z.string().trim().max(120), region: z.string().trim().max(120), country: z.string().trim().max(120),
-      }).parse(payload.currentLocation);
-      if ("workArrangements" in payload) {
-        profile.workArrangements = [...new Set(z.array(z.enum(["remote", "hybrid", "on-site"])).max(3).parse(payload.workArrangements))];
-        profile.remoteOnly = profile.workArrangements.length === 1 && profile.workArrangements[0] === "remote";
-      }
-      if ("willingToRelocate" in payload) profile.willingToRelocate = z.boolean().nullable().parse(payload.willingToRelocate) ?? undefined;
       if ("timeZone" in payload) {
         const timeZone = z.string().max(100).parse(payload.timeZone);
         new Intl.DateTimeFormat("en-US", { timeZone });

@@ -4,17 +4,12 @@ import { applyFactCorrection } from "@/lib/fact-corrections";
 import { isUnitedStatesLocation } from "@/lib/location-fit";
 import { bumpAutomationVersion, ensureOnboardingDefaults, saveOnboarding } from "@/lib/onboarding";
 import { immigrationQuestionnaireMissingFields, onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
-import { normalizeProfileLinks } from "@/lib/resume-profile-basics";
+import { applyProfileDraft, profileDraftSchema } from "@/lib/profile-draft";
 import type { Profile, VerifiedFact } from "@/lib/types";
 
 export const RESUME_ONBOARDING_VERSION = 2;
-export const onboardingDraftSchema = z.object({
-  name: z.string().trim().max(200).optional(), email: z.string().trim().max(320).optional(),
-  phone: z.string().trim().max(100).optional(), links: z.array(z.string().max(2048)).max(20).optional(),
-  currentLocation: z.object({ city: z.string().trim().max(120), region: z.string().trim().max(120), country: z.string().trim().max(120) }).optional(),
-  preferredLocations: z.array(z.string().trim().max(160)).max(30).optional(),
-  workArrangements: z.array(z.enum(["remote", "hybrid", "on-site"])).max(3).optional(),
-  willingToRelocate: z.boolean().nullable().optional(), questionnaire: onboardingQuestionnaireSchema.optional(),
+export const onboardingDraftSchema = profileDraftSchema.extend({
+  questionnaire: onboardingQuestionnaireSchema.optional(),
   factPatch: z.unknown().optional(), expectedReviewHash: z.string().length(64).optional(),
   stage: z.enum(["resume", "profile", "answers", "review"]).optional(),
 });
@@ -63,15 +58,7 @@ export function saveOnboardingDraft(profile: Profile, payload: unknown): void {
   const input = onboardingDraftSchema.parse(payload);
   ensureOnboardingDefaults(profile);
   if (input.expectedReviewHash && input.expectedReviewHash !== reviewHash(profile)) throw new Error("Your saved profile changed. Reload the current review before saving.");
-  for (const key of ["name", "email", "phone"] as const) if (input[key] !== undefined) profile[key] = input[key];
-  if (input.links !== undefined) profile.links = normalizeProfileLinks(input.links);
-  if (input.currentLocation !== undefined) profile.currentLocation = input.currentLocation;
-  if (input.preferredLocations !== undefined) profile.preferredLocations = [...new Set(input.preferredLocations.filter(Boolean))];
-  if (input.workArrangements !== undefined) {
-    profile.workArrangements = [...new Set(input.workArrangements)];
-    profile.remoteOnly = profile.workArrangements.length === 1 && profile.workArrangements[0] === "remote";
-  }
-  if (input.willingToRelocate !== undefined) profile.willingToRelocate = input.willingToRelocate ?? undefined;
+  applyProfileDraft(profile, input);
   if (input.factPatch !== undefined) {
     const facts = applyFactCorrection(profile.facts, input.factPatch);
     const imported = new Set(importedOnboardingFacts(profile).map(fact => fact.id));

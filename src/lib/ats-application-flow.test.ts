@@ -150,3 +150,15 @@ it("routes unconfigured employers to the browser before any submission", async (
   expect(fixture.browserAllocations).toBe(1);
   expect(app.form?.apiSubmission).toBeUndefined(); expect(app.submissionAttemptedAt).toBeUndefined();
 });
+
+it("does not publish manual API preparation after a replacement begins during provider work", async () => {
+  const state = fixture.state!, app = state.applications[0];
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    state.profile.resumeImport = { token: "replacement", startedAt: "2026-10-04T00:00:00.000Z" };
+    return Response.json(posting);
+  }));
+  expect(await runFill({ userId: state.profile.id, applicationId: app.id, runToken: app.runToken })).toEqual({ cancelled: true });
+  expect(app.form).toBeUndefined();
+  expect(app.status).toBe("filling");
+  expect(fixture.browserAllocations).toBe(0);
+});

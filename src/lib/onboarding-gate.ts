@@ -21,8 +21,7 @@ export function assertResumeOnboardingComplete(profile: Profile, operation = "st
  * remain available while onboarding is incomplete so an interrupted attempt
  * can reach a deterministic outcome without authorizing another submission.
  */
-export const onboardingSafeActions = new Set([
-  "enrollPilot",
+export const onboardingSafeActions = [
   "withdrawPilot",
   "onboarding",
   "onboardingDraft",
@@ -34,15 +33,20 @@ export const onboardingSafeActions = new Set([
   "feedback",
   "labelMatch",
   "timeSaved",
-  "import",
-  "select",
   "checkSubmissionResult",
   "stopSubmissionVerification",
   "cancel",
   "reviewManualFailure",
   "restartBrowser",
-]);
+ ] as const;
+export type OnboardingSafeAction = typeof onboardingSafeActions[number];
+const onboardingSafeActionSet: ReadonlySet<OnboardingSafeAction> = new Set(onboardingSafeActions);
+
+export function isOnboardingSafeAction(action: string): action is OnboardingSafeAction {
+  return onboardingSafeActionSet.has(action as OnboardingSafeAction);
+}
 
 export function actionNeedsCompletedOnboarding(action: string): boolean {
-  return !onboardingSafeActions.has(action);
+  // Unknown actions fail closed until they are explicitly classified above.
+  return !isOnboardingSafeAction(action);
 }

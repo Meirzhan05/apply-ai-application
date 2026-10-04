@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { chromium, type Browser, type Page } from "playwright-core";
-import { createClient } from "@supabase/supabase-js";
+import { chromium, type Browser } from "playwright-core";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { initialDemoState } from "../src/lib/demo-data";
 import type { AppState } from "../src/lib/types";
@@ -14,21 +14,26 @@ assert.ok(new URL(origin).hostname === "localhost" || production, "Use a localho
 if (production) assert.equal(process.env.ALLOW_PRODUCTION_ONBOARDING, "true", "Set ALLOW_PRODUCTION_ONBOARDING=true for the disposable production journey.");
 
 type User = { id: string; email: string; cookie: string; storageKey?: string };
-type DatabaseClient = ReturnType<typeof createClient<any, "public">>;
+type DatabaseClient = SupabaseClient;
+type DisposableResources = { users: User[]; browser?: Browser };
 
 async function resumeBytes(): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
-  ["SYNTHETIC APPLICANT", "Orbit Labs", "Built an explainable recommender.", "EDUCATION", "State University"].forEach((line, index) => page.drawText(line, { x: 45, y: 745 - index * 24, size: 12, font }));
+  ["SYNTHETIC APPLICANT", "Orbit Labs", "ML Intern | February 2026 - June 2026", "- Built an explainable recommender.", "- Evaluated ranking quality across synthetic cohorts.", "EDUCATION", "State University"].forEach((line, index) => page.drawText(line, { x: 45, y: 745 - index * 24, size: 12, font }));
   return pdf.save();
 }
 
-async function createUser(db: DatabaseClient, nonce: string, index: number, bytes: Uint8Array, seedResume: boolean): Promise<User> {
+async function createUser(db: DatabaseClient, resources: DisposableResources, nonce: string, index: number, bytes: Uint8Array, seedResume: boolean): Promise<User> {
   const email = `onboarding-${nonce}-${index}@example.com`;
   const created = await db.auth.admin.createUser({ email, email_confirm: true });
   assert.equal(created.error, null);
   const owner = created.data.user!;
+  const user: User = { id: owner.id, email, cookie: "" };
+  // Register immediately so a storage, state, or magic-link failure still gets
+  // an attempted account cleanup in the outer finally block.
+  resources.users.push(user);
   const state = initialDemoState();
   const pausedAt = new Date().toISOString();
   state.profile = { ...state.profile, id: owner.id, email, name: "", phone: "", demo: false, facts: [], preferredLocations: [], currentLocation: undefined, workArrangements: undefined, onboarding: { questionnaire: {} }, automationAuthorization: { version: 1, status: "paused", reason: "onboarding browser verification fixture", authorizedAt: pausedAt, pausedAt } };
@@ -40,6 +45,7 @@ async function createUser(db: DatabaseClient, nonce: string, index: number, byte
     storageKey = `${owner.id}/${randomUUID()}.pdf`;
     const uploaded = await db.storage.from("resumes").upload(storageKey, bytes, { contentType: "application/pdf", upsert: true });
     assert.equal(uploaded.error, null);
+    user.storageKey = storageKey;
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     stored.profile = { ...state.profile, resumeFileName: "seed.pdf", resumeText: "Synthetic saved resume", resumeSource: { storageKey, sha256, size: bytes.byteLength, mimeType: "application/pdf" } };
   }
@@ -49,16 +55,30 @@ async function createUser(db: DatabaseClient, nonce: string, index: number, byte
   assert.equal(link.error, null);
   const callback = await fetch(`${origin}/auth/callback?type=magiclink&token_hash=${encodeURIComponent(link.data.properties.hashed_token)}`, { redirect: "manual" });
   assert.equal(callback.status, 307);
-  return { id: owner.id, email, cookie: callback.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; "), ...(seedResume ? { storageKey } : {}) };
+  user.cookie = callback.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+  return user;
 }
 
 async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label: "desktop" | "mobile") {
   const page = await browser.newPage({ viewport: label === "desktop" ? { width: 1440, height: 1000 } : { width: 390, height: 844 } });
-  await page.context().addCookies(user.cookie.split("; ").map((value) => { const [name, ...rest] = value.split("="); return { name, value: rest.join("="), url: origin }; }));
   try {
+    await page.context().addCookies(user.cookie.split("; ").map((value) => { const [name, ...rest] = value.split("="); return { name, value: rest.join("="), url: origin }; }));
     await page.goto(origin, { waitUntil: "domcontentloaded" });
     await page.waitForURL(/\/onboarding/);
     assert.match(page.url(), /onboarding/, "Incomplete users must be routed to onboarding before the dashboard.");
+    for (const protectedPath of ["/usage", "/costs", "/pilot"]) {
+      await page.goto(`${origin}${protectedPath}`, { waitUntil: "domcontentloaded" });
+      await page.waitForURL(/\/onboarding\?returnTo=/);
+      assert.match(page.url(), /onboarding\?returnTo=/, `${protectedPath} must return incomplete users to onboarding.`);
+    }
+    await page.goto(origin, { waitUntil: "domcontentloaded" });
+    await page.waitForURL(/\/onboarding/);
+    const blockedSelection = await page.evaluate(async () => {
+      const response = await fetch("/api/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "select", payload: { jobId: "synthetic-known-job" } }) });
+      return { status: response.status, body: await response.json() };
+    });
+    assert.equal(blockedSelection.status, 400, "Selecting a known job must remain gated before onboarding completion.");
+    assert.match(String(blockedSelection.body.error), /required onboarding/i);
     if (user.storageKey) {
       await page.getByRole("button", { name: "Use saved resume" }).click();
     } else {
@@ -76,6 +96,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     await page.getByLabel("Email", { exact: true }).fill(user.email);
     await page.getByLabel("Phone", { exact: true }).fill("+1 212 555 0100");
     await page.waitForTimeout(800);
+    await page.screenshot({ path: `/tmp/onboarding26-${label}-profile.png`, fullPage: true });
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("heading", { name: "Current Location" }).waitFor({ timeout: 30000 });
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -94,6 +115,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     await page.locator("#setup-workAuthorization").selectOption("yes");
     await page.locator("#setup-sponsorshipNow").selectOption("no");
     await page.locator("#setup-sponsorshipFuture").selectOption("no");
+    await page.screenshot({ path: `/tmp/onboarding26-${label}-answers.png`, fullPage: true });
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     const finish = page.getByRole("button", { name: "Finish onboarding", exact: true });
     await finish.waitFor({ state: "visible" });
@@ -102,6 +124,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
       console.error(`Finish remained disabled (${label}): ${await page.locator("body").innerText()}`);
       throw new Error("Finish onboarding remained disabled in the browser journey.");
     }
+    await page.screenshot({ path: `/tmp/onboarding26-${label}-review.png`, fullPage: true });
     await finish.click();
     await page.waitForURL((url) => url.pathname === "/");
     const state = await page.evaluate(async () => (await fetch("/api/state", { cache: "no-store" })).json());
@@ -121,22 +144,48 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
 }
 
 async function main() {
-  const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
+  const db: DatabaseClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
   const bytes = await resumeBytes();
   const nonce = randomUUID();
-  const users = [await createUser(db, nonce, 0, bytes, false), await createUser(db, nonce, 1, bytes, true)];
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
+  const resources: DisposableResources = { users: [] };
   try {
-    await runJourney(browser, users[0], bytes, "desktop");
-    await runJourney(browser, users[1], bytes, "mobile");
+    const users = [
+      await createUser(db, resources, nonce, 0, bytes, false),
+      await createUser(db, resources, nonce, 1, bytes, true),
+    ];
+    resources.browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
+    await runJourney(resources.browser, users[0], bytes, "desktop");
+    await runJourney(resources.browser, users[1], bytes, "mobile");
     console.log(JSON.stringify({ passed: true, mandatoryEntry: true, savedProgress: true, resumeUpload: true, resumeReuse: true, completion: true, dashboardReload: true, employerSubmissions: 0 }));
   } finally {
-    await browser.close();
-    for (const user of users) {
-      if (user.storageKey) await db.storage.from("resumes").remove([user.storageKey]);
-      await db.auth.admin.deleteUser(user.id);
+    const cleanupErrors: string[] = [];
+    if (resources.browser) {
+      try { await resources.browser.close(); } catch { cleanupErrors.push("browser"); }
     }
-    console.log("CLEANUP disposable onboarding accounts and resume objects removed");
+    for (const user of resources.users) {
+      try {
+        const listed = await db.storage.from("resumes").list(user.id);
+        if (listed.error) throw listed.error;
+        const objects = (listed.data ?? []).map((file) => `${user.id}/${file.name}`);
+        if (user.storageKey && !objects.includes(user.storageKey)) objects.push(user.storageKey);
+        if (objects.length) {
+          const removed = await db.storage.from("resumes").remove(objects);
+          if (removed.error) throw removed.error;
+        }
+      } catch { cleanupErrors.push(`storage:${user.id}`); }
+      try {
+        const removedState = await db.from("app_states").delete().eq("user_id", user.id);
+        if (removedState.error) throw removedState.error;
+      } catch { cleanupErrors.push(`state:${user.id}`); }
+      try {
+        const deleted = await db.auth.admin.deleteUser(user.id);
+        if (deleted.error) throw deleted.error;
+      } catch { cleanupErrors.push(`auth:${user.id}`); }
+    }
+    if (cleanupErrors.length) {
+      console.error(`CLEANUP completed with ${cleanupErrors.length} disposable resource errors`);
+      process.exitCode = 1;
+    } else console.log("CLEANUP disposable onboarding accounts and resume objects removed");
   }
 }
 

@@ -53,8 +53,8 @@ async function main() {
     assert.deepEqual(after.profile.facts[0], before.profile.facts[0]);
     const proposals = after.profile.facts.filter((fact) => fact.source === "resume");
     assert.ok(proposals.length >= 4, `Expected at least the four known resume claims, received ${proposals.length}`); assert.ok(proposals.every((fact) => !fact.verified));
-    assert.equal(after.profile.name, "Synthetic Applicant", "Resume parsing must preserve the existing name when the source has no contact header.");
-    assert.equal(after.profile.email, users[0].email, "Resume parsing must preserve the authenticated email when the source has no contact header.");
+    assert.equal(after.profile.name, "", "A fresh replacement without a contact header must leave the imported name blank.");
+    assert.equal(after.profile.email, "", "A fresh replacement without a contact header must leave the imported email blank.");
     assert.equal(after.profile.phone, "", "Resume parsing must not invent a phone number when the source has no contact header.");
     assert.ok(proposals.some((f) => f.text.includes("Orbit Labs") && f.text.includes("explainable feature-level predictions")));
     assert.ok(proposals.some((f) => f.text.includes("travel-aware tasks, with quiet hours")));

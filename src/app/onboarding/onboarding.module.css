@@ -30,7 +30,10 @@
 .arrangements { display: flex; flex-wrap: wrap; gap: 8px 28px; border: 0; padding: 0; margin: 0; }
 .arrangements legend { margin-bottom: 8px; font-size: 14px; font-weight: 500; }
 .facts { display: grid; gap: 20px; }
-.facts label > span { color: #4e625b; }
+.factGroup { display: grid; gap: 16px; border: 1px solid var(--line); padding: 16px; margin: 0; min-width: 0; }
+.factGroup legend { padding: 0 6px; color: var(--forest); font-size: 14px; font-weight: 700; }
+.factGroup label > span { color: #4e625b; }
+.factSource { font-size: 13px; font-weight: 400; }
 .source { margin: 24px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .source summary { min-height: 44px; padding: 12px 0; color: var(--forest); font-size: 14px; cursor: pointer; }
 .source pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; line-height: 1.65; max-height: 420px; overflow: auto; padding-bottom: 16px; }
@@ -53,7 +56,10 @@
 .review > div { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr); gap: 24px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 1.6; }
 .review dt { color: #4e625b; }
 .review dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.reviewFacts { padding-left: 20px; font-size: 14px; line-height: 1.7; }
+.reviewFacts { font-size: 14px; line-height: 1.7; }
+.reviewFacts section { margin: 16px 0 0; }
+.reviewFacts h4 { margin: 0 0 4px; color: var(--forest); font-size: 14px; }
+.reviewFacts ul { margin: 0; padding-left: 20px; }
 .reviewFacts li { padding: 6px 0; }
 .consent { margin: 28px 0; padding-top: 20px; border-top: 1px solid var(--line); max-width: 70ch; font-size: 14px; line-height: 1.7; color: #344d43; }
 .footer { display: flex; justify-content: space-between; gap: 12px; padding-top: 28px; margin-top: 32px; border-top: 1px solid var(--line); }

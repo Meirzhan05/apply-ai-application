@@ -55,7 +55,7 @@ describe("onboarding action boundary", () => {
       body: JSON.stringify({ action: "profile", payload: {
         currentLocation: { city: " Almaty ", region: " Almaty Region ", country: " Kazakhstan " },
         preferredLocations: ["United States"], preferredTitles: [],
-        workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+        workArrangements: ["remote", "hybrid"], remoteOnly: true, willingToRelocate: false,
         questionnaire: { availability: "June 2027" }, userId: "owner-b",
       } }),
     }));
@@ -64,7 +64,7 @@ describe("onboarding action boundary", () => {
     expect(saved).toMatchObject({
       currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
       preferredLocations: ["United States"], preferredTitles: [],
-      workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+      workArrangements: ["remote", "hybrid"], remoteOnly: false, willingToRelocate: false,
       onboarding: { questionnaire: { availability: "June 2027" } },
     });
     expect(saved.searchPreferencesConfirmedAt).toBeTruthy();
@@ -224,6 +224,7 @@ describe("onboarding action boundary", () => {
     });
     const facts = initialDemoState().profile.facts;
     await POST(post("onboarding", { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, facts }));
+    mocks.memory.get("owner-a")!.profile = completeOnboardingFixture(mocks.memory.get("owner-a")!.profile);
     const before = mocks.memory.get("owner-a")!.profile.automationVersion;
     expect((await POST(post("enrollPilot", { confirmed: true, consentVersion: "pilot-consent-v1", userId: "owner-b" }))).status).toBe(200);
     expect(mocks.memory.get("owner-a")!.profile.automationVersion).toBe(before);
@@ -242,6 +243,7 @@ describe("onboarding action boundary", () => {
     });
     const facts = initialDemoState().profile.facts;
     await POST(post("onboarding", { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, facts }));
+    mocks.memory.get("owner-a")!.profile = completeOnboardingFixture(mocks.memory.get("owner-a")!.profile);
     await POST(post("enrollPilot", { confirmed: true, consentVersion: "pilot-consent-v1" }));
     await POST(post("select", { jobId: "demo-engineering-intern" }));
     const before = mocks.memory.get("owner-a")!.applications[0].pilotAttempt!;

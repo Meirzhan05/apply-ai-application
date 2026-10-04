@@ -32,6 +32,8 @@ describe("mandatory onboarding admission", () => {
     expect(actionNeedsCompletedOnboarding("onboardingDraft")).toBe(false);
     expect(actionNeedsCompletedOnboarding("profile")).toBe(false);
     expect(actionNeedsCompletedOnboarding("checkSubmissionResult")).toBe(false);
+    expect(actionNeedsCompletedOnboarding("select")).toBe(true);
+    expect(actionNeedsCompletedOnboarding("futureUnknownAction")).toBe(true);
     expect(actionNeedsCompletedOnboarding("draft")).toBe(true);
     expect(actionNeedsCompletedOnboarding("startBrowser")).toBe(true);
   });
