@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_BUILD_DIR || ".next",
-  serverExternalPackages: ["pdf-parse", "mammoth", "@napi-rs/canvas"],
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth", "@napi-rs/canvas"],
   outputFileTracingIncludes: {
     "/*": ["./src/assets/fonts/*"],
     // pdfjs loads its optional native polyfills dynamically. Static tracing

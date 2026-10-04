@@ -110,6 +110,15 @@ it("uses the browser for required consent rather than inventing consent", async 
   expect((await prepareApiApplication(app, job, state.profile)).kind).toBe("browser");
 });
 
+it("reuses saved contact links only for their matching employer questions", async () => {
+  configure("greenhouse");
+  state.profile.links = ["https://www.linkedin.com/in/candidate", "https://github.com/candidate", "https://candidate.example.com/portfolio", "https://unrelated.example.com/project"];
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [...greenhousePosting().questions,
+    ...["LinkedIn URL", "GitHub profile", "Portfolio URL", "Website"].map((label, index) => ({ label, required: false, fields: [{ name: `question_${index}`, type: "input_text" }] }))] })));
+  const form = await review();
+  expect(form.fields.slice(-4).map((field) => field.value)).toEqual(["https://www.linkedin.com/in/candidate", "https://github.com/candidate", "https://candidate.example.com/portfolio", ""]);
+});
+
 it("uses the browser for conditional Ashby fields", async () => {
   configure("ashby"); vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...ashbyPosting(), results: { ...ashbyPosting().results,
     applicationFormDefinition: { sections: [{ fields: [...ashbyFields, { ...ashbyFields[0],

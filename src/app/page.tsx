@@ -44,6 +44,7 @@ import {
   ClipboardList,
   FileText,
   LoaderCircle,
+  RotateCcw,
   Menu,
   Search,
   Settings2,
@@ -100,6 +101,8 @@ export default function Dashboard() {
   const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  const [resumeImportError, setResumeImportError] = useState("");
+  const resumeRetryFile = useRef<File | null>(null);
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -189,6 +192,26 @@ export default function Dashboard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed.");
       return null;
+    } finally {
+      setBusy("");
+    }
+  };
+  const importResume = async (file?: File) => {
+    resumeRetryFile.current = file ?? null;
+    setBusy("upload");
+    setResumeImportError("");
+    const body = new FormData();
+    if (file) body.set("file", file);
+    else body.set("reuse", "true");
+    try {
+      const response = await fetch("/api/resume", { method: "POST", body });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Resume import failed. Try again or choose another file.");
+      const next = await reload();
+      setProfileDraft(structuredClone(next.profile));
+      resumeRetryFile.current = null;
+    } catch (err) {
+      setResumeImportError(err instanceof Error ? err.message : "Resume import failed. Try again or choose another file.");
     } finally {
       setBusy("");
     }
@@ -1714,7 +1737,7 @@ export default function Dashboard() {
                       {labels[key]}
                       <input
                         value={profileDraft[key]}
-                        disabled={key === "email" && !data.profile.demo}
+                        type={key === "email" ? "email" : key === "phone" ? "tel" : "text"}
                         onChange={(event) =>
                           setProfileDraft({
                             ...profileDraft,
@@ -1724,6 +1747,10 @@ export default function Dashboard() {
                       />
                     </label>
                   ))}
+                  <label>
+                    Links (optional)
+                    <textarea rows={3} value={(profileDraft.links ?? []).join("\n")} onChange={(event) => setProfileDraft({ ...profileDraft, links: event.target.value.split("\n") })} />
+                  </label>
                 </div>
                 <h3>Search preferences</h3>
                 <div className="form-grid">
@@ -1913,32 +1940,18 @@ export default function Dashboard() {
                   <input
                     type="file"
                     accept=".pdf,.docx"
+                    disabled={Boolean(busy)}
                     onChange={async (event) => {
                       const file = event.target.files?.[0];
+                      event.currentTarget.value = "";
                       if (!file) return;
-                      setBusy("upload");
-                      setError("");
-                      const body = new FormData();
-                      body.set("file", file);
-                      try {
-                        const response = await fetch("/api/resume", {
-                          method: "POST",
-                          body,
-                        });
-                        const result = await response.json();
-                        if (!response.ok) throw new Error(result.error);
-                        const next = await reload();
-                        setProfileDraft(structuredClone(next.profile));
-                      } catch (err) {
-                        setError(
-                          err instanceof Error ? err.message : "Upload failed.",
-                        );
-                      } finally {
-                        setBusy("");
-                      }
+                      await importResume(file);
                     }}
                   />
                 </label>
+                {busy === "upload" && <p role="status"><LoaderCircle size={16} className="spin" /> Importing resume...</p>}
+                {resumeImportError && <div role="alert"><p>{resumeImportError}</p><button className="outline-action" disabled={Boolean(busy)} onClick={() => importResume(resumeRetryFile.current ?? undefined)}><RotateCcw size={16} /> Retry import</button></div>}
+                {profileDraft.resumeSource && <button className="text-button" disabled={Boolean(busy)} onClick={() => importResume()}><FileText size={16} /> Use saved resume</button>}
                 {profileDraft.resumeSourceDocument && <ResumeSourceSupportNotice source={profileDraft.resumeSourceDocument} />}
                 {profileDraft.resumeText && (
                   <details className="resume-text">

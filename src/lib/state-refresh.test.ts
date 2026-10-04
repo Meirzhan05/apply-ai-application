@@ -12,7 +12,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.user.mockResolvedValue("owner-a");
   mocks.version.mockResolvedValue('"owner-a-version-1"');
-  mocks.load.mockResolvedValue({ profile: { email: "" }, jobs: [] });
+  mocks.load.mockResolvedValue({ profile: { email: "contact@example.com" }, jobs: [] });
   mocks.email.mockResolvedValue({ data: { user: { email: "owner@example.com" } } });
 });
 
@@ -31,7 +31,7 @@ it("sends changed data with a private validator, including when another owner's 
   expect(response.headers.get("etag")).toBe('"owner-a-version-1"');
   expect(response.headers.get("cache-control")).toBe("private, no-store");
   expect(mocks.load).toHaveBeenCalledWith("owner-a");
-  expect((await response.json()).profile.email).toBe("owner@example.com");
+  expect((await response.json()).profile.email).toBe("contact@example.com");
 });
 
 it("authenticates before considering a supplied validator", async () => {

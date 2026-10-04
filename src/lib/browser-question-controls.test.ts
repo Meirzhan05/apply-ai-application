@@ -113,6 +113,23 @@ it("fills more than twenty explicitly approved browser answers", async () => {
   expect(employer.observations().submitClicks).toBe(0);
 });
 
+it("fills saved LinkedIn and GitHub links while leaving an ambiguous portfolio blank", async () => {
+  const { app, employer } = fixture(`<label for="linkedin">LinkedIn URL</label><input id="linkedin" name="linkedin"><label for="github">GitHub profile</label><input id="github" name="github"><label for="portfolio">Portfolio URL</label><input required id="portfolio" name="portfolio">`);
+  transport.launch.mockResolvedValue(employer.browser);
+  const state = initialDemoState();
+  const profile = state.profile;
+  profile.links = ["https://linkedin.com/in/candidate", "https://github.com/candidate", "https://unrelated.example.com/project"];
+  const job = { ...state.jobs[0], applyUrl: "https://jobs.example/apply", url: "https://jobs.example/apply" };
+  state.jobs = [job]; state.applications = [app]; app.userId = profile.id; app.jobId = job.id; app.status = "selected";
+  const fact = profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Contact link fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [] });
+  for (const file of packet.files ?? []) if (file.storageKey) files.push(`.data/application-files/${file.storageKey}`);
+  setPacket(state, app, packet); approveFill(app, profile.id, app.packetHash!, job.applyUrl);
+  const result = await prepareBrowser(app, job, profile);
+  expect(result.form.fields.map(field => field.value)).toEqual(["https://linkedin.com/in/candidate", "https://github.com/candidate", ""]);
+  expect(employer.observations().submitClicks).toBe(0);
+});
+
 it("accepts an answered required widget without treating it as an unfamiliar control", async () => {
   const { app } = fixture(locationHtml.replace('class="ashby-application-form-input-yesno"', 'class="ashby-application-form-input-yesno" aria-required="true"')
     .replace('aria-pressed="false" data-option="no"', 'aria-pressed="true" data-option="no"'));

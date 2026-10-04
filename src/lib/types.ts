@@ -187,6 +187,7 @@ export interface Profile {
   email: string;
   school: string;
   phone: string;
+  links?: string[];
   graduationYear: string;
   headline: string;
   skills: string[];
@@ -203,6 +204,7 @@ export interface Profile {
   resumeText?: string;
   resumeSource?: ResumeSource;
   resumeSourceDocument?: ResumeSourceDocument;
+  resumeImport?: { token: string; startedAt: string };
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;

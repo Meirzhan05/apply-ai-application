@@ -23,7 +23,7 @@ import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { checkSubmissionResult } from "@/lib/submission-verification";
 import { sameOrigin } from "@/lib/request-security";
 import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
-import { adminSupabase } from "@/lib/supabase-admin";
+import { normalizeProfileLinks } from "@/lib/resume-profile-basics";
 import {
   refreshBrowserSnapshot,
   repairEducationFields,
@@ -196,11 +196,6 @@ async function perform(
     }, ownerContext);
   }
   if (action === "profile") {
-    const verifiedEmail = isDemo()
-      ? null
-      : (await adminSupabase().auth.admin.getUserById(userId)).data.user?.email;
-    if (!isDemo() && !verifiedEmail)
-      throw new Error("Your sign-in email could not be verified.");
     return mutateState(userId, (state) => {
       const profile = state.profile;
       const fields: Array<keyof Profile> = [
@@ -215,8 +210,8 @@ async function perform(
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
       });
-      if (verifiedEmail) profile.email = verifiedEmail;
-      else if ("email" in payload) profile.email = text(payload.email, 254);
+      if ("email" in payload) profile.email = z.union([z.email().max(254), z.literal("")]).parse(text(payload.email, 254));
+      if ("links" in payload) profile.links = normalizeProfileLinks(z.array(z.string().max(500)).max(30).parse(payload.links));
       for (const key of [
         "skills",
         "preferredTitles",
