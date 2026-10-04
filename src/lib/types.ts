@@ -31,7 +31,12 @@ export type CoverLetterMode = "disabled" | "required-only" | "enabled";
 export type EssayMode = "automatic-truthful";
 
 export interface OnboardingQuestionnaire {
+  immigrationStatus?: "us-citizen" | "permanent-resident" | "visa-holder" | "other";
+  visaType?: string;
+  immigrationStatusDetails?: string;
   workAuthorization?: FactualDeclaration;
+  sponsorshipNow?: FactualDeclaration;
+  sponsorshipFuture?: FactualDeclaration;
   requiresSponsorship?: FactualDeclaration;
   availability?: string;
   graduationYear?: string;

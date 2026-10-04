@@ -65,6 +65,7 @@ import {
 } from "@/lib/workflow";
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 import { enrollPilot, withdrawPilot } from "@/lib/pilot";
+import { onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -131,14 +132,7 @@ async function perform(
   }
   if (action === "onboarding") {
     return mutateState(userId, (state) => {
-      const questionnaire = z
-        .object({
-          workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-          requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-          availability: z.string().max(200).optional(),
-          graduationYear: z.string().max(20).optional(),
-        })
-        .parse(payload.questionnaire ?? payload);
+      const questionnaire = onboardingQuestionnaireSchema.parse(payload.questionnaire ?? payload);
       const facts = payload.facts === undefined
         ? undefined
         : z
@@ -266,12 +260,7 @@ async function perform(
       if ("sensitiveAnswers" in payload)
         profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
       const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
-      const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
-        workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-        requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-        availability: z.string().max(200).optional(),
-        graduationYear: z.string().max(20).optional(),
-      }).parse(questionnaire);
+      const parsedQuestionnaire = questionnaire === undefined ? undefined : onboardingQuestionnaireSchema.parse(questionnaire);
       const settings = payload.automationSettings && typeof payload.automationSettings === "object" ? z.object({
         resumeTailoring: z.boolean().optional(),
         coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
