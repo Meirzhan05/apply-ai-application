@@ -6,11 +6,26 @@ import { escapeLatex, resumeLatex } from "@/lib/resume-latex";
 import { readModelUsage } from "@/lib/model-usage";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 import type { ResumeAuditOverride } from "@/lib/fixtures/resume-grounding";
+import OpenAI from "openai";
 const mocks = vi.hoisted(() => ({ parse: vi.fn() }));
-vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; } }));
+vi.mock("openai", async importOriginal => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return { ...actual, default: class extends actual.default {
+    constructor(...args: ConstructorParameters<typeof actual.default>) { super(...args); this.responses.parse = mocks.parse; }
+  } };
+});
 beforeEach(() => { mocks.parse.mockReset(); vi.stubEnv("OPENAI_API_KEY", "synthetic"); });
 afterEach(() => vi.unstubAllEnvs());
 describe("structured resume grounding", () => {
+  it("recovers a transient audit timeout without repeating a valid structured draft", async () => {
+    const { profile, document } = latexFixture();
+    mocks.parse.mockResolvedValueOnce({ output_parsed: document })
+      .mockRejectedValueOnce(new OpenAI.APIConnectionTimeoutError())
+      .mockImplementationOnce(async request => ({ output_parsed: resumeGroundingOutput(JSON.parse(request.input[1].content).claims) }));
+    const result = await draftResumeDocument(profile, initialDemoState().jobs[0], Date.now() + 180_000);
+    expect(result.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
+    expect(() => validateResumeDocument(profile, result)).not.toThrow();
+  });
   it("keeps preflight missing-fact errors concise while preserving detailed diagnostics", () => {
     const message = resumeDraftDiagnosticMessage({ version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0,
       findings: ["one", "two", "three"].map((claimId) => ({ claimId, affectedText: claimId, outcome: "unsupported", reason: "Unconfirmed source claim.", evidenceFactIds: [], requiredInformation: "Confirm the source claim in profile facts." })),

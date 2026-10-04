@@ -6,7 +6,7 @@ import { meterModelResponse } from "@/lib/model-usage";
 import { evidenceBelongsToEntry } from "@/lib/fact-evidence";
 import { newId } from "@/lib/crypto";
 import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
-import { withResumeModelRetry } from "@/lib/resume-model-retry";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 import type { ResumeSourceAnchor, ResumeSourceDocument, VerifiedFact } from "@/lib/types";
 
 const Fact = z.object({
@@ -90,8 +90,7 @@ export async function extractResumeFacts(source: ResumeSourceDocument, options: 
   const deadline = options.deadline ?? Date.now() + 480_000;
   const modelCall: ResumeFactModel = options.modelCall ?? (async request => {
     if (!process.env.OPENAI_API_KEY) throw new Error("Resume extraction is unavailable. Try again later.");
-    const timeout = Math.min(75_000, deadline - Date.now());
-    if (timeout < 1_000) throw new Error("Resume extraction timed out. Retry extraction.");
+    const timeout = resumeModelTimeout(deadline);
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout, maxRetries: 0 });
     const result = await meterModelResponse({ userId: options.userId, backgroundJobId: `resume-facts:${source.sourceHash}` }, request.operation, DEFAULT_AI_MODEL, () => client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
         input: [{ role: "system", content: request.system }, { role: "user", content: JSON.stringify(request.input) }],

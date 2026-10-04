@@ -1,11 +1,18 @@
 import OpenAI from "openai";
 
+/** All resume model paths share the same request limit and respect the enclosing job deadline. */
+export function resumeModelTimeout(deadline: number): number {
+  const remaining = deadline - Date.now();
+  if (remaining < 1_000) throw new Error("Resume processing timed out. Retry.");
+  return Math.min(75_000, remaining);
+}
+
 /** One bounded retry for transient provider failures; each paid attempt is metered by its caller. */
 export async function withResumeModelRetry<T>(call: () => Promise<T>, options: {
   deadline: number; beforeModelCall?: () => Promise<void>;
 }): Promise<T> {
   for (let attempt = 0; ; attempt++) {
-    if (options.deadline - Date.now() < 1_000) throw new Error("Resume extraction timed out. Retry extraction.");
+    resumeModelTimeout(options.deadline);
     await options.beforeModelCall?.();
     try { return await call(); }
     catch (error) {

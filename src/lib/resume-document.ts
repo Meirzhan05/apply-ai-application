@@ -1,6 +1,7 @@
 import { isUsableFact } from "@/lib/fact-evidence";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 import OpenAI from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -265,7 +266,7 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
   if (!facts.length) throw new Error("Upload a resume or add facts in your profile before drafting.");
   const remaining = () => {
     if (deadline - Date.now() < 1000) throw providerFailure(counts, deadline);
-    return Math.min(45_000, deadline - Date.now());
+    return resumeModelTimeout(deadline);
   };
   let client: OpenAI;
   try { client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: remaining() }); }
@@ -281,17 +282,18 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     }
   };
   const callWriter = async (request: unknown, repair: boolean): Promise<ResumeDocument> => {
-    await verifyCurrentRun();
-    const timeout = remaining();
+    let started = false;
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
-      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, repair ? "resume-repair" : "resume-generation", DEFAULT_AI_MODEL, async () => {
-        if (repair) counts.repairAttempts++;
-        counts.writerAttempts++;
-        return client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
+      result = await withResumeModelRetry(() => {
+        if (!started) {
+          if (repair) counts.repairAttempts++;
+          counts.writerAttempts++; started = true;
+        }
+        return meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, repair ? "resume-repair" : "resume-generation", DEFAULT_AI_MODEL, () => client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
           input: [{ role: "system", content: repair ? `${writerPrompt} This is a repair of the supplied currentDraft. Use the exact findings to correct, simplify, or remove only the unsupported wording they identify. Do not invent facts, turn original resume text into evidence, change unrelated supported claims, or delete existing employment experience. Keep the same employer associations and preserve facts and qualifiers. For each sourceActivityPreservationChecks item, keep the same work activity, object and result under the same experience entry while correcting only the unsupported qualifier. Do not replace it with another task just because the same broad confirmed fact cites both. If the activity cannot be corrected without inventing details, do not substitute a different activity.` : writerPrompt }, { role: "user", content: JSON.stringify(request) }],
-          text: { format: zodTextFormat(ResumeDraftSchema, "structured_resume") } }, { timeout });
-      });
+          text: { format: zodTextFormat(ResumeDraftSchema, "structured_resume") } }, { timeout: remaining() }));
+      }, { deadline, beforeModelCall: verifyCurrentRun });
     } catch (error) { if (error instanceof ResumeDraftError) throw error; throw providerFailure(counts, deadline); }
     try { return prepareWriterOutput(profile, result.output_parsed); }
     catch (error) {
@@ -302,18 +304,17 @@ export async function draftResumeDocument(profile: Profile, job: Job, deadline: 
     }
   };
   const callAudit = async (doc: ResumeDocument, preservationChecks: SourceActivityPreservationCheck[] = []): Promise<ValidatedResumeAudit> => {
-    await verifyCurrentRun();
-    const timeout = remaining();
+    let started = false;
     const claims = claimManifest(doc);
     let result: Awaited<ReturnType<typeof client.responses.parse>>;
     try {
-      result = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, async () => {
-        counts.checkerAttempts++;
-        return client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
+      result = await withResumeModelRetry(() => {
+        if (!started) { counts.checkerAttempts++; started = true; }
+        return meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `resume:${job.id}` }, "resume-grounding", DEFAULT_AI_MODEL, () => client.responses.parse({ model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
           input: [{ role: "system", content: auditPrompt }, { role: "user", content: JSON.stringify({ ...context, claims,
             sourceActivityPreservationChecks: preservationChecks.map(({ sourceClaimId, experienceEntryId, originalClaimText, requiredInformation }) => ({ sourceClaimId, experienceEntryId, originalClaimText, requiredInformation })) }) }],
-          text: { format: zodTextFormat(Check, "resume_grounding_audit") } }, { timeout });
-      });
+          text: { format: zodTextFormat(Check, "resume_grounding_audit") } }, { timeout: remaining() }));
+      }, { deadline, beforeModelCall: verifyCurrentRun });
     } catch (error) { if (error instanceof ResumeDraftError) throw error; throw providerFailure(counts, deadline); }
     const audit = validatedFindings(result.output_parsed, claims, new Set(facts.map((fact) => fact.id)), preservationChecks);
     if (!audit) throw malformed(counts);

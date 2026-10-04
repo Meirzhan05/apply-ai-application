@@ -4,7 +4,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import { meterModelResponse } from "@/lib/model-usage";
 import { normalizeProfileDetail, profileDetailKeys, validProfileDetail } from "@/lib/profile-memory";
-import { withResumeModelRetry } from "@/lib/resume-model-retry";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 import type { Profile, ProfileDetailKey, ResumeSourceDocument } from "@/lib/types";
 
 const Detail = z.object({ key: z.enum([...profileDetailKeys, "skill"]), value: z.string(), anchorId: z.string(), quote: z.string() });
@@ -18,7 +18,7 @@ export async function extractResumeProfile(source: ResumeSourceDocument, options
   const deadline = options.deadline ?? Date.now() + 480_000;
   const modelCall: ResumeProfileModel = options.modelCall ?? (async request => {
     if (!process.env.OPENAI_API_KEY) throw new Error("Resume extraction is unavailable. Try again later.");
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: Math.min(75_000, deadline - Date.now()), maxRetries: 0 });
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: resumeModelTimeout(deadline), maxRetries: 0 });
     const result = await meterModelResponse({ userId: options.userId, backgroundJobId: `resume-profile:${source.sourceHash}` }, request.operation, DEFAULT_AI_MODEL, () => client.responses.parse({
       model: DEFAULT_AI_MODEL, service_tier: "default", store: false,
       input: [{ role: "system", content: request.system }, { role: "user", content: JSON.stringify(request.input) }],

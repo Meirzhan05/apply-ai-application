@@ -4,6 +4,7 @@ import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
+import { resumeModelTimeout, withResumeModelRetry } from "@/lib/resume-model-retry";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -117,9 +118,10 @@ export async function draftPacket(
   let model = sourcePlan?.model ?? resumeDocument?.model ?? (originalResumeOnly ? "confirmed-original-upload" : "verified-facts-template");
 
   if (!originalResumeOnly && !options && process.env.OPENAI_API_KEY && !previous) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 0 });
+    const deadline = Date.now() + 180_000;
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: resumeModelTimeout(deadline), maxRetries: 0 });
     try {
-      const response = await meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", DEFAULT_AI_MODEL, () => client.responses.parse({
+      const response = await withResumeModelRetry(() => meterModelResponse({ userId: profile.id, jobId: job.id, backgroundJobId: `packet:${job.id}` }, "packet-drafting", DEFAULT_AI_MODEL, () => client.responses.parse({
         model: DEFAULT_AI_MODEL,
         service_tier: "default",
         store: false,
@@ -143,7 +145,7 @@ export async function draftPacket(
           },
         ],
         text: { format: zodTextFormat(DraftSchema, "application_draft") },
-      }));
+      }, { timeout: resumeModelTimeout(deadline) })), { deadline });
       const value = response.output_parsed;
       if (value) {
         const byId = new Map(facts.map((fact) => [fact.id, fact]));
