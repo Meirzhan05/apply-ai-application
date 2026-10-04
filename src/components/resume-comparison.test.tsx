@@ -5,7 +5,7 @@ import { initialDemoState } from "@/lib/demo-data";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import type { ApplicationPacket, DocxResumeArtifact, Profile, ResumeDraftDiagnostics, ResumeSourcePlan } from "@/lib/types";
-import { ResumeComparison, ResumeComparisonView, ResumeSourceFactsNotice, ResumeSourceSupportNotice } from "@/components/resume-comparison";
+import { ResumeComparison, ResumeComparisonView, ResumeSourceFactsNotice, ResumeSourceSupportNotice, ResumeDraftHistory } from "@/components/resume-comparison";
 
 async function fixture() {
   const state = initialDemoState();
@@ -168,4 +168,14 @@ describe("ResumeComparison", () => {
       expect(markup).not.toContain("resume-tailored-preview?download=1");
     }
   });
+});
+
+
+it("shows the failed rule and recovery in the résumé preparation history", () => {
+  const markup = renderToStaticMarkup(createElement(ResumeDraftHistory, { report: { writerAttempts: 2, checkerAttempts: 1, repairAttempts: 1,
+    attempts: [{ stage: "structure", writerAttempt: 1, checkerAttempt: 0, outcome: "failed", issues: [{ stage: "structure", code: "different_entry", message: "Use evidence from the same employer." }] },
+      { stage: "audit", writerAttempt: 2, checkerAttempt: 1, outcome: "passed", issues: [] }] } }));
+  expect(markup).toContain("Preparation history");
+  expect(markup).toContain("Use evidence from the same employer.");
+  expect(markup).toContain("Passed");
 });

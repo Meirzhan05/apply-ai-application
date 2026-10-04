@@ -62,7 +62,7 @@ function responseFor(request: { input: Array<{ content: string }>; text: { forma
   const name = request.text.format.name;
   if (name === "anchored_resume_edit_plan") {
     const body = JSON.parse(request.input[1].content) as { sourceDocument: { anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean }> }; confirmedFacts: Array<{ id: string; sourceAnchorId?: string }> };
-    return { claims: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({
+    return { edits: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor) => ({
       anchorId: anchor.id,
       text: anchor.kind === "bullet" && anchor.text === "Built a search index for 1,200 users." ? "Built search index for 1,200 users." : anchor.text,
       factIds: [body.confirmedFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id],

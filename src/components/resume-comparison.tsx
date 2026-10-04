@@ -1,15 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ApplicationPacket, LatexResumeArtifact, Profile, ResumeArtifact, ResumeDraftDiagnostics, VerifiedFact } from "@/lib/types";
+import type { ApplicationPacket, LatexResumeArtifact, Profile, ResumeArtifact, ResumeDraftDiagnostics, ResumeDraftAttempts, VerifiedFact } from "@/lib/types";
 
 type SourceArtifact = Exclude<ResumeArtifact, LatexResumeArtifact>;
 type SourceDocument = NonNullable<Profile["resumeSourceDocument"]>;
 type Freshness = "checking" | "current" | "stale" | "unavailable";
 type FreshnessState = { key: string; value: Freshness; reasons: string[] };
 
+export function ResumeDraftHistory({ report }: { report: ResumeDraftAttempts }) {
+  if (!report.attempts?.length) return null;
+  const labels = { writer: "Draft", structure: "Edit validation", audit: "Evidence check", layout: "Layout check" };
+  return <details className="resume-comparison-diagnostics">
+    <summary>Preparation history</summary>
+    <p>{report.writerAttempts} draft attempts · {report.repairAttempts} repairs · {report.checkerAttempts} evidence checks</p>
+    <ol>{report.attempts.map((attempt, index) => <li key={index}>
+      <strong>{labels[attempt.stage]} · attempt {attempt.stage === "audit" ? attempt.checkerAttempt : attempt.writerAttempt} · {attempt.outcome === "passed" ? "Passed" : "Needs correction"}</strong>
+      {attempt.issues.map((issue, issueIndex) => <p key={issueIndex}>{issue.message}</p>)}
+    </li>)}</ol>
+  </details>;
+}
+
 export function ResumeSourceFactsNotice({ diagnostics, onReviewProfile }: { diagnostics: ResumeDraftDiagnostics; onReviewProfile: () => void }) {
-  if (diagnostics.outcome !== "needs_information" || diagnostics.writerAttempts !== 0 || diagnostics.checkerAttempts !== 0) return null;
+  if (diagnostics.outcome !== "needs_information" || diagnostics.writerAttempts !== 0 || diagnostics.checkerAttempts !== 0) return <ResumeDraftHistory report={diagnostics} />;
   return <section className="resume-comparison-diagnostics" aria-label="Résumé source facts need review">
     <h4>Review the source facts before drafting</h4>
     <p>{diagnostics.findings.length} original résumé {diagnostics.findings.length === 1 ? "claim needs" : "claims need"} your review. Nothing is used until you confirm it in profile facts.</p>
@@ -219,6 +232,7 @@ export function ResumeComparisonView({
   return (
     <div className="resume-comparison">
       <p className={`resume-comparison-state ${freshness}`} role="status">{freshnessMessage(freshness, freshnessReasons)}</p>
+      <ResumeDraftHistory report={failingDiagnostics ?? plan.grounding} />
       {failingDiagnostics && (
         <section className="resume-comparison-diagnostics" aria-label="Latest résumé preparation result">
           <h4>{failingDiagnostics.outcome === "needs_information" ? "Résumé needs more information" : "Résumé preparation could not be completed"}</h4>

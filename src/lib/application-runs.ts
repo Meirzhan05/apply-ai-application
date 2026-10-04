@@ -210,7 +210,9 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
       if (target?.status === "drafting" && target.runToken === runToken) {
         transition(target, ["drafting"], target.autonomousAuthorization ? "needs_user_action" : target.packet ? "draft_review" : "selected");
         target.runWorkerClaimedAt = undefined;
-        target.error = error instanceof Error ? error.message : "Drafting failed.";
+        const message = error instanceof Error ? error.message : "Drafting failed.";
+        const withoutPreservation = message.replace(/(?:Your |The |your |the )?(?:last valid|previous) packet is preserved\.?/g, "").replace(/\s+([.;])/g, "$1").replace(/;\s*$/g, ".").trim();
+        target.error = `${withoutPreservation}${target.packet ? " Your existing materials remain available." : ""}`;
         if (error instanceof ResumeDraftError) target.resumeDraftDiagnostics = error.diagnostics;
         if (target.autonomousAuthorization) recordApplicationBlocker(target, error instanceof ResumeDraftError && error.diagnostics.outcome === "needs_information" ? "missing_answer" : blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: job?.applyUrl });
       }

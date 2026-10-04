@@ -1,12 +1,12 @@
-import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim } from "@/lib/types";
+import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim, ResumeRepairIssue } from "@/lib/types";
 import { canonicalPdfSourceFactText, evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
 const normalized = (value: string) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 const normalizedContextComponent = (value: string) => value.normalize("NFKC").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
-export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 = 1, trustedName?: string): ResumeSourceAnchor[] {
-  const required = policyVersion === 2 ? evidenceRequiredAnchorIds(source, trustedName) : undefined;
-  return source.anchors.filter((anchor) => policyVersion === 2 ? required!.has(anchor.id) : anchor.candidateClaim);
+export function sourceEvidenceAnchors(source: ResumeSourceDocument, policyVersion: 1 | 2 | 3 = 1, trustedName?: string): ResumeSourceAnchor[] {
+  const required = policyVersion >= 2 ? evidenceRequiredAnchorIds(source, trustedName, policyVersion as 2 | 3) : undefined;
+  return source.anchors.filter((anchor) => policyVersion >= 2 ? required!.has(anchor.id) : anchor.candidateClaim);
 }
 
 export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(source: T, trustedName?: string): T {
@@ -75,62 +75,85 @@ function validateLegacySourcePlan(input: {
     grounding.writerAttempts >= 1 && grounding.writerAttempts <= 3 && grounding.checkerAttempts >= 1 && grounding.checkerAttempts <= 3 && grounding.repairAttempts <= 2);
 }
 
-export function validateSourcePlanEvidence(input: {
+interface SourcePlanEvidenceInput {
   source: ResumeSourceDocument;
   profile: Profile;
   claims: ResumeSourceClaim[];
   edits: ResumeSourceEdit[];
   grounding?: ResumeGroundingSnapshot;
-  evidencePolicyVersion?: 1 | 2;
-}): boolean {
-  if ((input.evidencePolicyVersion ?? 1) === 1) return validateLegacySourcePlan(input);
-  const anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1, input.profile.name);
-  const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
-  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
-  const claimById = new Map<string, ResumeSourceClaim>();
-  const editById = new Map<string, ResumeSourceEdit>();
-  if (input.claims.length !== anchors.length || input.claims.some((claim) => {
-    const anchor = anchorById.get(claim.anchorId);
-    if (!anchor || claimById.has(anchor.id) || !claim.factIds.length || new Set(claim.factIds).size !== claim.factIds.length || claim.factIds.some((id) => !verified.has(id))) return true;
-    const eligibleFactIds = confirmedFactIdsForAnchor(input.profile, anchor, input.source);
-    if (!eligibleFactIds.some((id) => claim.factIds.includes(id))) return true;
-    if (anchor.kind !== "bullet" && claim.text !== anchor.text) return true;
-    if (claim.text !== anchor.text) {
-      const edit = editById.get(anchor.id) ?? input.edits.find((candidate) => candidate.anchorId === anchor.id);
-      if (!anchor.editable || !edit || edit.text !== claim.text || JSON.stringify([...edit.factIds].sort()) !== JSON.stringify([...claim.factIds].sort())) return true;
-    } else if (input.edits.some((edit) => edit.anchorId === anchor.id)) return true;
-    for (const id of claim.factIds) {
-      const fact = verified.get(id)!;
-      if (!fact.sourceAnchorId) continue;
-      const evidenceAnchor = input.source.anchors.find((candidate) => candidate.id === fact.sourceAnchorId);
-      if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId) return true;
-    }
-    claimById.set(anchor.id, claim);
-    return false;
-  })) return false;
-  for (const edit of input.edits) {
-    if (editById.has(edit.anchorId) || !claimById.has(edit.anchorId)) return false;
-    editById.set(edit.anchorId, edit);
-  }
-  if (input.edits.length !== [...new Set(input.edits.map((edit) => edit.anchorId))].length || input.edits.some((edit) => {
-    const claim = claimById.get(edit.anchorId)!;
-    return claim.text === anchorById.get(edit.anchorId)!.text || claim.text !== edit.text || JSON.stringify([...claim.factIds].sort()) !== JSON.stringify([...edit.factIds].sort());
-  })) return false;
-  const grounding = input.grounding;
-  if (!grounding) return true;
-  if (!Number.isInteger(grounding.writerAttempts) || grounding.writerAttempts < 1 || grounding.writerAttempts > 3 ||
-    !Number.isInteger(grounding.checkerAttempts) || grounding.checkerAttempts < 1 || grounding.checkerAttempts > 3 ||
-    !Number.isInteger(grounding.repairAttempts) || grounding.repairAttempts < 0 || grounding.repairAttempts > 2 || grounding.findings.length !== claimById.size) return false;
-  const findingIds = new Set<string>();
-  for (const finding of grounding.findings) {
-    const claim = claimById.get(finding.claimId);
-    if (!claim || findingIds.has(finding.claimId) || finding.outcome !== "supported" || !finding.evidenceFactIds.length ||
-      new Set(finding.evidenceFactIds).size !== finding.evidenceFactIds.length || finding.evidenceFactIds.some((id) => !verified.has(id) || !claim.factIds.includes(id))) return false;
-    findingIds.add(finding.claimId);
-  }
-  return findingIds.size === claimById.size;
+  evidencePolicyVersion?: 1 | 2 | 3;
 }
 
-export function planEvidencePolicy(plan: ResumeSourcePlan): 1 | 2 {
-  return plan.evidencePolicyVersion === 2 ? 2 : 1;
+/** Detailed feedback for new candidates; saved plans use the same acceptance rules. */
+export function sourcePlanEvidenceIssues(input: SourcePlanEvidenceInput): ResumeRepairIssue[] {
+  let anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1, input.profile.name);
+  // Policy 2 was deployed with both selections before artifact exclusions were
+  // versioned. Accept either complete historical manifest, never arbitrary subsets.
+  if (input.evidencePolicyVersion === 2) {
+    const currentAnchors = sourceEvidenceAnchors(input.source, 3, input.profile.name);
+    if (input.claims.length === currentAnchors.length && currentAnchors.every((anchor) => input.claims.some((claim) => claim.anchorId === anchor.id))) anchors = currentAnchors;
+  }
+  const issues: ResumeRepairIssue[] = [];
+  const add = (code: string, message: string, anchorId?: string) => issues.push({ stage: "structure", code, message, ...(anchorId ? { anchorId } : {}) });
+  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const allAnchors = new Map(input.source.anchors.map((anchor) => [anchor.id, anchor]));
+  const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
+  const seen = new Set<string>();
+  if (input.claims.length !== anchors.length) add("claim_count", "Include exactly one claim for every required source statement.");
+  for (const anchor of anchors) if (!input.claims.some((claim) => claim.anchorId === anchor.id)) add("missing_claim", "Restore the original statement and its confirmed evidence.", anchor.id);
+  for (const claim of input.claims) {
+    const anchor = anchorById.get(claim.anchorId);
+    if (!anchor) { add("unknown_anchor", "Use an existing required source statement ID.", claim.anchorId); continue; }
+    if (seen.has(anchor.id)) add("duplicate_claim", "Return this statement only once.", anchor.id);
+    seen.add(anchor.id);
+    if (!claim.factIds.length || new Set(claim.factIds).size !== claim.factIds.length || claim.factIds.some((id) => !verified.has(id)))
+      add("invalid_evidence", "Cite distinct, existing confirmed fact IDs for this source statement.", anchor.id);
+    if (!confirmedFactIdsForAnchor(input.profile, anchor, input.source).some((id) => claim.factIds.includes(id)))
+      add("missing_source_evidence", "Include confirmed evidence associated with this original statement.", anchor.id);
+    if (anchor.kind !== "bullet" && claim.text !== anchor.text) add("protected_text", "Copy this protected source text exactly; only editable bullets may change.", anchor.id);
+    if (claim.text !== anchor.text && !anchor.editable) add("uneditable_anchor", "Restore the original text; this source statement cannot be edited.", anchor.id);
+    for (const id of claim.factIds) {
+      const fact = verified.get(id);
+      if (!fact?.sourceAnchorId) continue;
+      const evidenceAnchor = allAnchors.get(fact.sourceAnchorId);
+      if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId)
+        add("different_entry", "Use confirmed facts from this same résumé entry; restore the original supported wording if necessary.", anchor.id);
+    }
+  }
+  const editById = new Map<string, ResumeSourceEdit>();
+  for (const edit of input.edits) {
+    if (editById.has(edit.anchorId)) add("duplicate_edit", "Return only one edit for this bullet.", edit.anchorId);
+    editById.set(edit.anchorId, edit);
+    const claim = input.claims.find((candidate) => candidate.anchorId === edit.anchorId);
+    if (!claim || claim.text !== edit.text || JSON.stringify([...claim.factIds].sort()) !== JSON.stringify([...edit.factIds].sort()) || claim.text === anchorById.get(edit.anchorId)?.text)
+      add("edit_mismatch", "The edit must exactly match its changed source claim and evidence.", edit.anchorId);
+  }
+  for (const claim of input.claims) if (anchorById.has(claim.anchorId) && claim.text !== anchorById.get(claim.anchorId)!.text && !editById.has(claim.anchorId))
+    add("missing_edit", "Include the corresponding edit for this changed bullet.", claim.anchorId);
+  const grounding = input.grounding;
+  const maxCheckerAttempts = input.evidencePolicyVersion === 3 ? 4 : 3;
+  if (grounding && (grounding.findings.length !== input.claims.length || grounding.findings.some((finding) => finding.outcome !== "supported") ||
+    !Number.isInteger(grounding.writerAttempts) || grounding.writerAttempts < 1 || grounding.writerAttempts > 3 ||
+    !Number.isInteger(grounding.checkerAttempts) || grounding.checkerAttempts < 1 || grounding.checkerAttempts > maxCheckerAttempts ||
+    !Number.isInteger(grounding.repairAttempts) || grounding.repairAttempts < 0 || grounding.repairAttempts > 2))
+    add("invalid_audit", "The saved grounding report is incomplete or outside the permitted attempt budget.");
+  if (grounding) {
+    const checked = new Set<string>();
+    for (const finding of grounding.findings) {
+      const claim = input.claims.find((candidate) => candidate.anchorId === finding.claimId);
+      if (!claim || checked.has(finding.claimId) || !finding.evidenceFactIds.length || new Set(finding.evidenceFactIds).size !== finding.evidenceFactIds.length ||
+        finding.evidenceFactIds.some((id) => !verified.has(id) || !claim.factIds.includes(id))) add("invalid_audit_evidence", "The grounding check must cite valid confirmed evidence for every statement.", finding.claimId);
+      checked.add(finding.claimId);
+    }
+  }
+  return issues;
+}
+
+export function validateSourcePlanEvidence(input: SourcePlanEvidenceInput): boolean {
+  if ((input.evidencePolicyVersion ?? 1) === 1) return validateLegacySourcePlan(input);
+  return sourcePlanEvidenceIssues(input).length === 0;
+}
+
+export function planEvidencePolicy(plan: ResumeSourcePlan): 1 | 2 | 3 {
+  return plan.evidencePolicyVersion ?? 1;
 }

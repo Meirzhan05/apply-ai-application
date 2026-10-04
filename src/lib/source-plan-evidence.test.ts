@@ -123,3 +123,16 @@ it("does not let an identical fact from a different entry suppress a review sugg
   const shortSource = { ...source, anchors: [shortProject] };
   expect(unconfirmedPdfFactSuggestions(profile, shortSource)).toContainEqual({ text: "Projects · Tools · Tools", sourceAnchorId: shortProject.id });
 });
+
+it("keeps saved policy-2 separator claims readable while policy-3 plans exclude them", async () => {
+  const parsed = await parsePdfSource(await createPdfSourceFixture());
+  const base = parsed.anchors.find((anchor) => anchor.kind === "entry")!;
+  const separator = { ...base, id: "saved-divider", text: "|", candidateClaim: true, kind: "entry" as const };
+  const source = { ...parsed, anchors: [separator] };
+  const profile = initialDemoState().profile;
+  profile.facts = [{ id: "confirmed-divider", text: "|", source: "resume", sourceAnchorId: separator.id, verified: true }];
+  const input = { source, profile, claims: [{ anchorId: separator.id, text: "|", factIds: ["confirmed-divider"] }], edits: [] };
+  expect(validateSourcePlanEvidence({ ...input, evidencePolicyVersion: 2 })).toBe(true);
+  expect(validateSourcePlanEvidence({ ...input, evidencePolicyVersion: 3 })).toBe(false);
+  expect(validateSourcePlanEvidence({ ...input, claims: [], evidencePolicyVersion: 3 })).toBe(true);
+});

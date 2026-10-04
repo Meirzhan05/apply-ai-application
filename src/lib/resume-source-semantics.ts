@@ -85,8 +85,8 @@ export function isSubstantiveSourceText(text: string, options: { isSection?: boo
 }
 
 /** Re-evaluate legacy stored flags as well as current parser output. */
-export function evidenceRequiredAnchorIds(source: ResumeSourceDocument, trustedName?: string): Set<string> {
-  const nonClaimArtifacts = source.format === "pdf" ? pdfNonClaimArtifactAnchorIds(source.anchors) : new Set<string>();
+export function evidenceRequiredAnchorIds(source: ResumeSourceDocument, trustedName?: string, policyVersion: 2 | 3 = 3): Set<string> {
+  const nonClaimArtifacts = policyVersion === 3 && source.format === "pdf" ? pdfNonClaimArtifactAnchorIds(source.anchors) : new Set<string>();
   const firstBodyAnchor = source.format === "docx"
     ? source.anchors.filter((anchor) => "partName" in anchor && anchor.partName === "word/document.xml").sort((left, right) => left.paragraphIndex - right.paragraphIndex)[0]
     : source.anchors.filter((anchor) => "pageNumber" in anchor && anchor.pageNumber === 1 && typeof anchor.readingOrder === "number" && !anchor.repeatedRole).sort((left, right) => (left.readingOrder ?? 0) - (right.readingOrder ?? 0))[0];
