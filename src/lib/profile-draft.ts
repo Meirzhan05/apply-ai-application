@@ -7,7 +7,9 @@ export const profileDraftSchema = z.object({
   name: z.string().trim().max(200).optional(),
   email: z.union([z.email().max(254), z.literal("")]).optional(),
   phone: z.string().trim().max(100).optional(),
-  links: z.array(z.string().max(500)).max(20).optional(),
+  // Keep the shared surface compatible with legacy profile links (30 entries)
+  // and onboarding's historical long-link allowance (2048 characters).
+  links: z.array(z.string().max(2048)).max(30).optional(),
   currentLocation: z.object({
     city: z.string().trim().max(120),
     region: z.string().trim().max(120),

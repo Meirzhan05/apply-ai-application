@@ -314,17 +314,19 @@ it.each([2, 3] as const)("recovers a missing confirmation from an existing parse
 }, 180_000);
 
 it("blocks a pre-feature PDF at the worker instead of using a generic résumé", async () => {
-  fixture.state!.profile.resumeFileName = "older-source.pdf";
-  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.pdf`, sha256: "a".repeat(64), size: 1000, mimeType: "application/pdf" };
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
   expect(selected.status, await selected.clone().text()).toBe(200);
   const application = fixture.state!.applications[0];
   const requested = await publicAction("draft", { applicationId: application.id });
-  expect(requested.status, await requested.clone().text()).toBe(400);
-  expect(application.status).toBe("selected");
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
+  fixture.state!.profile.resumeFileName = "older-source.pdf";
+  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.pdf`, sha256: "a".repeat(64), size: 1000, mimeType: "application/pdf" };
+  const statusBeforeWorker = application.status;
+  await expect(runDraft(handoff.payload)).resolves.toEqual({ skipped: true });
+  expect(application.status).toBe(statusBeforeWorker);
   expect(application.packet).toBeUndefined();
-  expect(fixture.tasks).toEqual([]);
   expect(fixture.parse).not.toHaveBeenCalled();
 });
 

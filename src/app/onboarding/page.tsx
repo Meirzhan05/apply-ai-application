@@ -33,6 +33,23 @@ function groupImportedFacts(facts: ImportedFact[], anchors: NonNullable<Profile[
   return [...groups.values()];
 }
 
+function displayImportedFact(fact: ImportedFact, anchors: NonNullable<Profile["resumeSourceDocument"]>["anchors"]): string {
+  const raw = fact.text.trim();
+  const anchor = anchors.find((item) => item.id === fact.sourceAnchorId);
+  if (!anchor) return fact.text;
+  const prefixes = [
+    `${anchor.sectionHeading} · ${anchor.entryHeading} · `,
+    `${anchor.entryHeading} · `,
+    `${anchor.sectionHeading} · `,
+  ];
+  for (const prefix of prefixes) {
+    if (!raw.startsWith(prefix)) continue;
+    const claim = raw.slice(prefix.length).trim();
+    if (claim) return claim;
+  }
+  return fact.text;
+}
+
 async function requestJson(url: string, options?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...options });
   const body = await response.json();
@@ -212,7 +229,7 @@ export default function Onboarding() {
         <h2 id="profile-heading">Contact details</h2>
         <div className={styles.fields}><label>Full name<input required autoComplete="name" maxLength={200} value={draft.name} disabled={Boolean(busy)} onChange={event => edit({ name: event.target.value })} /></label><label>Email<input required type="email" autoComplete="email" maxLength={254} value={draft.email} disabled={Boolean(busy)} onChange={event => edit({ email: event.target.value })} /></label><label>Phone<input required type="tel" autoComplete="tel" maxLength={100} value={draft.phone} disabled={Boolean(busy)} onChange={event => edit({ phone: event.target.value })} /></label><label>Links <small>Optional</small><textarea rows={3} value={(draft.links ?? []).join("\n")} disabled={Boolean(busy)} onChange={event => edit({ links: event.target.value.split(/\r?\n/) })} /></label></div>
         <h2>Professional information</h2>
-        <div className={styles.facts}>{importedGroups.map(group => <fieldset className={styles.factGroup} key={group.key}><legend>{group.heading}</legend>{group.facts.map((fact, index) => <label data-fact-id={fact.id} data-source-anchor-id={fact.sourceAnchorId ?? undefined} key={fact.id}><span className={styles.factSource}>Editable imported fact {index + 1}</span><textarea aria-label={`Professional information ${index + 1}`} maxLength={500} rows={3} disabled={Boolean(busy)} value={draft.facts.find(item => item.id === fact.id)?.text ?? fact.text} onChange={event => edit({ facts: draft.facts.map(item => item.id === fact.id ? { ...item, text: event.target.value } : item) })} /></label>)}</fieldset>)}</div>
+        <div className={styles.facts}>{importedGroups.map(group => <fieldset className={styles.factGroup} key={group.key}><legend>{group.heading}</legend>{group.facts.map((fact, index) => <div data-fact-id={fact.id} data-source-anchor-id={fact.sourceAnchorId ?? undefined} key={fact.id}><span className={styles.factSource}>Imported fact {index + 1}</span><p className={styles.factClaim}>{displayImportedFact(fact, review.resumeSourceDocument?.anchors ?? [])}</p><details className={styles.factRaw}><summary>Edit imported wording</summary><textarea aria-label={`Professional information ${index + 1}`} maxLength={500} rows={3} disabled={Boolean(busy)} value={draft.facts.find(item => item.id === fact.id)?.text ?? fact.text} onChange={event => edit({ facts: draft.facts.map(item => item.id === fact.id ? { ...item, text: event.target.value } : item) })} /></details></div>)}</fieldset>)}</div>
         <details className={styles.source}><summary>Original resume text</summary><pre>{draft.resumeSourceDocument?.text}</pre></details>
       </section>}
       {stage === "answers" && <section className={styles.section} aria-labelledby="answers-heading">
@@ -232,7 +249,7 @@ export default function Onboarding() {
         {missingFields.length > 0 && <div className={styles.error}><strong>Required information is missing</strong><ul>{missingFields.map(key => <li key={key}>{onboardingMissingLabel(key)}</li>)}</ul></div>}
         <div className={styles.reviewHeading}><h3>Contact details</h3><button disabled={Boolean(busy)} onClick={() => void go("profile")}>Edit</button></div>
         <dl className={styles.review}><div><dt>Name</dt><dd>{review.name || "Missing"}</dd></div><div><dt>Email</dt><dd>{review.email || "Missing"}</dd></div><div><dt>Phone</dt><dd>{review.phone || "Missing"}</dd></div>{review.links?.length ? <div><dt>Links</dt><dd>{review.links.join("\n")}</dd></div> : null}</dl>
-        <h3>Imported professional information</h3><div className={styles.reviewFacts}>{importedGroups.map(group => <section data-source-context={group.key} key={group.key}><h4>{group.heading}</h4><ul>{group.facts.map(fact => <li data-fact-id={fact.id} data-source-anchor-id={fact.sourceAnchorId ?? undefined} key={fact.id}>{fact.text}</li>)}</ul></section>)}</div><details className={styles.source}><summary>Original resume text</summary><pre>{review.resumeSourceDocument?.text}</pre></details>
+        <h3>Imported professional information</h3><div className={styles.reviewFacts}>{importedGroups.map(group => <section data-source-context={group.key} key={group.key}><h4>{group.heading}</h4><ul>{group.facts.map(fact => <li data-fact-id={fact.id} data-source-anchor-id={fact.sourceAnchorId ?? undefined} key={fact.id}><span>{displayImportedFact(fact, review.resumeSourceDocument?.anchors ?? [])}</span><details className={styles.factRaw}><summary>View imported wording</summary><p>{fact.text}</p></details></li>)}</ul></section>)}</div><details className={styles.source}><summary>Original resume text</summary><pre>{review.resumeSourceDocument?.text}</pre></details>
         <div className={styles.reviewHeading}><h3>Application answers</h3><button disabled={Boolean(busy)} onClick={() => void go("answers")}>Edit</button></div>
         <dl className={styles.review}><div><dt>Current Location</dt><dd>{review.currentLocation ? Object.values(review.currentLocation).join(", ") : "Missing"}</dd></div><div><dt>Preferred Job Locations</dt><dd>{review.preferredLocations.join("; ") || "Missing"}</dd></div><div><dt>Work arrangements</dt><dd>{review.workArrangements?.join(", ") || "Missing"}</dd></div><div><dt>US Immigration Status</dt><dd>{({ "us-citizen": "US citizen", "permanent-resident": "Permanent resident", "visa-holder": "Visa holder", other: "Another status" } as const)[review.onboarding?.questionnaire.immigrationStatus ?? "other"]}{review.onboarding?.questionnaire.visaType ? ` · ${review.onboarding.questionnaire.visaType}` : ""}{review.onboarding?.questionnaire.immigrationStatusDetails ? ` · ${review.onboarding.questionnaire.immigrationStatusDetails}` : ""}</dd></div>{([["workAuthorization", "Currently authorized to work in the US"], ["sponsorshipNow", "Employer sponsorship now"], ["sponsorshipFuture", "Employer sponsorship in the future"]] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{review.onboarding?.questionnaire[key] === "yes" ? "Yes" : review.onboarding?.questionnaire[key] === "no" ? "No" : "Missing"}</dd></div>)}{review.willingToRelocate !== undefined && <div><dt>Willing to relocate</dt><dd>{review.willingToRelocate ? "Yes" : "No"}</dd></div>}{review.onboarding?.questionnaire.availability && <div><dt>Availability</dt><dd>{review.onboarding.questionnaire.availability}</dd></div>}</dl>
         <p className={styles.consent}>By finishing onboarding, I confirm the imported professional information shown here is accurate and may be used in my applications.</p>

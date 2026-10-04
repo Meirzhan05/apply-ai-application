@@ -195,12 +195,13 @@ describe("resume onboarding completion through authenticated actions", () => {
     const before = await loadState("owner-a");
     expect((await act("profile", { email: `${"a".repeat(245)}@example.com` })).status).toBe(400);
     expect(await loadState("owner-a")).toEqual(before);
-    expect((await act("onboardingDraft", { links: Array.from({ length: 21 }, () => "https://example.com") })).status).toBe(400);
+    expect((await act("onboardingDraft", { links: Array.from({ length: 31 }, () => "https://example.com") })).status).toBe(400);
     expect(await loadState("owner-a")).toEqual(before);
 
+    const longLink = `https://example.com/${"a".repeat(600)}`;
     expect((await act("profile", {
       name: "  Synthetic Applicant  ", email: "synthetic@example.com", phone: " +1 212 555 0100 ",
-      links: ["linkedin.com/in/synthetic", "https://linkedin.com/in/synthetic"],
+      links: ["linkedin.com/in/synthetic", "https://linkedin.com/in/synthetic", longLink],
       currentLocation: { city: " New York ", region: " NY ", country: " United States " },
       preferredLocations: [" United States ", "United States"], workArrangements: ["remote", "remote"],
       willingToRelocate: null,
@@ -208,7 +209,7 @@ describe("resume onboarding completion through authenticated actions", () => {
     let saved = await loadState("owner-a");
     expect(saved.profile).toMatchObject({
       name: "Synthetic Applicant", email: "synthetic@example.com", phone: "+1 212 555 0100",
-      links: ["https://linkedin.com/in/synthetic"],
+      links: ["https://linkedin.com/in/synthetic", longLink],
       currentLocation: { city: "New York", region: "NY", country: "United States" },
       preferredLocations: ["United States"], workArrangements: ["remote"], remoteOnly: true,
     });

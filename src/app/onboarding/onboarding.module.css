@@ -32,8 +32,12 @@
 .facts { display: grid; gap: 20px; }
 .factGroup { display: grid; gap: 16px; border: 1px solid var(--line); padding: 16px; margin: 0; min-width: 0; }
 .factGroup legend { padding: 0 6px; color: var(--forest); font-size: 14px; font-weight: 700; }
-.factGroup label > span { color: #4e625b; }
+.factGroup > div > span { color: #4e625b; }
 .factSource { font-size: 13px; font-weight: 400; }
+.factClaim { margin: 6px 0 0; line-height: 1.6; }
+.factRaw { margin-top: 8px; }
+.factRaw summary { color: var(--forest); font-size: 13px; cursor: pointer; }
+.factRaw textarea { margin-top: 8px; }
 .source { margin: 24px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .source summary { min-height: 44px; padding: 12px 0; color: var(--forest); font-size: 14px; cursor: pointer; }
 .source pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; line-height: 1.65; max-height: 420px; overflow: auto; padding-bottom: 16px; }

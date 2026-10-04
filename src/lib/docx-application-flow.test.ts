@@ -270,17 +270,19 @@ it("blocks a new draft when an older stored source flag hides an unconfirmed unb
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
   vi.stubEnv("DEMO_MODE", "true");
-  fixture.state!.profile.resumeFileName = "older-source.docx";
-  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.docx`,
-    sha256: "a".repeat(64), size: 1000, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
   expect(selected.status, await selected.clone().text()).toBe(200);
   const application = fixture.state!.applications[0];
   const requested = await publicAction("draft", { applicationId: application.id });
-  expect(requested.status, await requested.clone().text()).toBe(400);
-  expect(application.status).toBe("selected");
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
+  fixture.state!.profile.resumeFileName = "older-source.docx";
+  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.docx`,
+    sha256: "a".repeat(64), size: 1000, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  const statusBeforeWorker = application.status;
+  await expect(runDraft(handoff.payload)).resolves.toEqual({ skipped: true });
+  expect(application.status).toBe(statusBeforeWorker);
   expect(application.packet).toBeUndefined();
-  expect(fixture.tasks).toEqual([]);
   expect(fixture.parse).not.toHaveBeenCalled();
 });

@@ -7,7 +7,7 @@ import { draftAiEssay, draftEssayAnswers } from "@/lib/essay-drafting";
 import { confirmAiEssay, validateAiEssay } from "@/lib/answer-policy";
 import { draftPacket } from "@/lib/drafting";
 import { draftAutonomousEssays, prepareAutonomousFormEssays } from "@/lib/autonomous-essays";
-import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
+import { activateAutomation } from "@/lib/onboarding";
 import type { ApplicationPacket, ScreeningAnswer } from "@/lib/types";
 
 const question = "Why are you excited to join us?";

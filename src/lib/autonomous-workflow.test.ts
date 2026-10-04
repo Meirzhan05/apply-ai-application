@@ -25,7 +25,7 @@ vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, do
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, preflightBrowser: fixture.preflight, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
 import { initialDemoState } from "@/lib/demo-data";
-import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
+import { activateAutomation } from "@/lib/onboarding";
 import { completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
 import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { runDraft, runFill } from "@/lib/application-runs";
