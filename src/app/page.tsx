@@ -26,7 +26,7 @@ import { matchView, type MatchFilter, type MatchCollection } from "@/lib/match-v
 import { dismissalReasons, emptyImport, readMatchesSession, writeMatchesSession, type BrowseView } from "@/lib/matches-session";
 import { readFactCorrectionHistory, writeFactCorrectionHistory, type FactCorrectionHistory } from "@/lib/fact-correction-history";
 import { readWorkspaceNavigation, writeWorkspaceNavigation, type WorkspaceSection } from "@/lib/workspace-navigation";
-import { PersonalSearchStatus } from "@/components/personal-search-status";
+import { JobSearchButton, PersonalSearchStatus } from "@/components/personal-search-status";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
 import { actionNeedsWorkspaceCheck, postWorkspaceAction } from "@/lib/workspace-action";
 import { saveRoleBatch } from "@/lib/save-role-batch";
@@ -865,7 +865,7 @@ export default function Dashboard() {
     } finally { batchActive.current = false; pendingBatchFocus.current = !ownerChanged; setBatchProgress(null); setBusy(""); }
   };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
-  const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} busy={Boolean(busy)} onSearch={() => void act("searchJobs")} onConfigure={() => {
+  const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
     pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => isUsableFact(fact)) ? "confirmed-resume-facts" : "search-preferences";
     navigateSection("profile");
   }} onImport={() => { setError(""); setImportOpen(true); }} />;
@@ -1023,6 +1023,7 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="matches-heading-actions">
+                {!data.profile.demo && <JobSearchButton profile={data.profile} search={data.personalSearch} busy={Boolean(busy) || needsWorkspaceCheck} onSearch={() => void act("searchJobs")} />}
                 <button className={`outline-action activity-launcher ${quietActivity ? "" : "activity-attention"}`} popoverTarget="matches-activity">Activity <ChevronDown size={15} /></button>
                 <button
                   className="outline-action import-launcher"

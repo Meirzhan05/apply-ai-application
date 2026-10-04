@@ -47,7 +47,7 @@ The pilot report keeps all real initiated applications in its denominator, inclu
 
 ## JEV matching and testing
 
-The Matches panel includes **Search jobs (test)**. It requests a fresh personal search without waiting four hours, retains the monthly budget guard, and prevents duplicate active runs. This is the normal search pipeline: existing automatic-application permission still applies to eligible strong results. Pause automation in Settings when testing discovery alone. The controlled demo does not offer live search.
+The Matches heading includes **Search jobs (test)** beside **Import a job link**. It requests a fresh personal search without waiting four hours, retains the monthly budget guard, and prevents duplicate active runs. This is the normal search pipeline: existing automatic-application permission still applies to eligible strong results. Pause automation in Settings when testing discovery alone. The controlled demo does not offer live search.
 
 Set server-only `TYPESAFE_API_KEY` in Vercel and Trigger.dev. Apply the JEV model-usage migration before deployment. OpenAI continues to handle web discovery and application drafting. JEV outages, malformed decisions, and missing evidence produce uncertain matches rather than an automatic-application fallback.
 

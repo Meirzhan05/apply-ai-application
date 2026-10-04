@@ -61,6 +61,9 @@ async function main() {
     const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(origin);
     const search = page.getByRole("button", { name: "Search jobs (test)", exact: true }); await search.waitFor(); assert.equal(await search.isEnabled(), true);
+    assert.equal(await search.count(), 1);
+    assert.equal(await page.locator(".matches-heading-actions").getByRole("button", { name: "Search jobs (test)", exact: true }).count(), 1);
+    assert.equal(await page.locator("details.search-status").getAttribute("open"), null);
     const actionResponse = page.waitForResponse(response => response.url().endsWith("/api/actions") && response.request().method() === "POST");
     await search.click(); const response = await actionResponse;
     assert.equal(response.status(), 200, `Manual search failed with HTTP ${response.status()}`);
@@ -81,9 +84,12 @@ async function main() {
     assert.ok(assessments.every(item => item?.model.startsWith("jev")), "Every discovered opening must receive a JEV assessment.");
     assert.equal(current.applications.length, 0);
     await page.reload();
-    await page.locator("details.search-status > summary").click();
     await search.waitFor(); assert.equal(await search.isEnabled(), true);
+    assert.equal(await search.count(), 1);
+    assert.equal(await page.locator(".matches-heading-actions").getByRole("button", { name: "Search jobs (test)", exact: true }).count(), 1);
+    assert.equal(await page.locator("details.search-status").getAttribute("open"), null);
     await mkdir(".data/jev-search-cloud", { recursive: true });
+    await page.locator(".matches-content-scroll").evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: ".data/jev-search-cloud/production-desktop.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
