@@ -12,6 +12,43 @@ vi.mock("openai", () => ({ default: class { responses = { parse: response }; } }
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("matching boundaries", () => {
+  it.each(["London, United Kingdom", "Toronto, Canada", "Remote", "Worldwide", "Location not listed", "Remote worldwide, US", "US / Remote", "US / Canada"])(
+    "excludes unverified US destinations for candidates at home and abroad: %s", (location) => {
+      const state = initialDemoState();
+      state.profile.workAuthorization = "Authorized to work in the US";
+      for (const currentLocation of [{ city: "Boston", region: "MA", country: "United States" }, { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }]) {
+        state.profile.currentLocation = currentLocation;
+        const job = { ...state.jobs[1], location, remote: true };
+        expect(assessMatchLocally(state.profile, job).category).toBe("excluded");
+        expect(explicitConflict(state.profile, job)).toMatch(/US.*destination|destination.*US/);
+      }
+    },
+  );
+  it.each(["Remote (US)", "Remote · United States", "San Francisco, CA", "California", "Boston", "New York, NY · Hybrid", "United States", "U.S.A."])(
+    "keeps verified US destinations eligible for overseas candidates: %s", (location) => {
+      const state = initialDemoState();
+      state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+      state.profile.workAuthorization = "Authorized to work in the US";
+      expect(explicitConflict(state.profile, { ...state.jobs[1], location })).toBeNull();
+    },
+  );
+  it("rechecks destination before exposing a cached strong match", () => {
+    const state = initialDemoState();
+    const job = { ...state.jobs[1], location: "Remote" };
+    state.jobs = [job];
+    state.matchCache = { [matchKey(state.profile, job)]: { ...assessMatchLocally(state.profile, job), category: "strong", score: 99 } };
+    expect(publicState(state).matches[0].assessment).toMatchObject({ category: "excluded", score: 0 });
+  });
+  it("marks prepared materials stale when a job loses its verified US destination without deleting history", () => {
+    const state = initialDemoState();
+    const job = state.jobs[1];
+    state.applications = [{ id: "prepared", userId: state.profile.id, jobId: job.id, jobSnapshot: { ...job }, status: "draft_review", approvals: [], createdAt: "2026-10-01", updatedAt: "2026-10-01", packet: { schemaVersion: 1, version: 1, summary: "Saved packet", resumeLines: [], answers: [], createdAt: "2026-10-01", model: "fixture" } }];
+    state.jobs = [{ ...job, location: "Remote" }];
+    const published = publicState(state);
+    expect(published.applications[0].materialsStale).toBe(true);
+    expect(published.applications[0].packet?.summary).toBe("Saved packet");
+    expect(state.applications[0].status).toBe("draft_review");
+  });
   it("matches multiple acceptable arrangements independently of overseas residence and accepts nationwide US destinations", () => {
     const state = initialDemoState();
     state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
@@ -108,7 +145,7 @@ describe("matching boundaries", () => {
   it("applies required locations only to explicitly on-site roles", () => {
     const state = initialDemoState(); state.profile.strictLocations = true; state.profile.preferredLocations = ["New York"];
     expect(explicitConflict(state.profile, { ...state.jobs[0], location: "Boston, MA", remote: false })).toMatch(/required locations/);
-    expect(explicitConflict(state.profile, { ...state.jobs[0], location: "Location not listed", remote: false })).toBeNull();
+    expect(explicitConflict(state.profile, { ...state.jobs[0], location: "United States", remote: false })).toBeNull();
     expect(explicitConflict(state.profile, { ...state.jobs[0], location: "Boston, MA", remote: null })).toBeNull();
   });
   it("keeps aliases eligible and unknown required geography visibly uncertain", () => {
@@ -117,7 +154,7 @@ describe("matching boundaries", () => {
     state.profile.preferredLocations = ["NYC"];
     const known = { ...state.jobs[0], location: "New York, NY", remote: false };
     expect(explicitConflict(state.profile, known)).toBeNull();
-    const unknown = { ...known, location: "New York metropolitan area" };
+    const unknown = { ...known, location: "New York metropolitan area, United States" };
     expect(explicitConflict(state.profile, unknown)).toBeNull();
     const assessment = assessMatchLocally(state.profile, unknown);
     expect(assessment.category).toBe("uncertain");

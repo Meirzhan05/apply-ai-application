@@ -34,6 +34,7 @@ import { canReturnToMaterials } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
+import { unitedStatesDestination } from "@/lib/location-fit";
 import { canReopenManualAttempt, employerSubmissionBlock, employerFormCorrections, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
@@ -66,7 +67,7 @@ import type {
 
 type ViewState = Omit<AppState, "applications"> & {
   demoMode?: boolean;
-  applications: Array<Application & { materialsStale?: boolean }>;
+  applications: Array<Application & { materialsStale?: boolean; destinationIssue?: string | null }>;
   matches: { jobId: string; assessment: MatchAssessment }[];
   onboarding: { complete: boolean; missing: string[]; confirmedFactCount: number };
   automation: {
@@ -963,6 +964,7 @@ export default function Dashboard() {
                         app.jobId === job.id && app.status !== "cancelled",
                     );
                     const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
+                    const canVerifyDestination = importedPreflight && data.automation.enabled && unitedStatesDestination(job.location) === "unresolved";
                     const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
                     const context = `${job.title} at ${job.company}`;
                     const evidence = matchEvidence(data.profile, job, match);
@@ -1114,7 +1116,7 @@ export default function Dashboard() {
                               aria-label={`${data.automation.enabled ? (importedPreflight ? "Verify and apply automatically for" : "Apply automatically for") : "Prepare application for"} ${context}`}
                               aria-describedby="application-mode-note"
                               disabled={
-                                Boolean(busy) || match?.category === "excluded"
+                                Boolean(busy) || (match?.category === "excluded" && !canVerifyDestination)
                               }
                               onClick={async () => {
                                 const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
@@ -1351,6 +1353,7 @@ export default function Dashboard() {
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
+                    {activeApp.destinationIssue && <p className="job-review-note" role="status">{activeApp.destinationIssue}</p>}
                     {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && (!activeApp.importedOutcome || activeApp.importedOutcome.kind === "reachable") && !activeApp.autonomousAuthorization && (
                       <div className="step-card" aria-label="Imported employer compatibility">
                         <h3>Check the employer posting first</h3>
@@ -1418,10 +1421,10 @@ export default function Dashboard() {
                         }
                       }}>Undo source fact changes</button>
                     </section>}
-                    {!activeAppIsAutomatic && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
-                      <h3>Your profile changed</h3>
-                      <p>The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
-                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
+                    {!activeAppIsAutomatic && (!activeApp.destinationIssue || (unitedStatesDestination(appJob.location) === "verified_us" && !activeApp.importedCompatibility)) && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
+                      <h3>{activeApp.destinationIssue ? "The job destination changed" : "Your profile changed"}</h3>
+                      <p>{activeApp.destinationIssue ? "Rebuild your materials for the updated posting, then review them before approving." : "The saved materials use earlier facts. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application."}</p>
+                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id, ...(activeApp.destinationIssue ? { draftMode: "resume" } : {}) })}>{activeApp.destinationIssue ? "Rebuild materials for updated job" : "Rebuild materials from updated facts"}</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
                       {notice && <p>{notice}</p>}
                     </section>}
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}

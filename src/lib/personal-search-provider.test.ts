@@ -7,7 +7,7 @@ import { discoverPersonalJobs } from "@/lib/personal-search-provider";
 import { initialDemoState } from "@/lib/demo-data";
 beforeEach(() => { vi.clearAllMocks();
   mocks.create.mockResolvedValue({ status: "completed", output: [{ type: "web_search_call", status: "completed" }], output_text: "https://jobs.lever.co/company/job-a\nhttps://example.com/invented\nhttps://jobs.lever.co/company/job-a\nhttps://boards.greenhouse.io/company\nhttps://jobs.ashbyhq.com/company/job-b" });
-  mocks.refresh.mockImplementation(async (jobs) => jobs.map((job: object, index: number) => ({ ...initialDemoState().jobs[0], ...job, importCheck: { status: index ? "closed" : "verified" }, active: !index })));
+  mocks.refresh.mockImplementation(async (jobs) => jobs.map((job: object, index: number) => ({ ...initialDemoState().jobs[0], ...job, location: "New York, NY", importCheck: { status: index ? "closed" : "verified" }, active: !index })));
 });
 it("searches from each student's own preferences, then publishes only provider-verified direct postings", async () => {
   const profile = initialDemoState().profile; profile.preferredTitles = ["Software intern"];

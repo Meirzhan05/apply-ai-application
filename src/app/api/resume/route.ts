@@ -12,6 +12,7 @@ import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/acco
 import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 import type { ResumeSourceDocument } from "@/lib/types";
 import { resumeProfileBasics } from "@/lib/resume-profile-basics";
+import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -69,9 +70,6 @@ export async function POST(request: Request) {
       throw new Error(
         "This resume has no readable text. Retry with a readable PDF or replace it with a DOCX.",
       );
-    const suggestions: Array<{ text: string; sourceAnchorId?: string }> = sourceDocument?.format === "docx"
-      ? suggestDocxFacts(sourceDocument)
-      : sourceDocument?.format === "pdf" ? suggestPdfFacts(sourceDocument) : [];
     const sha256 = createHash("sha256").update(buffer).digest("hex");
     let storageKey: string | undefined = original?.storageKey;
     if (!reuse && isDemo()) { storageKey = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`; await saveDemoOriginalResume(storageKey, buffer); }
@@ -96,9 +94,12 @@ export async function POST(request: Request) {
       for (const key of ["name", "email", "phone"] as const)
         if (!reuse || !state.profile[key].trim()) state.profile[key] = basics[key];
       if (!reuse || !state.profile.links?.length) state.profile.links = basics.links;
+      const currentSourceDocument = reuse ? sourceDocument : sourceWithCurrentEvidenceClaims(sourceDocument, state.profile.name);
+      const suggestions: Array<{ text: string; sourceAnchorId?: string }> = currentSourceDocument.format === "docx"
+        ? suggestDocxFacts(currentSourceDocument) : suggestPdfFacts(currentSourceDocument);
       state.profile.resumeFileName = name;
       state.profile.resumeText = extracted;
-      state.profile.resumeSourceDocument = sourceDocument;
+      state.profile.resumeSourceDocument = currentSourceDocument;
       state.profile.resumeSource = {
         ...(storageKey ? { storageKey } : {}),
         sha256,

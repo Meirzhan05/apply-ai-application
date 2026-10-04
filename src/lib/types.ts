@@ -593,6 +593,8 @@ export interface ApiSubmissionPlan {
 export type ImportedCompatibilityStatus = "reachable" | "blocked" | "uncertain";
 
 export interface ImportedCompatibilityRecord {
+  /** Saved location at verification; observedContext holds the actual posting evidence. */
+  jobLocation?: string;
   version: 1;
   ownerId: string;
   applicationId: string;

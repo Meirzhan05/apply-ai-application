@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
 import { applyFactCorrection } from "@/lib/fact-corrections";
-import { locationFit } from "@/lib/location-fit";
+import { isUnitedStatesLocation } from "@/lib/location-fit";
 import { bumpAutomationVersion, ensureOnboardingDefaults, saveOnboarding } from "@/lib/onboarding";
 import { immigrationQuestionnaireMissingFields, onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
 import { normalizeProfileLinks } from "@/lib/resume-profile-basics";
@@ -47,7 +47,7 @@ export function resumeOnboardingStatus(profile: Profile) {
   if (!z.email().safeParse(profile.email.trim()).success) missing.push("email");
   if (!profile.phone.trim()) missing.push("phone");
   for (const key of ["city", "region", "country"] as const) if (!profile.currentLocation?.[key].trim()) missing.push(`currentLocation.${key}`);
-  if (!profile.preferredLocations.length || profile.preferredLocations.some(location => locationFit(location, ["United States"]) !== "compatible")) missing.push("preferredLocations");
+  if (!profile.preferredLocations.length || profile.preferredLocations.some(location => !isUnitedStatesLocation(location))) missing.push("preferredLocations");
   if (!profile.workArrangements?.length) missing.push("workArrangements");
   missing.push(...immigrationQuestionnaireMissingFields(profile.onboarding!.questionnaire));
   return {
