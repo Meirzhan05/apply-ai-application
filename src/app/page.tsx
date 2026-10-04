@@ -9,6 +9,7 @@ import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
+import { ImmigrationQuestionnaireFields } from "@/components/immigration-questionnaire-fields";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceFactsNotice, ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { mergeCurrentSourceFacts } from "@/lib/profile-source-facts";
 import { LiveBrowser } from "@/app/live-browser";
@@ -1785,37 +1786,20 @@ export default function Dashboard() {
                 <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
-                {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
+                {(["gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
                   <label key={key}>
-                    {{ requiresSponsorship: "Will you require sponsorship?", workAuthorization: "Work authorization answer", gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
+                    {{ gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
                     <input maxLength={200} value={profileDraft.sensitiveAnswers[key] ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, sensitiveAnswers: { ...profileDraft.sensitiveAnswers, [key]: event.target.value } })} placeholder="Leave blank for manual entry" />
                   </label>
                 ))}
                 <h3>Required onboarding answers</h3>
                 <p className="muted">These answers are stored as explicit declarations. Leaving one blank keeps it missing; “No” is saved as a real answer.</p>
+                <ImmigrationQuestionnaireFields
+                  questionnaire={profileDraft.onboarding?.questionnaire ?? {}}
+                  onChange={questionnaire => setProfileDraft({ ...profileDraft, onboarding: { ...profileDraft.onboarding, questionnaire } })}
+                />
                 <label>
-                  Are you authorized to work in the United States?
-                  <select
-                    id="setup-workAuthorization"
-                    value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
-                    onChange={(event) => setProfileDraft({
-                      ...profileDraft,
-                      onboarding: {
-                        questionnaire: {
-                          ...profileDraft.onboarding?.questionnaire,
-                          workAuthorization: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
-                        },
-                      },
-                    })}
-                  >
-                    <option value="">Choose an answer</option>
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                    <option value="unknown">I’m not sure yet</option>
-                  </select>
-                </label>
-                <label>
-                  Will you require sponsorship for employment?
+                  Will you need employer sponsorship now or in the future?
                   <select
                     id="setup-requiresSponsorship"
                     value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}

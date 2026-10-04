@@ -16,7 +16,7 @@ import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
 import { assertAutonomous, autonomyProfileHash, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
-import { reusableFactualAnswers } from "@/lib/onboarding";
+import { factualAnswerKeyForQuestion, reusableFactualAnswers } from "@/lib/onboarding";
 import { graduationSeasonOption } from "@/lib/education-options";
 import { automaticEssayQuestions, hasBoundAutonomousEssayControl } from "@/lib/autonomous-essays";
 import { browserQuestions } from "@/lib/browser-questions";
@@ -383,8 +383,8 @@ function deterministicKey(
   if (/school|university|college/.test(label)) return "school";
   if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
-  if (/sponsor/.test(label)) return "saved_requiresSponsorship";
-  if (/authorized.*work|work.*authoriz/.test(label)) return "saved_workAuthorization";
+  const factualKey = factualAnswerKeyForQuestion(label);
+  if (factualKey) return `saved_${factualKey}`;
   if (/gender/.test(label)) return "saved_gender";
   if (/ethnicity|ethnic|race\b/.test(label)) return "saved_ethnicity";
   if (/disability|disabled/.test(label)) return "saved_disability";
@@ -395,7 +395,7 @@ function deterministicKey(
 }
 
 function sensitiveQuestion(label: string): boolean {
-  return /authoriz|sponsor|visa|citizenship|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
+  return /authoriz|sponsor|visa|citizenship|immigration|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
 }
 
 // Owner-confirmed screening values are separate from AI essay authorization.

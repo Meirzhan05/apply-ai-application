@@ -102,6 +102,39 @@ describe("onboarding action boundary", () => {
     expect(state.profile.onboarding?.questionnaire.requiresSponsorship).toBeUndefined();
   });
 
+  it("round-trips distinct immigration declarations for the authenticated owner without enabling automation", async () => {
+    const questionnaire = { immigrationStatus: "visa-holder", visaType: " F-1 OPT ", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "yes" };
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: { questionnaire, userId: "owner-b" } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).toMatchObject({ ...questionnaire, visaType: "F-1 OPT" });
+    expect(saved.profile.onboarding?.questionnaire.requiresSponsorship).toBeUndefined();
+    expect(saved.profile.automationAuthorization).toBeUndefined();
+    expect(mocks.memory.get("owner-b")!.profile.onboarding?.questionnaire).toEqual({});
+  });
+
+  it("preserves partial drafts and clears obsolete conditional details when immigration status changes", async () => {
+    const save = (questionnaire: Record<string, unknown>) => POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "onboarding", payload: { questionnaire } }),
+    }));
+    expect((await save({ immigrationStatus: "visa-holder" })).status).toBe(200);
+    expect((await save({ visaType: "H-1B", sponsorshipNow: "no", sponsorshipFuture: "unknown" })).status).toBe(200);
+    expect((await save({ immigrationStatus: "other", immigrationStatusDetails: "Pending adjustment" })).status).toBe(200);
+    let saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).toMatchObject({ immigrationStatus: "other", immigrationStatusDetails: "Pending adjustment", sponsorshipNow: "no", sponsorshipFuture: "unknown" });
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("visaType");
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("workAuthorization");
+    expect((await save({ immigrationStatus: "us-citizen" })).status).toBe(200);
+    saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("immigrationStatusDetails");
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("workAuthorization");
+    expect(saved.profile.automationAuthorization).toBeUndefined();
+  });
+
   it("uses the authenticated owner instead of a user id supplied in the payload", async () => {
     const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {
       method: "POST",
