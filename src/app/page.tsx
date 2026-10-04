@@ -1397,11 +1397,11 @@ export default function Dashboard() {
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
                     {!activeAppIsAutomatic && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
-                        <h3>Ready to fill the employer form</h3>
+                        <h3>Ready to prepare the employer form</h3>
                         <p>
-                          This opens a separate browser session and enters only the
-                          materials you approved. You will review the filled form
-                          before submission.
+                          The agent enters only the materials you approved, using
+                          direct employer access when available or a browser when
+                          needed. You will review the application before submission.
                         </p>
                         <button
                           className="dark-button"
@@ -1410,7 +1410,7 @@ export default function Dashboard() {
                             act("startBrowser", { applicationId: activeApp.id })
                           }
                         >
-                          Start browser run
+                          Prepare application
                         </button>
                       </div>
                     )}
@@ -1514,9 +1514,9 @@ export default function Dashboard() {
                             <h3>Final form review</h3>
                           </div>
                           <p className="muted">
-                            Review the actual fields and attachments on{" "}
-                            {new URL(activeApp.form.url).hostname}. Approval is
-                            tied to this exact state.
+                            {activeApp.form.apiSubmission ? "Review the answers and files prepared for direct submission to " : "Review the actual fields and attachments on "}
+                            {new URL(activeApp.form.url).hostname}. Approval is tied to this exact state.
+                            {activeApp.form.apiSubmission && " This application can be sent without opening a browser."}
                           </p>
                           {activeApp.form.submitControl?.action && (
                             <p className="muted" style={{ overflowWrap: "anywhere" }}>
@@ -1553,9 +1553,11 @@ export default function Dashboard() {
                               </div>
                             ))}
                           </div>
-                          <p>
+                          <p style={{ overflowWrap: "anywhere" }}>
                             <strong>Attachments:</strong>{" "}
-                            {activeApp.form.attachments.join(", ") || "None"}
+                            {(activeApp.form.apiSubmission
+                              ? activeApp.form.fields.filter((field) => field.kind === "file" && field.value).map((field) => field.value).join(", ")
+                              : activeApp.form.attachments.join(", ")) || "None"}
                           </p>
                           {activeApp.status === "final_review" && (
                             <>
@@ -1573,7 +1575,7 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                Refresh form state
+                                {activeApp.form.apiSubmission ? "Refresh application details" : "Refresh form state"}
                               </button>
                               <button
                                 className="dark-button"

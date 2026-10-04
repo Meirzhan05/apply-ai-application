@@ -128,7 +128,7 @@ export function setFormSnapshot(
 }
 
 export function formDigest(
-  form: Pick<FormSnapshot, "url" | "fields" | "attachments"> & Partial<Pick<FormSnapshot, "readyToSubmit" | "blockers" | "submitControl">>,
+  form: Pick<FormSnapshot, "url" | "fields" | "attachments"> & Partial<Pick<FormSnapshot, "readyToSubmit" | "blockers" | "submitControl" | "apiSubmission">>,
 ): string {
   return hashJson({
     url: form.url,
@@ -137,6 +137,7 @@ export function formDigest(
     readyToSubmit: form.readyToSubmit,
     blockers: form.blockers,
     submitControl: form.submitControl,
+    ...(form.apiSubmission ? { apiSubmission: form.apiSubmission } : {}),
   });
 }
 

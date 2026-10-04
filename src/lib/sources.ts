@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 export interface BoardConfig {
   source: Exclude<JobSource, "demo" | "imported">;
   slug: string;
+  region?: "eu";
 }
 
 function validJobUrl(value: unknown): boolean {
@@ -173,9 +174,9 @@ async function greenhouse(slug: string, strict = false): Promise<Job[]> {
     }));
 }
 
-async function lever(slug: string, strict = false): Promise<Job[]> {
+async function lever(slug: string, strict = false, region?: "eu"): Promise<Job[]> {
   const data = (await getJson(
-    `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`,
+    `https://${region === "eu" ? "api.eu.lever.co" : "api.lever.co"}/v0/postings/${encodeURIComponent(slug)}?mode=json`,
   )) as Array<Record<string, unknown>>;
   if (!Array.isArray(data)) throw new Error("Lever returned an invalid catalog.");
   if (strict && data.some((item) => !item?.id || !validJobUrl(item.hostedUrl) || !item.text))
@@ -261,7 +262,7 @@ async function ashby(slug: string, includeUnlisted = false, strict = false): Pro
 
 export async function fetchBoard(board: BoardConfig, options?: { includeUnlisted?: boolean; strictCatalog?: boolean }): Promise<Job[]> {
   if (board.source === "greenhouse") return greenhouse(board.slug, options?.strictCatalog);
-  if (board.source === "lever") return lever(board.slug, options?.strictCatalog);
+  if (board.source === "lever") return lever(board.slug, options?.strictCatalog, board.region);
   return ashby(board.slug, options?.includeUnlisted, options?.strictCatalog);
 }
 
@@ -280,7 +281,7 @@ export function dedupeJobs(jobs: Job[]): Job[] {
 export function canonicalJobUrl(raw: string): string {
   try {
     const url = new URL(normalizePostingUrl(raw));
-    if (["jobs.lever.co", "jobs.ashbyhq.com"].includes(url.hostname))
+    if (["jobs.lever.co", "jobs.eu.lever.co", "jobs.ashbyhq.com"].includes(url.hostname))
       url.pathname = url.pathname.replace(/\/(apply|application)\/?$/, "");
     for (const key of [...url.searchParams.keys()]) {
       if (/^utm_/i.test(key) || ["gh_src", "lever-source"].includes(key.toLowerCase())) url.searchParams.delete(key);
@@ -354,7 +355,7 @@ export function classifyImport(raw: string): {
     hostname === "job-boards.greenhouse.io"
   )
     return { source: "greenhouse", url: normalizePostingUrl(url.toString()) };
-  if (hostname === "jobs.lever.co")
+  if (["jobs.lever.co", "jobs.eu.lever.co"].includes(hostname))
     return { source: "lever", url: url.toString() };
   if (hostname === "jobs.ashbyhq.com")
     return { source: "ashby", url: url.toString() };

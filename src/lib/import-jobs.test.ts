@@ -137,3 +137,13 @@ describe("private ATS imports", () => {
     expect(peak).toBe(4); expect(fetch).toHaveBeenCalledTimes(9);
   });
 });
+
+
+it("imports and refreshes Lever EU through its fixed regional public API", async () => {
+  const url = "https://jobs.eu.lever.co/acme/job-id/apply";
+  expect(importedPosting(url)).toEqual({ board: { source: "lever", slug: "acme", region: "eu" }, sourceId: "job-id" });
+  mockFeed([{ id: "job-id", text: "Engineer", hostedUrl: url.replace("/apply", ""), applyUrl: url }]);
+  const [job] = await refreshImportedJobs([imported(url)]);
+  expect(job.importCheck?.status).toBe("verified");
+  expect(fetch).toHaveBeenCalledExactlyOnceWith("https://api.eu.lever.co/v0/postings/acme?mode=json", expect.any(Object));
+});

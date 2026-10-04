@@ -15,7 +15,7 @@ export function importedPosting(raw: string): { board: BoardConfig; sourceId: st
   } else if (!(parts.length === 2 || (parts.length === 3 &&
     parts[2] === (parsed.source === "lever" ? "apply" : "application"))) ||
     !/^[a-zA-Z0-9_-]{1,100}$/.test(sourceId || "")) return null;
-  return { board: { source: parsed.source as BoardConfig["source"], slug }, sourceId };
+  return { board: { source: parsed.source as BoardConfig["source"], slug, ...(url.hostname === "jobs.eu.lever.co" ? { region: "eu" as const } : {}) }, sourceId };
 }
 
 export function newImportedJob(input: { url: string; company?: string; title?: string; location?: string; description?: string }): Job {
@@ -36,7 +36,7 @@ export async function refreshImportedJobs(jobs: Job[], now = new Date().toISOStr
   const boards = new Map<string, BoardConfig>();
   for (const job of jobs) {
     const posting = importedPosting(job.importUrl ?? job.url);
-    if (posting) boards.set(`${posting.board.source}:${posting.board.slug}`, posting.board);
+    if (posting) boards.set(`${posting.board.source}:${posting.board.slug}:${posting.board.region ?? "global"}`, posting.board);
   }
   const results = new Map<string, Job[] | null>();
   const pending = [...boards.entries()];
@@ -52,7 +52,7 @@ export async function refreshImportedJobs(jobs: Job[], now = new Date().toISOStr
     const posting = importedPosting(job.importUrl ?? job.url);
     if (!posting) return { ...job, importCheck: { status: "manual", checkedAt: now,
       message: "This link needs manual verification on the employer site; automatic monitoring is unavailable." } };
-    const fetched = results.get(`${posting.board.source}:${posting.board.slug}`);
+    const fetched = results.get(`${posting.board.source}:${posting.board.slug}:${posting.board.region ?? "global"}`);
     if (!fetched) return { ...job, importCheck: { status: "unavailable", checkedAt: now,
       message: "The provider could not be checked. Availability and previously saved details are unconfirmed." } };
     const found = fetched.find((item) => item.sourceId === posting.sourceId ||
