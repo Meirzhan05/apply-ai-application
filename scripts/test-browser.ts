@@ -437,16 +437,16 @@ try {
     assert.equal(submissions.get("slow-confirmation"), 1);
     await assert.rejects(() => submitBrowser(app), /both approvals/);
   });
-  await test("a complex form remains open for takeover and requires a fresh review", async () => {
+  await test("a large form fills saved details and remains open for takeover and fresh review", async () => {
     const { state, app, result } = await fill("complex");
-    assert.equal(result.needsAction, true);
-    assert.equal(result.form.readyToSubmit, false);
-    assert.ok(result.form.blockers?.some((blocker) => /more than 40 fields/.test(blocker)));
+    assert.equal(result.needsAction, false);
+    assert.equal(result.form.readyToSubmit, true);
+    assert.ok(result.form.fields.length > 40);
     const page = pageFor(app);
     assert.equal(page.isClosed(), false);
-    assert.equal(await page.locator('[name="email"]').inputValue(), "", "The agent must pause before entering details on a complex form");
+    assert.equal(await page.locator('[name="email"]').inputValue(), state.profile.email);
+    assert.ok(result.form.fields.find(field => field.kind === "file")?.fileHashes?.length);
     setFormSnapshot(app, result.form);
-    assert.throws(() => approveSubmit(app, state.profile.id, app.form!.hash), /form changed/i);
     await page.locator('[name="firstName"]').fill("Synthetic");
     await page.locator('[name="lastName"]').fill("Takeover");
     await page.locator('[name="email"]').fill("takeover@example.com");

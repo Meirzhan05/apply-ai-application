@@ -24,6 +24,17 @@ async function fixture() {
   return { state, app, inputs: [{ questionId: browserQuestions(app.form)[0].id, value: "No" }] };
 }
 
+it("writes all essays when the employer asks more than five", async () => {
+  const { state, app } = await fixture();
+  setFormSnapshot(app, { ...app.form!, fields: Array.from({ length: 6 }, (_, index) => ({ identifier: `essay-${index}`, label: `Why are you interested in this role? Essay ${index}`, kind: "textarea", required: true, value: "" })) });
+  mocks.draft.mockImplementation(async (_profile, _job, answers) => answers.map((answer: ScreeningAnswer) => ({ ...answer, answer: "Grounded essay" })));
+  await writeBrowserQuestionEssays(state.profile.id, app.id, app.form!.hash);
+  expect(mocks.draft).toHaveBeenCalledOnce();
+  expect(mocks.draft.mock.calls[0][2]).toHaveLength(6);
+  expect(Object.keys(app.browserQuestionDrafts!.answers)).toHaveLength(6);
+  expect(app.browserQuestionRun).toBeUndefined();
+});
+
 it("continues in the same session, saves scoped answers, and requires a fresh final approval", async () => {
   const { state, app, inputs } = await fixture(); const packet = structuredClone(app.packet);
   mocks.fill.mockImplementation(async (application) => ({ ...application.form, readyToSubmit: true, fields: application.form.fields.map((field: object) => ({ ...field, value: "No", valid: true })) }));

@@ -5,6 +5,8 @@ import { initialDemoState } from "@/lib/demo-data";
 import { draftAiEssay, draftEssayAnswers } from "@/lib/essay-drafting";
 import { confirmAiEssay, validateAiEssay } from "@/lib/answer-policy";
 import { draftPacket } from "@/lib/drafting";
+import { draftAutonomousEssays, prepareAutonomousFormEssays } from "@/lib/autonomous-essays";
+import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { ApplicationPacket, ScreeningAnswer } from "@/lib/types";
 
 const question = "Why are you excited to join us?";
@@ -19,6 +21,32 @@ beforeEach(() => { vi.stubEnv("OPENAI_API_KEY", "synthetic-key"); parse.mockRese
 afterEach(() => vi.unstubAllEnvs());
 
 describe("AI essay generation", () => {
+  it("drafts more than five essays in one application", async () => {
+    const state = initialDemoState();
+    const questions: ScreeningAnswer[] = Array.from({ length: 6 }, (_, index) => ({ question: `Why are you interested in this role? Essay ${index}`, answer: "", factIds: [], author: "ai", requiresUserInput: true }));
+    questions.forEach(() => successfulResponses());
+    const drafts = await draftEssayAnswers(state.profile, state.jobs[0], questions);
+    expect(drafts).toHaveLength(6);
+    expect(drafts.every(draft => draft.aiDraft && draft.answer.trim())).toBe(true);
+    expect(parse).toHaveBeenCalledTimes(12);
+  });
+
+  it("authorizes and binds more than five automatic essays to the observed form", async () => {
+    const state = initialDemoState();
+    const profile = state.profile;
+    saveOnboarding(profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
+    activateAutomation(profile, "Synthetic essay test");
+    const questions: ScreeningAnswer[] = Array.from({ length: 6 }, (_, index) => ({ question: `Why are you interested in this role? Essay ${index}`, answer: "", factIds: [], author: "ai", requiresUserInput: true }));
+    questions.forEach(() => successfulResponses());
+    const drafts = await draftAutonomousEssays(profile, state.jobs[0], questions, async () => {});
+    expect(drafts).toHaveLength(6);
+    const app = { ...state.applications[0], browserSessionId: "large-essay-session", packet: { schemaVersion: 1 as const, version: 1, summary: "Large essay fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [], answers: drafts } };
+    const bound = await prepareAutonomousFormEssays(profile, state.jobs[0], app, { version: 1, url: state.jobs[0].applyUrl, attachments: [], capturedAt: new Date().toISOString(), fields: questions.map((question, index) => ({ identifier: `essay-${index}`, label: question.question, kind: "textarea", required: true, value: "" })) }, async () => {});
+    expect(bound.answers).toHaveLength(6);
+    expect(bound.answers.map(answer => answer.autonomousEssayAuthorization?.control?.identifier)).toEqual(questions.map((_, index) => `essay-${index}`));
+    expect(parse).toHaveBeenCalledTimes(12);
+  });
+
   it("writes prose, checks grounded claims separately, and waits for confirmation", async () => {
     const state = initialDemoState();
     successfulResponses();

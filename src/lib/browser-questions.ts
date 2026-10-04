@@ -36,7 +36,7 @@ export function browserQuestions(form: FormSnapshot | undefined): BrowserQuestio
       label: field.label, kind: field.kind, options: [...new Set(options)],
       owner: field.kind === "checkbox" || options.length ? "human" : answerOwner(field.label), value: ["radio", "checkbox"].includes(field.kind) ? "" : field.value });
   }
-  return questions.slice(0, 20);
+  return questions;
 }
 
 export function browserTakeoverReasons(form: FormSnapshot | undefined): string[] {

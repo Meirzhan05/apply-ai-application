@@ -69,6 +69,50 @@ it("asks the required Ashby Yes/No question and blocks submission until an optio
   expect(browserQuestions({ ...form, hash: "observed" })).toMatchObject([{ label: "Are you based in US or Canada?", kind: "yesno", owner: "human", options: ["Yes", "No"], value: "" }]);
 });
 
+it.each([41, 201])("fills saved contact details on a form with %s controls", async count => {
+  const extraFields = Array.from({ length: count - 4 }, (_, index) => `<label for="extra-${index}">Optional field ${index}</label><input id="extra-${index}" name="extra-${index}">`).join("");
+  const { app, employer } = fixture(extraFields + `<label for="name">Full Name</label><input required id="name" name="name"><label for="email">Email</label><input required id="email" name="email" type="email"><label for="phone">Phone</label><input required id="phone" name="phone" type="tel"><label for="pronouns">Pronouns</label><select required id="pronouns" name="pronouns"><option value="">Choose an option</option><option>Prefer not to say</option></select>`);
+  transport.launch.mockResolvedValue(employer.browser);
+  const state = initialDemoState();
+  const profile = state.profile;
+  profile.phone = "202-555-0147";
+  const job = { ...state.jobs[0], applyUrl: "https://jobs.example/apply", url: "https://jobs.example/apply" };
+  state.jobs = [job]; state.applications = [app]; app.userId = profile.id; app.jobId = job.id; app.status = "selected";
+  const fact = profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Large form fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [] });
+  for (const file of packet.files ?? []) if (file.storageKey) files.push(`.data/application-files/${file.storageKey}`);
+  setPacket(state, app, packet); approveFill(app, profile.id, app.packetHash!, job.applyUrl);
+  const result = await prepareBrowser(app, job, profile);
+  expect(result.form.fields).toHaveLength(count);
+  expect(result.form.fields.slice(-4, -1).map(field => field.value)).toEqual([profile.name, profile.email, profile.phone]);
+  expect(browserQuestions({ ...result.form, hash: "observed" }).map(question => question.label)).toEqual(["Pronouns"]);
+  expect(result.form.blockers?.some(blocker => /control limit|more than 40/.test(blocker))).toBe(false);
+  expect(employer.observations().submitClicks).toBe(0);
+});
+
+it("fills more than twenty explicitly approved browser answers", async () => {
+  const { app, employer } = fixture(Array.from({ length: 25 }, (_, index) => `<label for="question-${index}">Personal question ${index}</label><input required id="question-${index}" name="question-${index}">`).join(""));
+  const state = initialDemoState();
+  const profile = state.profile;
+  const job = { ...state.jobs[0], applyUrl: "https://jobs.example/apply", url: "https://jobs.example/apply" };
+  state.jobs = [job]; state.applications = [app]; app.userId = profile.id; app.jobId = job.id; app.jobSnapshot = job; app.status = "selected";
+  const fact = profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Large answer fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [] });
+  for (const file of packet.files ?? []) if (file.storageKey) files.push(`.data/application-files/${file.storageKey}`);
+  setPacket(state, app, packet); approveFill(app, profile.id, app.packetHash!, job.applyUrl);
+  setFormSnapshot(app, await refreshBrowserSnapshot(app));
+  const questions = browserQuestions(app.form);
+  expect(questions).toHaveLength(25);
+  const approvals = approveBrowserAnswers(app, profile, app.form!.hash, questions.map((question, index) => ({ questionId: question.id, value: `Answer ${index}` })));
+  app.browserAnswerApprovals = approvals;
+  app.status = "filling";
+  app.browserQuestionRun = { token: "large-answer-run", kind: "answers", startedAt: new Date().toISOString() };
+  const form = await fillApprovedBrowserAnswers(app, job, profile, approvals, async () => true);
+  expect(form.readyToSubmit).toBe(true);
+  expect(form.fields.map(field => field.value)).toEqual(questions.map((_, index) => `Answer ${index}`));
+  expect(employer.observations().submitClicks).toBe(0);
+});
+
 it("accepts an answered required widget without treating it as an unfamiliar control", async () => {
   const { app } = fixture(locationHtml.replace('class="ashby-application-form-input-yesno"', 'class="ashby-application-form-input-yesno" aria-required="true"')
     .replace('aria-pressed="false" data-option="no"', 'aria-pressed="true" data-option="no"'));

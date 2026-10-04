@@ -45,7 +45,6 @@ export async function draftAiEssay(profile: Profile, job: Job, question: string,
 }
 
 export async function draftEssayAnswers(profile: Profile, job: Job, answers: ScreeningAnswer[], runDeadline = Date.now() + 200_000): Promise<ScreeningAnswer[]> {
-  let count = 0;
   const deadline = Math.min(runDeadline, Date.now() + 200_000);
   const result: ScreeningAnswer[] = [];
   for (const answer of answers) {
@@ -53,7 +52,6 @@ export async function draftEssayAnswers(profile: Profile, job: Job, answers: Scr
     if (answer.aiDraft) {
       try { validateAiEssay(profile, answer); result.push(answer); continue; } catch { /* Stale sources require a new draft. */ }
     }
-    if (++count > 5) throw new Error("Draft at most five essays per run.");
     result.push(await draftAiEssay(profile, job, answer.question, deadline));
   }
   return result;
