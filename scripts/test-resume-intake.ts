@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { initialDemoState } from "../src/lib/demo-data";
+import { createResumeProfileFixture } from "../src/lib/fixtures/resume-profile";
 import { createDocxSourceFixture } from "../src/lib/fixtures/docx-source";
 import { createPdfSourceFixture } from "../src/lib/fixtures/pdf-source";
 import { isUsableFact } from "../src/lib/fact-evidence";
@@ -55,6 +56,7 @@ async function main() {
       const owner = created.data.user!; users.push({ id: owner.id, cookie: "" });
       const state = initialDemoState(); state.applications = []; state.activity = []; state.feedback = []; state.importedJobs = []; state.matchCache = {};
       state.profile = { ...state.profile, id: owner.id, email, name: index === 0 ? "Riley Example" : "Avery Chen", demo: false,
+        school: "", phone: "", skills: [], graduationYear: "", headline: "",
         preferredTitles: [], preferredLocations: [], remoteOnly: false, searchPreferencesConfirmedAt: undefined,
         resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, resumeSourceDocument: undefined,
         resumeExtraction: undefined, resumeUploadSequence: undefined,
@@ -69,15 +71,29 @@ async function main() {
       assert.ok(users.at(-1)!.cookie);
     }
     const beforeOther = await read(1);
-    const first = await upload(0, "docx", await createDocxSourceFixture({ languages: true }));
+    const first = await upload(0, "docx", await createResumeProfileFixture());
+    assert.equal(first.profile.contactEmail, "riley@example.com");
+    assert.equal(first.profile.githubUrl, "https://github.com/riley-example");
+    assert.equal(first.profile.linkedinUrl, "https://www.linkedin.com/in/riley-example");
+    assert.equal(first.profile.portfolioUrl, "https://riley.example.com");
+    assert.equal(first.profile.school, "State University");
+    assert.equal(first.profile.phone, "+1 (206) 555-0123");
+    assert.deepEqual(first.profile.skills.sort(), ["PostgreSQL", "Python"]);
+    const edited = await fetch(`${origin}/api/actions`, { method: "POST", headers: { Origin: origin, Cookie: users[0].cookie, "Content-Type": "application/json" }, body: JSON.stringify({ action: "profile", payload: { githubUrl: "https://github.com/manual-example", expectedDetails: { githubUrl: first.profile.githubUrl } } }) });
+    assert.equal(edited.status, 200, await edited.text());
     assert.ok(first.profile.facts.some(f => f.text.includes("92%")));
     assert.deepEqual((await read(1)).profile, beforeOther.profile);
     const firstHash = first.profile.resumeSource!.sha256;
     const replacement = await upload(0, "docx", await createDocxSourceFixture({ secondExperience: true }));
+    assert.equal(replacement.profile.githubUrl, "https://github.com/manual-example");
+    assert.equal(replacement.profile.linkedinUrl, "");
+    assert.equal(replacement.profile.portfolioUrl, "");
     assert.notEqual(replacement.profile.resumeSource!.sha256, firstHash);
     assert.ok(replacement.profile.facts.filter(f => f.source === "resume").every(f => f.grounding?.sourceHash !== firstHash));
     const beforeFirst = await read(0);
     const pdf = await upload(1, "pdf", await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL", wrappedBullet: true }));
+    assert.equal(pdf.profile.contactEmail, "avery@example.com");
+    assert.equal(pdf.profile.linkedinUrl, "https://linkedin.com/in/averychen");
     assert.ok(pdf.profile.facts.some(f => f.text.includes("1,200")));
     assert.deepEqual((await read(0)).profile, beforeFirst.profile);
     const bucket = await db.storage.getBucket("resumes"); assert.equal(bucket.error, null); assert.equal(bucket.data!.public, false);

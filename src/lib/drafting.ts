@@ -1,3 +1,4 @@
+import { personalQuestionKey, profileMemorySnapshot } from "@/lib/profile-memory";
 import { isUsableFact, factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
@@ -56,7 +57,7 @@ export async function draftPacket(
   profile: Profile,
   job: Job,
   previous?: ApplicationPacket,
-  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; beforeModelCall?: () => Promise<void> },
+  options?: { resumeFormat: "latex"; deadline: number; preserveResume?: boolean; regenerateEssays?: boolean; knownAnswersOnly?: boolean; personalValues?: Record<string, string>; beforeModelCall?: () => Promise<void> },
 ): Promise<ApplicationPacket> {
   const facts = relevantFacts(profile, job);
   const originalResumeOnly = profile.automationSettings?.resumeTailoring === false;
@@ -174,6 +175,14 @@ export async function draftPacket(
   if (previous) {
     answers = previous.answers.map((answer) => answerOwner(answer.question) === "ai" || answer.factIds.every((id) => facts.some((f) => f.id === id)) ? answer :
       { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "human" });
+  }
+  if (!options?.knownAnswersOnly) {
+    const personal = options?.personalValues ?? profileMemorySnapshot(profile);
+    answers = answers.map(answer => {
+      const key = personalQuestionKey(answer.question);
+      const value = key ? personal[key] : undefined;
+      return answer.requiresUserInput && value ? { question: answer.question, answer: value, factIds: [], author: "human", userProvided: true, requiresUserInput: false } : answer;
+    });
   }
   if (options?.regenerateEssays) answers = answers.map((answer) => answerOwner(answer.question) === "ai" ? { question: answer.question, answer: "", factIds: [], requiresUserInput: true, author: "ai" } : answer);
   const previousCoverValid = previous?.coverLetter && previous.coverLetterFactIds?.every((id) => facts.some((fact) => fact.id === id && previous.coverLetter!.includes(fact.text))) &&

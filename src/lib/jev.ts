@@ -44,7 +44,7 @@ export function redactedProfile(profile: Profile): Profile {
     preferredLocations: profile.preferredLocations.map(redact),
     workAuthorization: redact(profile.workAuthorization),
     resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, resumeSourceDocument: undefined, resumeExtraction: undefined, resumeUploadSequence: undefined, sensitiveAnswers: {},
-    onboarding: undefined, automationAuthorization: undefined,
+    onboarding: undefined, automationAuthorization: undefined, contactEmail: undefined, location: undefined, linkedinUrl: undefined, githubUrl: undefined, portfolioUrl: undefined, detailSources: undefined, savedAnswers: undefined, resumeSkills: undefined,
     facts: profile.facts.filter(isUsableFact).map(fact => ({ id: fact.id, text: redact(fact.text), verified: true, source: fact.source })),
   };
 }

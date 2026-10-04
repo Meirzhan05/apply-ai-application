@@ -85,12 +85,36 @@ async function partXml(zip: JSZip, part: string): Promise<XmlDomDocument> {
   return parseXml(await file.async("string"), part);
 }
 
-async function supplementaryTextParts(zip: JSZip, styles: ReturnType<typeof styleCatalog>): Promise<Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties }> }>> {
+async function hyperlinkTargets(zip: JSZip, partName: string): Promise<Map<string, string>> {
+  const slash = partName.lastIndexOf("/");
+  const file = zip.file(`${partName.slice(0, slash)}/_rels/${partName.slice(slash + 1)}.rels`);
+  const targets = new Map<string, string>();
+  if (!file) return targets;
+  const relations = parseXml(await file.async("string"), "Hyperlink relationships").getElementsByTagNameNS("*", "Relationship");
+  for (let index = 0; index < relations.length; index++) {
+    const relation = relations.item(index);
+    const url = relation?.getAttribute("Target");
+    if (url && url.length <= 2048 && /\/hyperlink$/i.test(relation?.getAttribute("Type") ?? "") && /^(?:https?:|mailto:)/i.test(url))
+      targets.set(relation!.getAttribute("Id") ?? "", url);
+  }
+  return targets;
+}
+
+function paragraphLinks(paragraph: XmlDomNode, targets: Map<string, string>): Array<{ label: string; url: string }> {
+  return descendants(paragraph, "hyperlink").flatMap(link => {
+    const id = (link as XmlDomElement).getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
+    const url = id ? targets.get(id) : undefined;
+    return url ? [{ label: paragraphText(link), url }] : [];
+  }).slice(0, 20);
+}
+
+async function supplementaryTextParts(zip: JSZip, styles: ReturnType<typeof styleCatalog>): Promise<Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties; links: Array<{ label: string; url: string }> }> }>> {
   const parts = Object.values(zip.files).filter((file) => !file.dir && /^word\/(?:header|footer|footnotes|endnotes|comments)[^/]*\.xml$/i.test(file.name));
-  const result: Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties }> }> = [];
+  const result: Array<{ partName: string; paragraphs: Array<{ text: string; font: XmlProperties; links: Array<{ label: string; url: string }> }> }> = [];
   for (const part of parts) {
     const document = parseXml(await part.async("string"), part.name);
-    const paragraphs = descendants(document, "p").map((paragraph) => ({ text: paragraphText(paragraph), font: inheritedFontProperties(paragraph, styles) })).filter(({ text }) => text.trim());
+    const targets = await hyperlinkTargets(zip, part.name);
+    const paragraphs = descendants(document, "p").map((paragraph) => ({ text: paragraphText(paragraph), font: inheritedFontProperties(paragraph, styles), links: paragraphLinks(paragraph, targets) })).filter(({ text }) => text.trim());
     if (paragraphs.length) result.push({ partName: part.name, paragraphs });
   }
   return result;
@@ -240,6 +264,7 @@ export async function parseDocxSourceAsync(bytes: Buffer, trustedName?: string):
   const width = ptFromTwips(attr(pageSize, "w"));
   const height = ptFromTwips(attr(pageSize, "h"));
   if (!width || !height || !pageMargins) reason ??= "This DOCX does not declare a page size and margins that can be checked.";
+  const targets = await hyperlinkTargets(zip, "word/document.xml");
   const paragraphs = descendants(body, "p");
   if (!paragraphs.length) throw new Error("This DOCX has no readable paragraphs. Add text or upload an editable résumé.");
   const records: Array<{ paragraphIndex: number; paragraph: XmlNode; text: string; style: ReturnType<typeof paragraphStyle>; font: XmlProperties; pStyle?: string; bullet: boolean }> = [];
@@ -303,6 +328,7 @@ export async function parseDocxSourceAsync(bytes: Buffer, trustedName?: string):
     const anchor: DocxSourceAnchor = {
       id, partName: "word/document.xml", paragraphIndex: record.paragraphIndex, text: record.text, sectionId: activeSection.id, sectionHeading: activeSection.heading,
       entryId: currentEntryId, entryHeading: currentEntryHeading, kind, candidateClaim, editable,
+      links: paragraphLinks(record.paragraph, targets),
       styleHash: paragraphFingerprint, paragraphStyle: record.style,
       ...(record.font.fontFamily && record.font.fontSizePt ? { font: { family: record.font.fontFamily, sizePt: record.font.fontSizePt, bold: record.font.bold, italic: record.font.italic, ...(record.font.color ? { color: record.font.color } : {}) } } : {}),
     };
@@ -315,11 +341,11 @@ export async function parseDocxSourceAsync(bytes: Buffer, trustedName?: string):
     const section = { id: sectionId, heading: part.partName, anchorIds: [] as string[] };
     sections.push(section);
     for (let paragraphIndex = 0; paragraphIndex < part.paragraphs.length; paragraphIndex++) {
-      const { text, font } = part.paragraphs[paragraphIndex];
+      const { text, font, links } = part.paragraphs[paragraphIndex];
       const entryId = `entry-${hash(`${sectionId}:${paragraphIndex}`).slice(0, 12)}`;
       const id = `docx:${sourceHash.slice(0, 12)}:${hash(`${part.partName}:${paragraphIndex}:${text}`).slice(0, 24)}`;
       const repeatedRole = /\/header[^/]*\.xml$/i.test(part.partName) ? "header" as const : /\/footer[^/]*\.xml$/i.test(part.partName) ? "footer" as const : undefined;
-      anchors.push({ id, partName: part.partName, paragraphIndex, text, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
+      anchors.push({ id, partName: part.partName, paragraphIndex, text, links, sectionId, sectionHeading: part.partName, entryId, entryHeading: part.partName,
         kind: "paragraph", candidateClaim: isSubstantiveSourceText(text, { firstBodyParagraph: paragraphIndex === 0, trustedName }), editable: false, ...(repeatedRole ? { repeatedRole } : {}), styleHash: hash(`${part.partName}:${paragraphIndex}:${text}`), paragraphStyle: { numbered: false },
         ...(font.fontFamily && font.fontSizePt ? { font: { family: font.fontFamily, sizePt: font.fontSizePt, bold: font.bold, italic: font.italic, ...(font.color ? { color: font.color } : {}) } } : {}) });
       section.anchorIds.push(id);

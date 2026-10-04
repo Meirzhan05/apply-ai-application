@@ -4,11 +4,12 @@ import { parseDocxSource } from "@/lib/docx-source";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import type { AppState, VerifiedFact } from "@/lib/types";
 
-const fixture = vi.hoisted(() => ({ state: null as AppState | null, extract: vi.fn(), budget: true, search: vi.fn(), matches: vi.fn(), dispatch: vi.fn() }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, extract: vi.fn(), details: vi.fn(), budget: true, search: vi.fn(), matches: vi.fn(), dispatch: vi.fn() }));
 vi.mock("@/lib/repository", () => ({ isDemo: () => false, loadState: async () => structuredClone(fixture.state!), mutateState: async (_owner: string, fn: (s: AppState) => unknown) => fn(fixture.state!) }));
 vi.mock("@/lib/account-lifecycle", () => ({ withAccountOperation: async (_owner: string, _kind: string, fn: () => unknown) => fn() }));
 vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => fixture.budget }));
 vi.mock("@/lib/model-usage", () => ({ withModelUsageContext: async (_context: unknown, fn: () => unknown) => fn() }));
+vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(), extractResumeProfile: fixture.details }));
 vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: fixture.extract }));
 vi.mock("@/lib/personal-search", () => ({ queuePersonalSearch: fixture.search }));
 vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: fixture.matches }));
@@ -16,7 +17,7 @@ vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: fixture.dispatch } }));
 import { ensureResumeExtraction, queuedResumeExtraction, retryResumeExtraction, runResumeExtraction } from "@/lib/resume-extraction-jobs";
 
 beforeEach(async () => {
-  vi.clearAllMocks(); fixture.budget = true;
+  vi.clearAllMocks(); fixture.budget = true; fixture.details.mockResolvedValue([]);
   fixture.state = initialDemoState(); fixture.state.profile.name = "Riley Example";
   fixture.state.profile.facts = [
     { id: "manual", text: "Built a Python API for a class project.", source: "user", verified: true },
@@ -115,4 +116,39 @@ it("continues a valid extraction when a newer upload has not passed parsing", as
   });
   expect(await runResumeExtraction({ userId: "owner", requestId: fixture.state!.profile.resumeExtraction!.id })).toMatchObject({ ready: true });
   expect(fixture.state!.profile.resumeExtraction!.status).toBe("ready");
+});
+
+
+it("publishes basic details with facts and preserves edits made while extraction runs", async () => {
+  const source = fixture.state!.profile.resumeExtraction!.pending!.document!;
+  const anchor = source.anchors.find(item => item.text.includes("riley@example.com"))!;
+  fixture.state!.profile.phone = "";
+  fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text }]);
+  fixture.extract.mockImplementationOnce(async () => { fixture.state!.profile.phone = "+1 (212) 555-0199"; return []; });
+  await runResumeExtraction({ userId: "owner", requestId: fixture.state!.profile.resumeExtraction!.id });
+  expect(fixture.state!.profile.contactEmail).toBe("riley@example.com");
+  expect(fixture.state!.profile.phone).toBe("+1 (212) 555-0199");
+  expect(fixture.state!.profile.resumeDetailsVersion).toBe(1);
+});
+
+it("keeps all active profile details and facts when the profile grounding check fails", async () => {
+  fixture.state!.profile.githubUrl = "https://github.com/previous";
+  const before = structuredClone(fixture.state!.profile);
+  fixture.details.mockRejectedValueOnce(new Error("Resume profile details could not be reliably grounded."));
+  await expect(runResumeExtraction({ userId: "owner", requestId: before.resumeExtraction!.id })).rejects.toThrow("reliably grounded");
+  expect(fixture.state!.profile.githubUrl).toBe(before.githubUrl);
+  expect(fixture.state!.profile.facts).toEqual(before.facts);
+  expect(fixture.extract).not.toHaveBeenCalled();
+});
+
+it("upgrades a previously extracted resume only once, using original bytes for embedded hyperlinks", async () => {
+  const pending = fixture.state!.profile.resumeExtraction!.pending!;
+  fixture.state!.profile.resumeSource = pending.source;
+  fixture.state!.profile.resumeExtraction!.status = "ready";
+  fixture.state!.profile.resumeExtraction!.pending = undefined;
+  expect(await ensureResumeExtraction("owner", fixture.state!.profile)).toBe(true);
+  expect(fixture.state!.profile.resumeExtraction!.pending!.document).toBeUndefined();
+  fixture.state!.profile.resumeExtraction!.status = "ready";
+  fixture.state!.profile.resumeDetailsVersion = 1;
+  expect(await ensureResumeExtraction("owner", fixture.state!.profile)).toBe(false);
 });

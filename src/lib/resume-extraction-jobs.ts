@@ -5,6 +5,8 @@ import { newId } from "@/lib/crypto";
 import { reserveServiceBudget } from "@/lib/budget";
 import { withModelUsageContext } from "@/lib/model-usage";
 import { withAccountOperation } from "@/lib/account-lifecycle";
+import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
+import { applyResumeProfile, extractResumeProfile } from "@/lib/resume-profile-extraction";
 import { extractResumeFacts } from "@/lib/resume-fact-extraction";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { parseDocxSource } from "@/lib/docx-source";
@@ -54,11 +56,11 @@ export async function retryResumeExtraction(userId: string): Promise<void> {
 
 /** Lazy migration uses the owner's saved original without changing existing facts until success. */
 export async function ensureResumeExtraction(userId: string, profile: Profile): Promise<boolean> {
-  if (isDemo() || profile.resumeExtraction || !profile.resumeSource || !profile.resumeFileName) return false;
+  if (isDemo() || (profile.resumeExtraction && (profile.resumeExtraction.status !== "ready" || profile.resumeDetailsVersion === 1)) || !profile.resumeSource || !profile.resumeFileName) return false;
   const id = newId();
   const queued = await mutateState(userId, state => {
     const current = state.profile;
-    if (current.resumeExtraction || !current.resumeSource || !current.resumeFileName) return false;
+    if ((current.resumeExtraction && (current.resumeExtraction.status !== "ready" || current.resumeDetailsVersion === 1)) || !current.resumeSource || !current.resumeFileName) return false;
     const now = new Date().toISOString();
     current.resumeExtraction = { id, status: "queued", attempts: 0, filename: current.resumeFileName, requestedAt: now, updatedAt: now,
       pending: { source: structuredClone(current.resumeSource) } };
@@ -109,14 +111,17 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
       });
       return { budgetLimited: true };
     }
+    const deadline = Date.now() + 210_000;
     let source = pending.document;
     if (!source || source.sourceHash !== pending.source.sha256 || (source.format === "pdf" && source.version < 3)) {
       const bytes = await readOriginalResume(userId, { ...pending.source, filename: job.filename });
       source = pending.source.mimeType === "application/pdf" ? await parsePdfSource(bytes, profile.name) : await parseDocxSource(bytes, profile.name);
     }
+    source = sourceWithCurrentEvidenceClaims(source, profile.name);
     if (source.sourceHash !== pending.source.sha256) throw new Error("The resume no longer matches its stored original. Upload it again.");
+    const details = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeProfile(source!, { userId, beforeModelCall: assertCurrent }));
     const facts = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeFacts(source!, {
-      userId, trustedName: profile.name, beforeModelCall: assertCurrent,
+      userId, trustedName: profile.name, deadline, beforeModelCall: assertCurrent,
       onProgress: async status => { await mutateState(userId, state => {
         const current = state.profile.resumeExtraction;
         if (current?.id !== requestId || !processing.has(current.status)) throw new Error("The uploaded resume changed during extraction.");
@@ -131,6 +136,7 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
       if (manual.length + facts.length > 80) throw new Error("The resume and manually added facts exceed 80 facts. Shorten the resume or remove unused manual facts, then retry.");
       current.resumeFileName = job.filename; current.resumeSource = pending.source;
       current.resumeSourceDocument = source; current.resumeText = source.text;
+      applyResumeProfile(current, source!, details);
       saveOnboarding(current, { facts: [...manual, ...facts] });
       const now = new Date().toISOString();
       current.resumeExtraction = { ...current.resumeExtraction, status: "ready", pending: undefined, error: undefined, updatedAt: now };

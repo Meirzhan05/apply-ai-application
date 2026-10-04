@@ -60,3 +60,14 @@ describe("truthful application facts", () => {
   });
 
 });
+
+
+it("fills a pending personal link from the profile while leaving screening answers for the applicant", async () => {
+  const state = initialDemoState(); state.profile.githubUrl = "https://github.com/riley-example";
+  const previous = await draftPacket(state.profile, state.jobs[0]);
+  previous.answers = ["GitHub profile", "Requires sponsorship"].map(question => ({ question, answer: "", factIds: [], author: "human", requiresUserInput: true }));
+  const packet = await draftPacket(state.profile, state.jobs[0], previous);
+  expect(packet.answers[0]).toMatchObject({ answer: "https://github.com/riley-example", requiresUserInput: false });
+  expect(packet.answers[1]).toMatchObject({ answer: "", requiresUserInput: true });
+  expect(() => validatePacket(state.profile, packet)).not.toThrow();
+});

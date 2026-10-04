@@ -115,6 +115,7 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
     const sections: PdfSourceRepresentation["sections"] = [];
     const textLines: string[] = [];
     const parsedPages: ParsedPage[] = [];
+    const linksByPage = new Map<number, Array<{ url: string; left: number; right: number; top: number; bottom: number }>>();
     const pageLayouts: ResumeSourcePageLayout[] = [];
     let firstPageSize = { width: 0, height: 0 };
     let margins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -128,6 +129,12 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
         reason = appendReason(reason, "A PDF page exceeds the bounded page-size profile. Use standard résumé page dimensions; no pages or text were removed.");
       if (pageNumber === 1) firstPageSize = { width: round(viewport.width), height: round(viewport.height) };
 
+      const linkAnnotations = (await page.getAnnotations({ intent: "display" })).flatMap(annotation => {
+        if (annotation.subtype !== "Link" || typeof annotation.url !== "string" || annotation.url.length > 2048 || !Array.isArray(annotation.rect)) return [];
+        const [x1, y1, x2, y2] = annotation.rect as number[];
+        return [{ url: annotation.url, left: Math.min(x1, x2), right: Math.max(x1, x2), top: viewport.height - Math.max(y1, y2), bottom: viewport.height - Math.min(y1, y2) }];
+      });
+      linksByPage.set(pageNumber, linkAnnotations);
       const content = await page.getTextContent({ includeMarkedContent: false, disableNormalization: false });
       const operatorList = await page.getOperatorList({ intent: "display" });
       const showText = operatorList.fnArray.flatMap((operation, index) => operation === OPS.showText ? [operatorList.argsArray[index]?.[0] as Array<{ unicode?: string }> | undefined] : []).filter((value): value is Array<{ unicode?: string }> => Boolean(value));
@@ -336,6 +343,9 @@ export async function parsePdfSource(bytes: Buffer, trustedName?: string): Promi
           boundsPt: { left: round(item.left), top: round(item.top), right: round(item.right), bottom: round(item.bottom) },
           showOperatorIndex: item.showOperatorIndex, operatorText: item.operatorText,
           operatorFingerprint, fontResourceName: item.item.fontName, styleHash: hashJson(styleFingerprint), font: { family: item.fontFamily || "unknown", sizePt: fontSize, bold: item.bold, italic: item.italic } };
+        const links = (linksByPage.get(page.pageNumber) ?? []).filter(link => Math.min(link.right, item.right) - Math.max(link.left, item.left) > 0 && Math.min(link.bottom, item.bottom) - Math.max(link.top, item.top) > 0)
+          .map(link => ({ label: claimText, url: link.url })).slice(0, 20);
+        if (links.length) anchor.links = links;
         anchors.push(anchor);
         previousBulletLine = !repeatedRole && isBullet ? { item, anchor, bullet: anchor }
           : continuation ? { item, anchor, bullet: previous.bullet } : undefined;

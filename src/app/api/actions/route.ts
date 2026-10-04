@@ -1,3 +1,4 @@
+import { rememberPersonalAnswer, normalizeProfileDetail, profileDetailKeys, profileDetailValue, validProfileDetail } from "@/lib/profile-memory";
 import { NextResponse } from "next/server";
 import { tasks } from "@trigger.dev/sdk";
 import type {
@@ -189,14 +190,18 @@ async function perform(
       throw new Error("Your sign-in email could not be verified.");
     return mutateState(userId, (state) => {
       const profile = state.profile;
-      const fields: Array<keyof Profile> = [
-        "name",
-        "phone",
-        "school",
-        "graduationYear",
-        "headline",
-        "workAuthorization",
-      ];
+      const fields: Array<keyof Profile> = ["workAuthorization"];
+      const expected = payload.expectedDetails === undefined ? undefined : z.record(z.string(), z.string()).parse(payload.expectedDetails);
+      for (const key of profileDetailKeys) {
+        if (!(key in payload)) continue;
+        const value = normalizeProfileDetail(key, z.string().max(500).parse(payload[key]));
+        if (expected && expected[key] !== profileDetailValue(profile, key)) throw new Error("Your profile details changed. Refresh before saving this edit.");
+        if (value && !validProfileDetail(key, value)) throw new Error(`Enter a valid ${key.endsWith("Url") ? "HTTP or HTTPS profile URL" : key}.`);
+        profile[key] = value;
+        profile.detailSources ??= {};
+        profile.detailSources[key] = { source: "user", value };
+        profile.savedAnswers = profile.savedAnswers?.filter(answer => answer.key !== key);
+      }
       fields.forEach((key) => {
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
@@ -216,6 +221,7 @@ async function perform(
             .map((item) => item.trim())
             .filter(Boolean);
       }
+      if ("skills" in payload) profile.skillsEdited = true;
       if ("remoteOnly" in payload)
         profile.remoteOnly = payload.remoteOnly === true;
       if ("strictLocations" in payload) profile.strictLocations = payload.strictLocations === true;
@@ -254,10 +260,21 @@ async function perform(
       activity(
         state,
         "Profile updated",
-        "Search preferences and confirmed facts were saved.",
+        "Profile details and preferences were saved.",
       );
     }, ownerContext);
   }
+  if (action === "savedProfileAnswer") return mutateState(userId, state => {
+    const key = z.string().max(100).parse(payload.key);
+    const answer = state.profile.savedAnswers?.find(item => item.key === key);
+    if (!answer || answer.value !== z.string().parse(payload.expectedValue)) throw new Error("This saved answer changed. Refresh before editing it.");
+    const value = z.string().max(500).parse(payload.value).trim();
+    if (/[\r\n\u0000-\u001f]/.test(value) || (value && profileDetailKeys.includes(answer.key as typeof profileDetailKeys[number]) && !validProfileDetail(answer.key as typeof profileDetailKeys[number], value))) throw new Error("Enter a valid personal answer.");
+    if (value) { answer.value = value; answer.savedAt = new Date().toISOString(); }
+    else state.profile.savedAnswers = state.profile.savedAnswers!.filter(item => item.key !== key);
+    bumpAutomationVersion(state.profile);
+    state.profile.updatedAt = new Date().toISOString();
+  }, ownerContext);
   if (action === "feedback")
     return mutateState(userId, (state) => {
       const result = updateJobFeedback(state, {
@@ -339,6 +356,8 @@ async function perform(
       const target = findApp(current, app.id, userId);
       assertMaterialReviewCurrent(current, target, expected);
       setPacket(current, target, packet);
+      for (const answer of packet.answers) if (answer.author === "human" && answer.userProvided && !answer.requiresUserInput)
+        rememberPersonalAnswer(current.profile, target.id, answer.question, answer.answer);
       activity(current, "Packet revised", packet.summary);
     }, ownerContext);
   }

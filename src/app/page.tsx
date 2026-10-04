@@ -1,4 +1,6 @@
 "use client";
+import { profileDetailKeys, profileDetailLabels, profileDraftValues } from "@/lib/profile-memory";
+import { SavedProfileAnswers } from "@/components/saved-profile-answers";
 import { ResumeFacts } from "@/components/resume-facts";
 import { isUsableFact } from "@/lib/fact-evidence";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
@@ -142,6 +144,21 @@ export default function Dashboard() {
   const pendingApplicationFocus = useRef<string | null>(null);
   const [applicationOutcome, setApplicationOutcome] = useState<{ id: string; message: string } | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
+  const profileDraftBaseline = useRef<Profile | null>(null);
+  useEffect(() => {
+    if (!data?.profile || !profileDraft || !profileDraftBaseline.current || profileDraft.id !== data.profile.id) return;
+    const latest = profileDraftValues(data.profile);
+    const baseline = structuredClone(profileDraftBaseline.current);
+    const next = { ...profileDraft };
+    let changed = false;
+    for (const key of profileDetailKeys) if (profileDraft[key] === baseline[key] && profileDraft[key] !== latest[key]) {
+      next[key] = latest[key] ?? ""; baseline[key] = latest[key] ?? ""; changed = true;
+    }
+    if (JSON.stringify(profileDraft.skills) === JSON.stringify(baseline.skills) && JSON.stringify(profileDraft.skills) !== JSON.stringify(latest.skills)) {
+      next.skills = latest.skills; baseline.skills = latest.skills; changed = true;
+    }
+    if (changed) { profileDraftBaseline.current = baseline; setProfileDraft(next); }
+  }, [data?.profile, profileDraft]);
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
@@ -175,7 +192,8 @@ export default function Dashboard() {
           } catch { /* Storage can be disabled by browser preferences. */ }
           sessionOwner.current = body.profile.id;
           setData(body);
-          setProfileDraft({ ...structuredClone(body.profile), timeZone: body.profile.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
+          profileDraftBaseline.current = profileDraftValues(body.profile);
+          setProfileDraft({ ...profileDraftValues(body.profile), timeZone: body.profile.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
         }
       })
       .catch((err) => {
@@ -197,7 +215,14 @@ export default function Dashboard() {
     // Fact edits save through ResumeFacts; an older settings draft must not replace a new extraction.
     if (action === "profile" && "id" in payload) {
       const { facts: _facts, resumeExtraction: _extraction, ...settings } = payload;
-      void _facts; void _extraction; payload = settings;
+      void _facts; void _extraction;
+      const expectedDetails: Record<string, string> = {};
+      for (const key of profileDetailKeys) {
+        if (settings[key] === profileDraftBaseline.current?.[key]) delete settings[key];
+        else expectedDetails[key] = profileDraftBaseline.current?.[key] ?? "";
+      }
+      if (JSON.stringify(settings.skills) === JSON.stringify(profileDraftBaseline.current?.skills)) delete settings.skills;
+      payload = { ...settings, expectedDetails };
     }
     if (actionCheck) { setError(actionCheck.message); return null; }
     setFeedbackNotice(current => current?.batchResult ? { ...current, batchResult: undefined } : current);
@@ -216,7 +241,7 @@ export default function Dashboard() {
       accepted = true;
       const next = await reload();
       setPendingActionCheck(null);
-      if (["profile", "editPacket"].includes(action)) setProfileDraft(structuredClone(next.profile));
+      if (["profile", "editPacket"].includes(action)) { profileDraftBaseline.current = profileDraftValues(next.profile); setProfileDraft(profileDraftValues(next.profile)); }
       if (["editPacket", "confirmEssay", "reviseEssay", "draft"].includes(action)) setAnswerEdits(current => current?.applicationId === payload.applicationId ? null : current);
       if (action === "editPacket") setNotice("Your answers are saved.");
       if (action === "reviseEssay") setNotice("Your essay revision is saved. Review and confirm the new wording.");
@@ -1855,13 +1880,11 @@ export default function Dashboard() {
         )}
         {(section === "profile" || section === "settings") && profileDraft && (
           <main className="wide-panel profile-panel">
-            <p className="eyebrow">YOUR VERIFIED STORY</p>
-            <h1>
+                        <h1>
               {section === "profile" ? "Your profile" : "Search settings"}
             </h1>
             <p className="subheading">
-              The agent uses only facts you confirm and preferences you set
-              here.
+              Your resume fills available details automatically. Edit them anytime; set screening answers and preferences yourself.
             </p>
             <div className="profile-grid">
               <div className="profile-card">
@@ -1870,19 +1893,20 @@ export default function Dashboard() {
                   {(
                     [
                       "name",
-                      "email",
+                      "contactEmail",
                       "phone",
                       "school",
                       "graduationYear",
                       "headline",
+                      "location",
                     ] as const
                   ).map((key) => (
                     <label key={key}>
-                      {labels[key]}
+                      {profileDetailLabels[key]}
                       <input
                         id={`setup-basic-${key}`}
-                        value={profileDraft[key]}
-                        disabled={key === "email" && !data.profile.demo}
+                        value={profileDraft[key] ?? ""}
+                        type={key === "contactEmail" ? "email" : key === "phone" ? "tel" : "text"}
                         onChange={(event) =>
                           setProfileDraft({
                             ...profileDraft,
@@ -1893,6 +1917,15 @@ export default function Dashboard() {
                     </label>
                   ))}
                 </div>
+                <h3>Links</h3>
+                <p className="muted">These links are reused when an application asks for them.</p>
+                <div className="form-grid">
+                  {(["linkedinUrl", "githubUrl", "portfolioUrl"] as const).map(key => <label key={key}>
+                    {profileDetailLabels[key]}
+                    <input type="url" value={profileDraft[key] ?? ""} placeholder="https://…" onChange={event => setProfileDraft({ ...profileDraft, [key]: event.target.value })} />
+                  </label>)}
+                </div>
+                <SavedProfileAnswers profile={data.profile} disabled={Boolean(busy)} onSave={(key, expectedValue, value) => act("savedProfileAnswer", { key, expectedValue, value })} />
                 <h3 id="search-preferences" tabIndex={-1}>Search preferences</h3>
                 <div className="form-grid">
                   {(

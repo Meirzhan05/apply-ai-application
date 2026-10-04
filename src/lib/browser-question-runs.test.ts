@@ -90,3 +90,25 @@ it("scopes essay revisions to the saved browser draft and rejects stale, cross-o
   expect(mocks.fill).not.toHaveBeenCalled();
   expect(app.approvals.map((approval) => approval.kind)).toEqual(["fill"]);
 });
+
+it("saves a successfully filled personal link for future applications without changing the active packet", async () => {
+  const { state, app } = await fixture();
+  app.form!.fields = [{ identifier: "github", label: "GitHub profile", kind: "url", required: true, value: "", valid: false }];
+  const question = browserQuestions(app.form)[0];
+  const previousHash = app.packetHash; const memory = structuredClone(app.profileMemory);
+  mocks.fill.mockImplementation(async application => ({ ...application.form, readyToSubmit: true, fields: application.form.fields.map((field: object) => ({ ...field, value: "https://github.com/riley-example", valid: true })) }));
+  await answerBrowserQuestions(state.profile.id, app.id, app.form!.hash, [{ questionId: question.id, value: "https://github.com/riley-example" }]);
+  expect(state.profile.savedAnswers).toEqual([expect.objectContaining({ key: "githubUrl", value: "https://github.com/riley-example", applicationId: app.id })]);
+  expect(app.packetHash).toBe(previousHash); expect(app.profileMemory).toEqual(memory);
+});
+
+it("does not learn failed fills or employer-specific answers", async () => {
+  const { state, app, inputs } = await fixture();
+  mocks.fill.mockImplementation(async application => ({ ...application.form, readyToSubmit: true, fields: application.form.fields.map((field: object) => ({ ...field, value: "No", valid: true })) }));
+  await answerBrowserQuestions(state.profile.id, app.id, app.form!.hash, inputs);
+  expect(state.profile.savedAnswers).toBeUndefined();
+  app.status = "needs_user_action"; app.form!.readyToSubmit = false; app.form!.fields = [{ identifier: "github", label: "GitHub profile", kind: "url", required: true, value: "", valid: false }];
+  mocks.fill.mockRejectedValueOnce(new Error("Fill failed"));
+  await expect(answerBrowserQuestions(state.profile.id, app.id, app.form!.hash, [{ questionId: browserQuestions(app.form)[0].id, value: "https://github.com/riley-example" }])).rejects.toThrow("Fill failed");
+  expect(state.profile.savedAnswers).toBeUndefined();
+});

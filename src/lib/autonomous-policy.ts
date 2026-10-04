@@ -1,3 +1,4 @@
+import { profileMemorySnapshot } from "@/lib/profile-memory";
 import { assertAutonomousEssay, hasAutonomousEssayValue } from "@/lib/autonomous-essays";
 import { originalResumeManifest } from "@/lib/original-resume";
 import { hashJson } from "@/lib/crypto";
@@ -32,8 +33,8 @@ export function assertAutonomousDestination(application: Application, form: Pick
 }
 
 export function autonomyProfileHash(profile: Profile): string {
-  const { resumeExtraction: _processing, resumeUploadSequence: _upload, ...active } = profile;
-  void _processing; void _upload;
+  const { resumeExtraction: _processing, resumeUploadSequence: _upload, savedAnswers: _learned, ...active } = profile;
+  void _processing; void _upload; void _learned;
   return hashJson(active);
 }
 export function autonomyJobHash(job: Job): string {
@@ -89,6 +90,8 @@ export function authorizeKnownAnswerApplication(application: Application, profil
   assertImportedCompatibility(application, profile, job);
   const eligibilityJob = importedAutonomyJob(application, job);
   const imported = importedCompatibilityRequired(application, job) ? application.importedCompatibility : undefined;
+  application.profileMemory = profileMemorySnapshot(profile);
+  application.profileMemoryVersion = profile.automationVersion;
   application.autonomousAuthorization = { version: 1, userId: profile.id, profileVersion: profile.automationVersion!, targetUrl: job.applyUrl, expectedFormUrl: imported?.formUrl ?? job.applyUrl, expectedSubmitAction: imported?.submitControl?.action ?? job.applyUrl, authorizedAt: new Date().toISOString(), profileHash: autonomyProfileHash(profile), jobHash: autonomyJobHash(eligibilityJob), postingIdentity: canonicalJobUrl(job.url) };
   assertAutonomous(application, profile, job, "draft");
 }

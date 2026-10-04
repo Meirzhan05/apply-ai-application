@@ -2046,3 +2046,11 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 .resume-fact-actions button:focus-visible { outline: 2px solid var(--forest); outline-offset: 2px; }
 .resume-fact-actions button:disabled { opacity: .5; cursor: default; }
 .resume-facts-panel .add-fact button { white-space: nowrap; }
+
+.saved-profile-answers { margin: 24px 0; padding: 16px 0; border-block: 1px solid var(--line, #d9d6cf); }
+.saved-profile-answers summary { cursor: pointer; font-weight: 600; }
+.saved-profile-answer { padding: 14px 0; }
+.saved-profile-answer p { margin: 6px 0; overflow-wrap: anywhere; }
+.saved-profile-answer label { display: grid; gap: 8px; }
+.saved-profile-answer .fact-actions { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.saved-profile-answer .fact-actions button { min-height: 36px; min-width: 44px; }

@@ -90,6 +90,7 @@ export interface ResumeSource {
 export interface ResumeSourceAnchorBase {
   id: string;
   text: string;
+  links?: Array<{ label: string; url: string }>;
   sectionId: string;
   sectionHeading: string;
   entryId: string;
@@ -205,6 +206,15 @@ export interface PdfSourceRepresentation {
 export type ResumeSourceAnchor = DocxSourceAnchor | PdfSourceAnchor;
 export type ResumeSourceDocument = DocxSourceRepresentation | PdfSourceRepresentation;
 
+export type ProfileDetailKey = "name" | "contactEmail" | "phone" | "school" | "graduationYear" | "headline" | "location" | "linkedinUrl" | "githubUrl" | "portfolioUrl";
+export interface SavedProfileAnswer {
+  key: ProfileDetailKey | "languages" | "namePronunciation";
+  question: string;
+  value: string;
+  applicationId: string;
+  savedAt: string;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -213,6 +223,17 @@ export interface Profile {
   phone: string;
   graduationYear: string;
   headline: string;
+  /** Application contact email is independent of the authenticated account email. */
+  contactEmail?: string;
+  location?: string;
+  linkedinUrl?: string;
+  githubUrl?: string;
+  portfolioUrl?: string;
+  detailSources?: Partial<Record<ProfileDetailKey, { source: "user" | "resume"; value: string; sourceHash?: string; anchorId?: string; quote?: string }>>;
+  resumeDetailsVersion?: number;
+  resumeSkills?: { sourceHash: string; values: string[] };
+  skillsEdited?: boolean;
+  savedAnswers?: SavedProfileAnswer[];
   skills: string[];
   preferredTitles: string[];
   preferredLocations: string[];
@@ -675,6 +696,9 @@ export interface Application {
   status: ApplicationStatus;
   packet?: ApplicationPacket;
   packetHash?: string;
+  /** Frozen reusable personal values; subsequent learning affects future applications. */
+  profileMemory?: Record<string, string>;
+  profileMemoryVersion?: number;
   form?: FormSnapshot;
   approvals: Approval[];
   autonomousAuthorization?: {

@@ -50,6 +50,7 @@ export function evidenceRequiredAnchorIds(source: ResumeSourceDocument, trustedN
 }
 
 export function requiresSourceEvidence(anchor: ResumeSourceAnchor, firstVisibleBodyAnchor = false, trustedName?: string): boolean {
+  if (anchor.links?.length && /^(?:linkedin|github|portfolio|(?:personal )?website)$/i.test(anchor.text.trim())) return false;
   const identityPosition = firstVisibleBodyAnchor || ("repeatedRole" in anchor && Boolean(anchor.repeatedRole));
   return isSubstantiveSourceText(anchor.text, { firstBodyParagraph: identityPosition, trustedName });
 }

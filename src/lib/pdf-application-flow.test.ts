@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   browser: null as unknown,
 }));
 
+vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(), extractResumeProfile: async () => [] }));
 vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
   (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
 vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {

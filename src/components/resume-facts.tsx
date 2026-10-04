@@ -12,7 +12,7 @@ const groups: Array<{ category: ResumeFactCategory; label: string }> = [
   { category: "certification", label: "Certifications" }, { category: "publication", label: "Publications and research" },
   { category: "other", label: "Additional facts" },
 ];
-const messages = { queued: "Reading your resume…", extracting: "Extracting your experience…", checking: "Checking facts against your resume…", ready: "Your resume facts are ready.", failed: "Resume extraction couldn't finish.", budget_limited: "Resume extraction is paused." };
+const messages = { queued: "Reading your resume…", extracting: "Extracting your details and experience…", checking: "Checking facts against your resume…", ready: "Your resume details and facts are ready.", failed: "Resume extraction couldn't finish.", budget_limited: "Resume extraction is paused." };
 
 export function ResumeFacts({ profile, busy, onUploaded, onSave }: {
   profile: Profile; busy: boolean; onUploaded: () => Promise<unknown>;

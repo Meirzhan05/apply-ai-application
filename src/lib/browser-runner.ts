@@ -1,3 +1,4 @@
+import { applicationPersonalValues, personalQuestionKey } from "@/lib/profile-memory";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -313,15 +314,17 @@ function allowedValues(
   profile: Profile,
   application: Application,
 ): Record<string, string> {
-  const name = profile.name.trim().split(/\s+/);
+  const personal = applicationPersonalValues(profile, application);
+  const name = personal.name.trim().split(/\s+/);
   const values: Record<string, string> = {
     first_name: name[0] || "",
     last_name: name.slice(1).join(" "),
-    full_name: profile.name,
-    email: profile.email,
-    phone: profile.phone,
-    school: profile.school,
-    graduation_date: profile.onboarding?.questionnaire.graduationYear || profile.graduationYear,
+    full_name: personal.name,
+    email: personal.contactEmail,
+    phone: personal.phone,
+    school: personal.school,
+    ...Object.fromEntries(Object.entries(personal).map(([key, value]) => [`personal_${key}`, value])),
+    graduation_date: profile.onboarding?.questionnaire.graduationYear || personal.graduationYear,
     availability: profile.onboarding?.questionnaire.availability || "",
     cover_letter: application.packet?.coverLetter || "",
   };
@@ -346,9 +349,12 @@ function deterministicKey(
   const boundIndex = application.autonomousAuthorization ? application.packet?.answers.findIndex((answer) => answer.autonomousEssayAuthorization?.control?.identifier === field.identifier && answer.autonomousEssayAuthorization.control.kind === field.kind && answer.autonomousEssayAuthorization.control.label === field.label) : undefined;
   if (boundIndex !== undefined && boundIndex >= 0) return `answer_${boundIndex}`;
   const answerIndex = application.packet?.answers.findIndex(
-    (answer) => answer.question.toLowerCase().trim().replace(/\s+/g, " ") === label,
+    (answer) => answer.question.toLowerCase().trim().replace(/\s+/g, " ") === label &&
+      answer.answer.trim() && (!answer.requiresUserInput || answer.userProvided),
   );
   if (answerIndex !== undefined && answerIndex >= 0) return `answer_${answerIndex}`;
+  const personalKey = personalQuestionKey(field.label);
+  if (personalKey) return ({ name: "full_name", contactEmail: "email", phone: "phone", school: "school", graduationYear: "graduation_date" } as Record<string, string>)[personalKey] ?? `personal_${personalKey}`;
   if (/first.*last.*name|full.?name|your name|candidate name/.test(label)) return "full_name";
   if (/first.?name|given.?name/.test(label)) return "first_name";
   if (/last.?name|family.?name|surname/.test(label)) return "last_name";
