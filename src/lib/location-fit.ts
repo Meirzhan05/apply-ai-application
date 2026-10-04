@@ -35,6 +35,10 @@ function normalized(text: string) {
   return text.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
 }
 
+export function unitedStatesRegion(region: string): string | undefined {
+  return states[normalized(region)];
+}
+
 function place(raw: string): Place | undefined {
   if (/^(?:united states(?: of america)?|usa|us)$/.test(normalized(raw))) return { state: "US" };
   const text = normalized(raw).replace(/[\s,]+(?:united states(?: of america)?|usa|us)$/, "").trim();

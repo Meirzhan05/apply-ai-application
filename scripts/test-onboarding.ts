@@ -29,7 +29,7 @@ async function resumeBytes(): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
-  ["SYNTHETIC APPLICANT", "Orbit Labs", "ML Intern | February 2026 - June 2026", "- Built an explainable recommender.", "- Evaluated ranking quality across synthetic cohorts.", "EDUCATION", "State University"].forEach((line, index) => page.drawText(line, { x: 45, y: 745 - index * 24, size: 12, font }));
+  ["SYNTHETIC APPLICANT", "Almaty, Almaty Region, Kazakhstan", "EXPERIENCE", "Orbit Labs", "ML Intern | February 2026 - June 2026", "- Built an explainable recommender.", "- Evaluated ranking quality across synthetic cohorts.", "EDUCATION", "State University"].forEach((line, index) => page.drawText(line, { x: 45, y: 745 - index * 24, size: 12, font }));
   return pdf.save();
 }
 
@@ -116,6 +116,9 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
       console.error(`Saved-progress recovery did not resume the answers stage (${label}): ${await page.locator("body").innerText()}`);
       throw error;
     }
+    assert.equal(await page.getByLabel("Current city", { exact: true }).inputValue(), "Almaty", "Resume residence must be prefilled after upload/reuse and reload.");
+    assert.equal(await page.getByLabel("State or region", { exact: true }).inputValue(), "Almaty Region");
+    assert.equal(await page.getByLabel("Country", { exact: true }).inputValue(), "Kazakhstan");
     await page.getByLabel("Current city", { exact: true }).fill("New York");
     await page.getByLabel("State or region", { exact: true }).fill("NY");
     await page.getByLabel("Country", { exact: true }).fill("United States");
@@ -143,6 +146,7 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     await page.waitForURL((url) => url.pathname === "/");
     const state = await page.evaluate(async () => (await fetch("/api/state", { cache: "no-store" })).json());
     assert.equal(state.onboarding.complete, true, "Finish must persist v2 completion before dashboard arrival.");
+    assert.deepEqual(state.profile.currentLocation, { city: "New York", region: "NY", country: "United States" }, "User corrections to imported residence must persist.");
     assert.equal(state.automation.enabled, false, "Onboarding must not authorize automation.");
     assert.equal(state.automation.paused, true, "The disposable journey must keep automation paused.");
     assert.equal(state.applications.length, 0, "Onboarding must not create employer applications.");

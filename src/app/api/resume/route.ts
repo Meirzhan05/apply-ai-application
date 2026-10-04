@@ -94,6 +94,8 @@ export async function POST(request: Request) {
       for (const key of ["name", "email", "phone"] as const)
         if (!reuse || !state.profile[key].trim()) state.profile[key] = basics[key];
       if (!reuse || !state.profile.links?.length) state.profile.links = basics.links;
+      if (basics.currentLocation && !Object.values(state.profile.currentLocation ?? {}).some(value => value.trim()))
+        state.profile.currentLocation = basics.currentLocation;
       const currentSourceDocument = reuse ? sourceDocument : sourceWithCurrentEvidenceClaims(sourceDocument, state.profile.name);
       const suggestions: Array<{ text: string; sourceAnchorId?: string }> = currentSourceDocument.format === "docx"
         ? suggestDocxFacts(currentSourceDocument) : suggestPdfFacts(currentSourceDocument);

@@ -35,6 +35,51 @@ beforeEach(async () => {
   mocks.extracted = "WORK EXPERIENCE\nOrbit Labs\nML Intern June 2026 – August 2026\n• Built a recommender with explainable\nfeature-level predictions.";
 });
 describe("resume upload confirmation boundaries", () => {
+  it("prefills an editable current location from the resume contact header", async () => {
+    const bytes = await createDocxSourceFixture({ identityText: "Riley Example | riley@example.com | Boston, MA" });
+    expect((await POST(docxRequest(bytes))).status).toBe(200);
+    expect(mocks.state!.profile.currentLocation).toEqual({ city: "Boston", region: "MA", country: "United States" });
+  });
+  it.each([
+    ["Location: Almaty, Almaty Region, Kazakhstan", { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }],
+    ["Toronto, ON, Canada", { city: "Toronto", region: "ON", country: "Canada" }],
+    ["Paris, France", { city: "Paris", region: "", country: "France" }],
+    ["New York, NY 10001, USA", { city: "New York", region: "NY", country: "United States" }],
+  ])("imports explicit international or partial residence details: %s", async (location, expected) => {
+    expect((await POST(docxRequest(await createDocxSourceFixture({ identityText: `Riley Example | riley@example.com | ${location}` })))).status).toBe(200);
+    expect(mocks.state!.profile.currentLocation).toEqual(expected);
+    expect(mocks.state!.profile.onboarding?.questionnaire.immigrationStatus).toBeUndefined();
+  });
+  it("prefills current location from a readable PDF header", async () => {
+    pdfBytes = await createPdfSourceFixture({ contactText: "avery@example.com | Seattle, WA" });
+    expect((await POST(request())).status).toBe(200);
+    expect(mocks.state!.profile.currentLocation).toEqual({ city: "Seattle", region: "WA", country: "United States" });
+  });
+  it.each(["", "Boston", "Remote", "Boston, MA | Seattle, WA", "Preferred location: Boston, MA", "Tbilisi, Georgia", "Seattle, Georgia", "Seattle, NY", "State University, Boston, MA", "\nWork History\nBoston, MA"]) (
+    "does not invent a residence from missing, ambiguous, or non-residential locations: %s", async (location) => {
+      const bytes = await createDocxSourceFixture({ identityText: `Riley Example | riley@example.com | ${location}`, longText: "Worked in Boston, MA and studied in Seattle, WA." });
+      expect((await POST(docxRequest(bytes))).status).toBe(200);
+      expect(mocks.state!.profile.currentLocation).toBeUndefined();
+    });
+  it("preserves saved and partially entered residence details across replacement and reuse", async () => {
+    const bytes = await createDocxSourceFixture({ identityText: "Riley Example | riley@example.com | Boston, MA" });
+    for (const currentLocation of [{ city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }, { city: "Paris", region: "", country: "" }]) {
+      mocks.state!.profile.currentLocation = currentLocation;
+      expect((await POST(docxRequest(bytes))).status).toBe(200);
+      expect(mocks.state!.profile.currentLocation).toEqual(currentLocation);
+      mocks.download.mockResolvedValue({ data: new Blob([Uint8Array.from(bytes)]), error: null });
+      expect((await POST(reuseRequest())).status).toBe(200);
+      expect(mocks.state!.profile.currentLocation).toEqual(currentLocation);
+    }
+  });
+  it("fills blank location fields when reusing a saved resume", async () => {
+    const bytes = await createDocxSourceFixture({ identityText: "Riley Example | riley@example.com | Boston, MA" });
+    expect((await POST(docxRequest(bytes))).status).toBe(200);
+    mocks.state!.profile.currentLocation = { city: "", region: "", country: "" };
+    mocks.download.mockResolvedValue({ data: new Blob([Uint8Array.from(bytes)]), error: null });
+    expect((await POST(reuseRequest())).status).toBe(200);
+    expect(mocks.state!.profile.currentLocation).toEqual({ city: "Boston", region: "MA", country: "United States" });
+  });
   it("lets retry replace an interrupted token and prevents an older import overwriting the latest saved resume", async () => {
     mocks.state!.profile.resumeImport = { token: "orphaned-attempt", startedAt: "2026-01-01T00:00:00.000Z" };
     let finishOld!: () => void;
