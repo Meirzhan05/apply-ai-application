@@ -16,7 +16,7 @@ type Field = z.infer<typeof fieldSchema>;
 // Lever does not publish a complete application schema. An employer must attest
 // the complete form for this exact posting, including the absence of custom questions.
 const leverFormSchema = z.object({ revision: z.string().min(1), customQuestionsAbsent: z.literal(true),
-  fields: z.array(fieldSchema).min(2).max(40) }).strict();
+  fields: z.array(fieldSchema).min(2) }).strict();
 const integrationSchema = z.object({ provider: z.enum(["greenhouse", "lever", "ashby"]),
   board: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/), apiKey: z.string().min(1),
   region: z.enum(["global", "eu"]).optional(),
@@ -77,7 +77,7 @@ async function readJson(url: string, init?: RequestInit): Promise<unknown> {
 
 const sensitiveControl = /consent|privacy|terms|demographic|gender|ethnic|disab|veteran|race\b/i;
 function assertFields(fields: Field[]): void {
-  if (!fields.length || fields.length > 40 || new Set(fields.map((field) => field.name)).size !== fields.length ||
+  if (!fields.length || new Set(fields.map((field) => field.name)).size !== fields.length ||
     fields.some((field) => sensitiveControl.test(field.label) || (field.kind === "select" &&
       (!field.options?.length || new Set(field.options.map((option) => option.label)).size !== field.options.length ||
         new Set(field.options.map((option) => option.value)).size !== field.options.length))))

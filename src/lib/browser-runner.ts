@@ -907,20 +907,6 @@ export async function prepareBrowser(
       if (connectUrl) await disconnectBrowser(application, browser, sessionId);
       return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true, needsCoverLetter: false };
     }
-    const questionCount = new Set(fields.map((field) => ["radio", "checkbox"].includes(field.kind) ? `${field.kind}:${field.identifier}` : `field:${field.index}`)).size;
-    if (questionCount > 40 || fields.length > 200) {
-      const form = await snapshot(page, application);
-      form.readyToSubmit = false;
-      form.blockers = [...new Set([
-        ...form.blockers ?? [],
-        "This form has more than 40 fields or exceeds the control limit. Complete it through browser takeover, then refresh the review.",
-      ])];
-      // Disconnect from a remote session without releasing it. The applicant
-      // needs the same open page for takeover and a fresh final review.
-      if (connectUrl) await disconnectBrowser(application, browser, sessionId);
-      return { form, sessionId, connectUrl, liveUrl, provider, expiresAt, captchaSolving, needsAction: true,
-        needsCoverLetter: fields.some((field) => /cover\s*letter/i.test(field.label) && field.required && !application.packet?.coverLetter) };
-    }
     if (application.autonomousAuthorization && !application.packet.coverLetter && fields.some((field) => field.kind === "file" && field.required && /cover\s*letter/i.test(field.label)) && profile.automationSettings?.coverLetterMode !== "disabled") {
       if (!onRequiredCoverLetter) throw new Error("An authorized required cover-letter continuation is unavailable.");
       await action("Preparing the required cover letter under your saved settings");
@@ -928,13 +914,12 @@ export async function prepareBrowser(
       coverLetter = await reviewedPacketFile(profile, application.packet, "cover-letter");
       await action("Verifying the required cover-letter attachment");
     }
-    let essayRounds = 0;
     const ensureEssays = async () => {
       if (!application.autonomousAuthorization) return;
       const observed = await snapshot(page, application);
       const questions = automaticEssayQuestions(application, observed);
       if (!questions.some((question) => !hasBoundAutonomousEssayControl(application, observed.fields.find((field) => field.identifier === question.identifier)!, observed.fields))) return;
-      if (!onAutomaticEssays || ++essayRounds > 5) throw new Error("This form requires an unsupported automatic essay continuation.");
+      if (!onAutomaticEssays) throw new Error("This form requires an unsupported automatic essay continuation.");
       await action("Preparing truthful answers to the observed essay controls");
       application.packet = await onAutomaticEssays({ ...observed, readyToSubmit: false });
       await action("Verifying the authorized essay answers");
@@ -1102,7 +1087,7 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
     !application.form || !application.packet || !hasFillApproval(application, profile.id, job.applyUrl) ||
     application.submissionStartedAt || application.submissionAttemptedAt || application.submittedAt ||
     application.submissionReceipt || (application.manualSubmissionReport && !application.manualSubmissionReport.resolution) ||
-    !approvals.length || approvals.length > 20 || approvals.some((approval) => approval.userId !== profile.id ||
+    !approvals.length || approvals.some((approval) => approval.userId !== profile.id ||
       approval.applicationId !== application.id || approval.targetUrl !== application.form!.url ||
       approval.sessionId !== application.browserSessionId || approval.packetHash !== application.packetHash ||
       approval.formHash !== application.form!.hash ||

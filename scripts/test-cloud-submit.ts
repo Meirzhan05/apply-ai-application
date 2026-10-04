@@ -37,7 +37,7 @@ async function main() {
       const app = selectApplication(state, job.id, userId);
       const issued = issueControlledTestGrant(userId, app.id);
       token = issued.token;
-      job.url = job.applyUrl = `${origin}/api/internal/controlled-form?token=${token}`;
+      job.url = job.applyUrl = `${origin}/api/internal/controlled-form?token=${token}${process.env.TEST_CLOUD_LARGE_FORM === "true" ? "&scenario=large" : ""}`;
       app.jobSnapshot = { ...job };
       app.controlledTest = { expiresAt: issued.grant.expiresAt, submissions: 0, verification: process.env.TEST_CLOUD_VERIFICATION === "true" };
       const fact = profile.facts.find((item) => item.verified)!;
@@ -65,6 +65,17 @@ async function main() {
     reviewedSessionId = app!.browserSessionId!;
     assert.ok(reviewedSessionId);
     if (app!.browserProvider === "browser-use") assert.equal(app!.browserCaptchaSolving, process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false", "The worker must persist the newly allocated browser's CAPTCHA mode");
+    if (process.env.TEST_CLOUD_LARGE_FORM === "true") {
+      assert.equal(app!.form!.fields.length, 205);
+      assert.equal(app!.form!.fields.find(field => field.identifier === "email")?.value, data.user!.email);
+      assert.ok(!app!.form!.blockers?.some(blocker => /control limit|more than 40/.test(blocker)));
+    }
+    if (process.env.TEST_CLOUD_FILL_ONLY === "true") {
+      assert.equal(app!.controlledTest?.submissions, 0);
+      assert.equal(app!.submissionAttemptedAt, undefined);
+      console.log(`PASS production fill worker: ${app!.form!.fields.length} controls, saved contact details and exact reviewed PDF filled, final review ready, zero submissions`);
+      return;
+    }
     await mutateState(userId, (state) => {
       const target = state.applications.find((item) => item.id === applicationId)!;
       approveSubmit(target, userId, target.form!.hash);

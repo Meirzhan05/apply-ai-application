@@ -29,7 +29,7 @@ type FailureOptions = {
   allocationUncertain?: boolean;
 };
 
-const hardBlocker = /no application fields|login|password|captcha|unfamiliar required|final submit action is unavailable|submit destination requires a manual handoff|different site|more than 40 fields|enabled for automation/i;
+const hardBlocker = /no application fields|login|password|captcha|unfamiliar required|final submit action is unavailable|submit destination requires a manual handoff|different site|enabled for automation/i;
 
 function findJob(state: AppState, jobId: string): Job {
   const job = state.jobs.find((item) => item.id === jobId);

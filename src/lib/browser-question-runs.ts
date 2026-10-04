@@ -27,7 +27,6 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
   assertQuestionSession(app, state.profile, formHash);
   const questions = browserQuestions(app.form).filter((question) => question.owner === "ai");
   if (!questions.length) return;
-  if (questions.length > 5) throw new Error("This form needs more than five essays. Review its questions before continuing.");
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   if (!job?.active) throw new Error("The job is closed or unavailable.");
   await mutateState(userId, (current) => {
@@ -71,7 +70,7 @@ export async function answerBrowserQuestions(userId: string, applicationId: stri
   const approvals = await mutateState(userId, (state) => {
     const app = find(state, userId, applicationId);
     const records = approveBrowserAnswers(app, state.profile, formHash, inputs);
-    app.browserAnswerApprovals = [...(app.browserAnswerApprovals ?? []), ...records].slice(-200);
+    app.browserAnswerApprovals = [...(app.browserAnswerApprovals ?? []), ...records];
     app.approvals = app.approvals.filter((approval) => approval.kind !== "submit");
     app.browserQuestionRun = { token, kind: "answers", startedAt: new Date().toISOString() };
     app.error = undefined;

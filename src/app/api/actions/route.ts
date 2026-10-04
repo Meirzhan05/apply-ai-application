@@ -345,7 +345,7 @@ async function perform(
       question: z.string().max(500), answer: z.string().max(4000),
       factIds: z.array(z.string()), requiresUserInput: z.boolean(),
       userProvided: z.boolean().optional(),
-    })).max(30).parse(payload.answers);
+    })).parse(payload.answers);
     const expected = materialReviewHash(state, app);
     const packet = await withPacketFiles(state.profile, {
       ...app.packet, answers: applyHumanAnswerEdits(app.packet.answers, answers),
@@ -462,7 +462,7 @@ async function perform(
     return;
   }
   if (action === "answerBrowserQuestions") {
-    const answers = z.array(z.object({ questionId: z.string().max(5000), value: z.string().max(4000).optional(), confirmEssay: z.boolean().optional(), answerHash: z.string().max(100).optional() }).strict()).min(1).max(20).parse(payload.answers);
+    const answers = z.array(z.object({ questionId: z.string().max(5000), value: z.string().max(4000).optional(), confirmEssay: z.boolean().optional(), answerHash: z.string().max(100).optional() }).strict()).min(1).parse(payload.answers);
     await answerBrowserQuestions(userId, text(payload.applicationId, 100), text(payload.formHash, 100), answers, ownerContext);
     return;
   }

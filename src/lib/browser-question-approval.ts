@@ -21,7 +21,7 @@ export function assertQuestionSession(app: Application, profile: Profile, formHa
 export function approveBrowserAnswers(app: Application, profile: Profile, formHash: string, inputs: BrowserAnswerInput[]): BrowserAnswerApproval[] {
   assertQuestionSession(app, profile, formHash);
   const questions = browserQuestions(app.form);
-  if (!questions.length || questions.length > 20 || inputs.length !== questions.length || new Set(inputs.map((input) => input.questionId)).size !== inputs.length)
+  if (!questions.length || inputs.length !== questions.length || new Set(inputs.map((input) => input.questionId)).size !== inputs.length)
     throw new Error("Answer each current question once before continuing.");
   return questions.map((question) => {
     const input = inputs.find((item) => item.questionId === question.id);

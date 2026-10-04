@@ -17,7 +17,6 @@ export function assertAutonomousEssay(profile: Profile, job: Job, answer: Screen
 }
 
 export async function draftAutonomousEssays(profile: Profile, job: Job, questions: ScreeningAnswer[], beforeModelCall: () => Promise<void>, deadline = Date.now() + 200_000): Promise<ScreeningAnswer[]> {
-  if (questions.length > 5) throw new Error("This form requires more than five essays.");
   const answers: ScreeningAnswer[] = [];
   for (const question of questions) {
     if (answerOwner(question.question) !== "ai") throw new Error("A required factual or sensitive question needs a confirmed applicant answer.");
@@ -62,7 +61,6 @@ export async function prepareAutonomousFormEssays(profile: Profile, job: Job, ap
   const questions = automaticEssayQuestions(application, form);
   if (!questions.length || questions.some((question) => !["text", "textarea"].includes(question.kind) || /cover\s*letter/i.test(question.label))) throw new Error("No supported automatic essay is awaiting an answer.");
   const pending = questions.map((question) => application.packet!.answers.find((answer) => answer.question === question.label && (!answer.autonomousEssayAuthorization?.control || answer.autonomousEssayAuthorization.control.identifier === question.identifier)) ?? { question: question.label, answer: "", factIds: [], requiresUserInput: true, author: "ai" as const });
-  if (application.packet!.answers.filter((answer) => !questions.some((question) => question.label === answer.question)).length + questions.length > 5) throw new Error("This form requires more than five essays.");
   const drafts = await draftAutonomousEssays(profile, job, pending, beforeModelCall);
   const bound = drafts.map((answer, index) => ({ ...answer, autonomousEssayAuthorization: { ...answer.autonomousEssayAuthorization!, control: { identifier: questions[index].identifier, kind: questions[index].kind, label: questions[index].label, formStructureHash: essayFormStructureHash(form.fields), observedFormHash: formDigest(form), sessionId: application.browserSessionId! } } }));
   const replaced = new Set(bound.map((answer) => answer.question));
