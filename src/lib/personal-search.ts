@@ -17,7 +17,7 @@ const refreshMs = 4 * 60 * 60 * 1000;
 const activeMs = 15 * 60 * 1000;
 const currentRequest = (state: AppState, requestId: string) => state.personalSearch?.requestId === requestId && personalSearchReadiness(state.profile).ready && state.personalSearch.profileKey === personalSearchKey(state.profile);
 
-export async function queuePersonalSearch(userId: string, scheduled = false): Promise<boolean> {
+export async function queuePersonalSearch(userId: string, scheduled = false, options: { force?: boolean } = {}): Promise<boolean> {
   if (isDemo()) return false;
   const state = await loadState(userId);
   if (!personalSearchReadiness(state.profile).ready) return false;
@@ -30,7 +30,7 @@ export async function queuePersonalSearch(userId: string, scheduled = false): Pr
     if (previous?.profileKey === profileKey) {
       const age = Date.now() - Date.parse(previous.requestedAt);
       if ((previous.status === "queued" || previous.status === "searching") && age < activeMs) return false;
-      if (previous.status !== "queued" && previous.status !== "searching" && (!scheduled || age < refreshMs)) return false;
+      if (!options.force && previous.status !== "queued" && previous.status !== "searching" && (!scheduled || age < refreshMs)) return false;
     }
     current.personalSearch = { status: "queued", requestId, requestedAt, profileKey,
       jobs: previous?.jobs ?? [], resultsKey: previous?.resultsKey };

@@ -146,13 +146,29 @@ it("rechecks personal search readiness when the student confirms experience or u
 
 afterEach(() => vi.unstubAllEnvs());
 it("reassesses privately retained roles when profile edits reuse the existing personal search", async () => {
-  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture");
+  vi.stubEnv("TYPESAFE_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture");
   expect((await POST(post("profile", { headline: "Updated career focus" }))).status).toBe(200);
   expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a");
   expect(mocks.match).toHaveBeenCalledExactlyOnceWith("owner-a");
 });
 it("does not queue a duplicate assessment while a new personal search is being dispatched", async () => {
-  vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture"); mocks.search.mockResolvedValue(true);
+  vi.stubEnv("TYPESAFE_API_KEY", "fixture"); vi.stubEnv("TRIGGER_SECRET_KEY", "fixture"); mocks.search.mockResolvedValue(true);
   expect((await POST(post("profile", { preferredTitles: ["Data intern"] }))).status).toBe(200);
   expect(mocks.match).not.toHaveBeenCalled();
+});
+
+
+it("dispatches a forced manual search only for the authenticated owner", async () => {
+  mocks.search.mockResolvedValue(true);
+  expect((await POST(post("searchJobs", {}))).status).toBe(200);
+  expect(mocks.search).toHaveBeenCalledExactlyOnceWith("owner-a", false, { force: true });
+  expect(mocks.match).not.toHaveBeenCalled();
+});
+it("rejects manual search before confirmed experience or reports dispatch failure", async () => {
+  mocks.state!.profile.facts = [];
+  expect((await POST(post("searchJobs", {}))).status).toBe(400);
+  expect(mocks.search).not.toHaveBeenCalled();
+  mocks.state!.profile.facts = initialDemoState().profile.facts;
+  mocks.search.mockResolvedValue(false);
+  expect((await POST(post("searchJobs", {}))).status).toBe(400);
 });

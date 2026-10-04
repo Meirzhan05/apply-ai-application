@@ -34,7 +34,7 @@ Updated September 30, 2026. The app is deployed at <https://apply-ai-chi.vercel.
 - [x] Owner-only production access, auth callback URLs, cloud schedules, and production build.
 - [x] Test-inbox-only email. Resend accepted a test message; inbox delivery is unconfirmed.
 - [x] First scheduled daily digest: `run_06gf4pjo8bioiac6mqvu0epr01` at September 30 09:00 New York completed with no messages and no errors. A separate actual sender check used a synthetic `[TEST]` role and production credentials: two duplicate requests returned the same provider ID, so one message was accepted. It did not access or change the owner's workspace. The send-only Resend key cannot retrieve delivery events; inbox receipt remains unconfirmed.
-- [x] Jev shadow evaluation, privacy redaction, labeling screen, and owner-scoped export. Identifiers are redacted from every applicant string sent to Jev, including skills and graduation year, and from exported preference text. Jev cannot control production ranking.
+- [x] Jev shadow evaluation, privacy redaction, labeling screen, and owner-scoped export. Identifiers are redacted from every applicant string sent to Jev, including skills and graduation year, and from exported preference text. JEV became the production fit evaluator at the owner’s request on October 4; real labeled evaluation remains a separate release gate.
 - [x] Desktop/mobile interface inspected; resume and multipage cover-letter PDFs rendered and inspected.
 
 ## Reproducible checks
@@ -69,7 +69,7 @@ Scripts use synthetic applicants. Cloud submission is confined to a signed, temp
 ## Remaining delivery and beta gates
 
 - [ ] Complete one real application using the owner's resume, confirmed facts, employer URL, packet approval, and final form approval in the app. The owner explicitly confirmed the resume; Sierra's packet is now in draft review after a production-worker draft and operator revision to actual form questions. All six human-only responses are now saved. Two AI essay confirmations and both application approvals remain pending. No employer fields were filled and no application was submitted.
-- [ ] Label real job/profile pairs and compare Jev ranking quality, latency, and actual cost before enabling it.
+- [ ] Label real job/profile pairs and compare Jev ranking quality, latency, and actual cost to validate the production trial.
 - [ ] Validate broader employer forms and an applicant completing login/CAPTCHA takeover. Rejected, delayed, stalled, and network-interrupted uploads and operator editing through the remote viewer are tested on controlled forms; real applicant authentication and employer-side uploads are not.
 - [ ] Reconcile reservations with provider invoices and calibrate estimates before admitting 50–100 users. Ceiling, idempotency, and queue resumption are tested; actual billed-cost control is not proven.
 - [ ] Confirm sender-domain ownership and inbox delivery before broader sending. The owner currently requests test-inbox-only email.

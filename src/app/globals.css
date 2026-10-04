@@ -80,7 +80,9 @@ input, textarea { caret-color: var(--forest); }
 .matches-guidance summary, .search-status summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
 .matches-guidance p { max-width: 70ch; margin: 4px 0; }
 .matches-guidance .text-button, .search-status .text-button { min-height: 44px; }
-.profile-context { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 4px 12px; background: var(--tint); color: var(--forest); font-size: 13px; line-height: 1.4; }
+.profile-context { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 4px 12px; background: var(--tint); color: var(--forest); font-size: 13px; line-height: 1.4; }
+.personal-search-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.personal-search-actions .outline-action { min-height: 44px; }
 .profile-context .text-button { min-height: 44px; flex: none; }
 .setup-context { display: block; padding: 0 12px; }
 .setup-context summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }

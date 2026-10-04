@@ -143,7 +143,7 @@ export function assessMatchLocally(
   };
 }
 
-export async function assessMatch(
+export async function assessMatchWithOpenAI(
   profile: Profile,
   job: Job,
   options?: { beforeModelCall?: () => void | Promise<void> },
@@ -206,5 +206,33 @@ export async function assessMatch(
   } catch (error) {
     if (!freshnessGuardPassed) throw error;
     return base;
+  }
+}
+
+/** Production fit decisions use Jev; the OpenAI evaluator remains an evaluation baseline. */
+export async function assessMatch(profile: Profile, job: Job, options?: { beforeModelCall?: () => void | Promise<void> }): Promise<MatchAssessment> {
+  const base = assessMatchLocally(profile, job);
+  if (base.category === "excluded") return base;
+  const unavailable = (message: string): MatchAssessment => ({ ...base, category: "uncertain", evidence: [], uncertainty: [...new Set([...base.uncertainty, message])] });
+  if (!process.env.TYPESAFE_API_KEY) return unavailable("JEV fit assessment is not configured.");
+  let freshnessGuardPassed = !options?.beforeModelCall;
+  try {
+    const { jevTriage } = await import("@/lib/jev");
+    const result = await jevTriage(profile, job, { includeEvidence: true, beforeModelCall: async () => {
+      await options?.beforeModelCall?.();
+      freshnessGuardPassed = true;
+    } });
+    const facts = new Map(profile.facts.filter(isUsableFact).map(fact => [fact.id, fact.text]));
+    const source = [job.title, job.description, ...job.requirements].join(" ");
+    const evidence = result.evidence.filter(item => source.includes(item.jobQuote) && item.factIds.length && item.factIds.every(id => facts.has(id)))
+      .map(item => `Posting: “${item.jobQuote}” · Confirmed: ${item.factIds.map(id => facts.get(id)).join(" ")}`);
+    const hardRules = requiredRuleUncertainty(profile, job);
+    const category = evidence.length && !hardRules.length ? result.category : "uncertain";
+    return { version: 1, category, score: result.score, evidence, gaps: result.gaps,
+      uncertainty: [...new Set([...hardRules, ...result.uncertainty, ...(!evidence.length ? ["No confirmed evidence supports this match yet."] : [])])],
+      evaluatedAt: new Date().toISOString(), model: result.model, confidence: result.confidence };
+  } catch (error) {
+    if (!freshnessGuardPassed) throw error;
+    return unavailable("JEV fit assessment could not finish. This match needs review.");
   }
 }

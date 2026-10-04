@@ -865,7 +865,7 @@ export default function Dashboard() {
     } finally { batchActive.current = false; pendingBatchFocus.current = !ownerChanged; setBatchProgress(null); setBusy(""); }
   };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
-  const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
+  const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} busy={Boolean(busy)} onSearch={() => void act("searchJobs")} onConfigure={() => {
     pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => isUsableFact(fact)) ? "confirmed-resume-facts" : "search-preferences";
     navigateSection("profile");
   }} onImport={() => { setError(""); setImportOpen(true); }} />;
@@ -1182,6 +1182,7 @@ export default function Dashboard() {
                           {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
                           <details className="fit-evidence">
                           <summary aria-label={`Review fit evidence for ${context}${checkLabel}`}>Review fit evidence{checkLabel}</summary>
+                          {match?.model.startsWith("jev") && <p className="muted">JEV assessment{typeof match.confidence === "number" ? ` · Confidence ${Math.round(match.confidence * 100)}%` : ""}</p>}
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
                             <strong>Posting terms found in available profile facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>

@@ -290,6 +290,7 @@ export interface Job {
 
 export interface MatchAssessment {
   version: 1;
+  confidence?: number;
   category: MatchCategory;
   score: number;
   evidence: string[];

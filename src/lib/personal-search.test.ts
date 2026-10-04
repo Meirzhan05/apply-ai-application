@@ -87,3 +87,24 @@ describe("personal student discovery", () => {
     expect(input).toContain("Python project");
   });
 });
+
+it("manual search bypasses the refresh interval but still prevents duplicate active runs", async () => {
+  await queuePersonalSearch("student-a");
+  const before = mocks.states.get("student-a")!.personalSearch!.requestId;
+  await runPersonalSearch("student-a", before);
+  expect(await queuePersonalSearch("student-a")).toBe(false);
+  expect(await queuePersonalSearch("student-a", false, { force: true })).toBe(true);
+  const after = mocks.states.get("student-a")!.personalSearch!.requestId;
+  expect(after).not.toBe(before);
+  expect(await queuePersonalSearch("student-a", false, { force: true })).toBe(false);
+  expect(mocks.trigger).toHaveBeenCalledTimes(2);
+});
+it("manual search still respects profile readiness and the shared service budget", async () => {
+  mocks.states.get("student-a")!.profile.facts = [];
+  expect(await queuePersonalSearch("student-a", false, { force: true })).toBe(false);
+  await queuePersonalSearch("student-b", false, { force: true });
+  mocks.reserve.mockResolvedValue(false);
+  await runPersonalSearch("student-b", mocks.states.get("student-b")!.personalSearch!.requestId);
+  expect(mocks.states.get("student-b")!.personalSearch!.status).toBe("budget_limited");
+  expect(mocks.provider).not.toHaveBeenCalled();
+});

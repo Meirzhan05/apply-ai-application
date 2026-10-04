@@ -1,10 +1,11 @@
 import type { PersonalSearchState, Profile } from "@/lib/types";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
 
-export function PersonalSearchStatus({ profile, search, onConfigure, onImport }: {
-  profile: Profile; search?: PersonalSearchState; onConfigure: () => void; onImport: () => void;
+export function PersonalSearchStatus({ profile, search, onConfigure, onImport, onSearch, busy = false }: {
+  profile: Profile; search?: PersonalSearchState; onConfigure: () => void; onImport: () => void; onSearch: () => void; busy?: boolean;
 }) {
   const readiness = personalSearchReadiness(profile);
+  const searching = search?.status === "queued" || search?.status === "searching";
   const message = !readiness.ready
     ? `Add ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(readiness.missing)} to start your personal search automatically.`
     : search?.status === "queued" ? "Your personal search is queued. Your agent will use your resume experience and saved preferences."
@@ -16,6 +17,7 @@ export function PersonalSearchStatus({ profile, search, onConfigure, onImport }:
   return <div className="profile-context personal-search-context" role="status" aria-label="Personal search status">
     <span>{message}</span>
     <div className="personal-search-actions">
+      <button className="outline-action" disabled={!readiness.ready || busy || searching} onClick={onSearch}>{searching ? "Searching…" : "Search jobs (test)"}</button>
       <button className={readiness.ready ? "text-button" : "dark-button"} onClick={onConfigure}>{readiness.ready ? "Edit search preferences" : "Set up my profile"}</button>
       {readiness.ready && search?.status === "failed" && <button className="text-button" onClick={onImport}>Import a posting</button>}
       {readiness.ready && search?.status === "budget_limited" && <a className="text-button" href="/usage">Review AI usage</a>}

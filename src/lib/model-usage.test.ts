@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 const { parse } = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock("openai", () => ({ default: class { responses = { parse }; } }));
-import { assessMatch } from "@/lib/matching";
+import { assessMatchWithOpenAI as assessMatch } from "@/lib/matching";
 import { initialDemoState } from "@/lib/demo-data";
 import { draftAiEssay } from "@/lib/essay-drafting";
 import { readModelUsage, withModelUsageContext, meterModelResponse, recordModelUsage } from "@/lib/model-usage";

@@ -4,6 +4,7 @@ import { tasks } from "@trigger.dev/sdk";
 import type {
   submitApplicationForm,
 } from "../../../../trigger/browser";
+import { personalSearchReadiness } from "@/lib/personal-search-policy";
 import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import { startAutonomousApplication } from "@/lib/autonomous-application";
@@ -115,6 +116,18 @@ async function perform(
   action: string,
   payload: Record<string, unknown>,
 ) {
+  if (action === "searchJobs") {
+    if (isDemo()) throw new Error("Manual live search is unavailable in the controlled demo.");
+    const state = await loadState(userId);
+    const readiness = personalSearchReadiness(state.profile);
+    if (!readiness.ready) throw new Error(`Add ${readiness.missing.join(", ")} before searching.`);
+    const queued = await queuePersonalSearch(userId, false, { force: true });
+    if (!queued) {
+      const status = (await loadState(userId)).personalSearch?.status;
+      if (status !== "queued" && status !== "searching") throw new Error("Your search could not start. Try again later.");
+    }
+    return;
+  }
   const ownerContext = { actor: { kind: "owner" as const, userId }, action };
   if (action === "enrollPilot") {
     return mutateState(userId, (state) => {
@@ -658,14 +671,14 @@ export async function POST(request: Request) {
       const searching = await queuePersonalSearch(userId);
       // Unchanged search inputs reuse the private discovery results, but profile
       // edits still invalidate fit assessments (for example new fact IDs).
-      if (!searching && process.env.OPENAI_API_KEY && process.env.TRIGGER_SECRET_KEY &&
+      if (!searching && process.env.TYPESAFE_API_KEY && process.env.TRIGGER_SECRET_KEY &&
         (await loadState(userId)).jobs.some((job) => job.active)) {
         await queueMatchAssessment(userId).catch(() => undefined);
       }
     }
     if (
       !isDemo() &&
-      process.env.OPENAI_API_KEY &&
+      process.env.TYPESAFE_API_KEY &&
       process.env.TRIGGER_SECRET_KEY &&
       ["import"].includes(action)
     ) {

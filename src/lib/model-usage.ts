@@ -14,9 +14,9 @@ export interface ModelUsageContext {
   runId: string;
 }
 export interface ModelRate {
-  version: "openai-standard-2026-10-01";
+  version: "openai-standard-2026-10-01" | "typesafe-standard-2026-10-04";
   source: string;
-  checkedAt: "2026-10-01";
+  checkedAt: "2026-10-01" | "2026-10-04";
   unit: "USD per million tokens";
   context: "short" | "long";
   input: number;
@@ -27,7 +27,7 @@ export interface ModelRate {
 export interface ModelUsageRecord extends ModelUsageContext {
   version: 1;
   id: string;
-  provider: "openai";
+  provider: "openai" | "typesafe";
   model: string;
   operation: string;
   startedAt: string;
@@ -171,6 +171,11 @@ interface ProviderResponse {
 }
 const count = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 function price(record: ModelUsageRecord): void {
+  if (record.provider === "typesafe") {
+    record.rate = { version: "typesafe-standard-2026-10-04", source: "https://typesafe.ai/", checkedAt: "2026-10-04", unit: "USD per million tokens", context: "short", input: 0.042, cachedInput: 0.042, cacheWrite: 0, output: 0 };
+    if (record.tokens.input !== null) record.estimatedUsd = record.tokens.input * record.rate.input / 1_000_000;
+    return;
+  }
   const models: Record<string, [number, number, number, number]> = { "gpt-6-sol": [2, 0.2, 2.5, 10], "gpt-6-luna": [0.1, 0.01, 0.125, 0.5], "gpt-6-astra": [10, 1, 12.5, 50] };
   const values = models[record.model];
   const { input, cachedInput, cacheWrite, output } = record.tokens;
@@ -183,10 +188,10 @@ function price(record: ModelUsageRecord): void {
   record.estimatedUsd = ((input - cachedInput - cacheWrite) * record.rate.input + cachedInput * record.rate.cachedInput + cacheWrite * record.rate.cacheWrite + output * record.rate.output) / 1_000_000 + (record.webSearchUsd ?? 0);
 }
 
-export async function meterModelResponse<T extends ProviderResponse>(fallback: Omit<ModelUsageContext, "runId"> & { runId?: string }, operation: string, model: string, call: () => Promise<T>): Promise<T> {
+export async function meterModelResponse<T extends ProviderResponse>(fallback: Omit<ModelUsageContext, "runId"> & { runId?: string }, operation: string, model: string, call: () => Promise<T>, options: { provider?: ModelUsageRecord["provider"] } = {}): Promise<T> {
   const active = context.getStore();
   if (active && active.userId !== fallback.userId) throw new Error("Model usage owner does not match the active run.");
-  const record: ModelUsageRecord = { ...fallback, ...active, runId: active?.runId ?? fallback.runId ?? randomUUID(), id: randomUUID(), version: 1, provider: "openai", model, operation,
+  const record: ModelUsageRecord = { ...fallback, ...active, runId: active?.runId ?? fallback.runId ?? randomUUID(), id: randomUUID(), version: 1, provider: options.provider ?? "openai", model, operation,
     startedAt: new Date().toISOString(), completedAt: null, status: "started", responseId: null, requestId: null, providerStatus: null, serviceTier: null,
     tokens: { input: null, cachedInput: null, cacheWrite: null, output: null, reasoningOutput: null }, rate: null, estimatedUsd: null, reconciledUsd: null, failure: null };
   if (record.applicationId) record.backgroundJobId = undefined;

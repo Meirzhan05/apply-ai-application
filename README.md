@@ -25,7 +25,7 @@ The first visual direction is [dashboard-mockup.png](docs/dashboard-mockup.png).
 
 - Next.js dashboard with matches, evidence, gaps, feedback, imported links, application status, profile intake, automatic AI resume fact extraction with source grounding and optional corrections.
 - Automatic per-student AI web search after resume facts are available and search preferences are saved. Search uses the student’s preferences and redacted confirmed experience, then verifies selected Greenhouse, Lever, and Ashby postings through provider APIs. Results live in owner-private state; fresh accounts have no matches. Trigger.dev refreshes each eligible student every four hours. `JOB_BOARDS` is used only by the demo/legacy catalog tooling.
-- Deterministic hard-rule checks and immediate local match scoring. Queued OpenAI Responses assessments are cached per profile version and use verified facts. Jev is a separate shadow evaluator and cannot control production ranking.
+- Deterministic hard-rule checks and immediate local match scoring. Queued JEV assessments check career level, skills, and requirement support from confirmed facts. Results are cached per profile version and show the provider and decision confidence. OpenAI matching remains available as an offline comparison baseline.
 - Conservative required-location checks recognize supported aliases and leave ambiguous geography or missing required remote status uncertain. Live hard rules override stale cached matches. Match runs serialize per owner, and changed postings receive separate cost reservations.
 - Selection with unlimited daily applications for now, packet drafting and editing, exact packet approval, browser preparation and takeover, exact form approval, one submit attempt, confirmation or uncertain outcome, cancellation, and an audit trail of transitions.
 - Versioned approval records and application packets with separate schema/revision numbers. New packet file manifests bind approved filenames, sizes, SHA-256 hashes and verified source facts; preview and upload verify the same PDF bytes.
@@ -37,7 +37,7 @@ The first visual direction is [dashboard-mockup.png](docs/dashboard-mockup.png).
 
 The owner-only demo is deployed at <https://apply-ai-chi.vercel.app>. Services and callback URLs are configured. Email remains restricted to the test inbox. See [integration status](docs/INTEGRATIONS.md), [acceptance checklist](docs/ACCEPTANCE.md), and the [requirement audit](docs/PLAN-AUDIT.md). Credentials use takeover; the [later vault design](docs/CREDENTIAL-VAULT.md) is inactive.
 
-For a new deployment, configure dedicated Supabase, Browser Use Cloud, Trigger.dev, OpenAI, and Resend projects. Do not reuse unrelated projects. Apply [the SQL migration](supabase/migrations/20260929202218_initial.sql) to Supabase. Set the variables in [.env.example](.env.example) on Vercel and set `DEMO_MODE=false`. Use a strong random `INTERNAL_TASK_SECRET` in both Vercel and Trigger.dev; set `APP_ORIGIN` and `TRIGGER_PROJECT_REF` in Trigger.dev. Configure Supabase Auth redirect URLs to include `/auth/callback`. Any authenticated account can access its own workspace; email invitations are not required. Deploy all tasks in [trigger](trigger), including polling, digest, queue dispatch, and recovery schedules.
+For a new deployment, configure dedicated Supabase, Browser Use Cloud, Trigger.dev, OpenAI, TypeSafe, and Resend projects. Do not reuse unrelated projects. Apply [the SQL migration](supabase/migrations/20260929202218_initial.sql) to Supabase. Set the variables in [.env.example](.env.example) on Vercel and set `DEMO_MODE=false`. Use a strong random `INTERNAL_TASK_SECRET` in both Vercel and Trigger.dev; set `APP_ORIGIN` and `TRIGGER_PROJECT_REF` in Trigger.dev. Configure Supabase Auth redirect URLs to include `/auth/callback`. Any authenticated account can access its own workspace; email invitations are not required. Deploy all tasks in [trigger](trigger), including polling, digest, queue dispatch, and recovery schedules.
 
 Set `BROWSER_PROVIDER=browser-use` and the server-only `BROWSER_USE_API_KEY` on both Vercel and Trigger.dev. Sessions remain available across review for up to 30 minutes. Existing Browserbase sessions retain their original provider; setting `BROWSER_PROVIDER=browserbase` explicitly enables that adapter and requires its `keepAlive` capability. In Applications, the Agent browser panel shows the real remote page and timestamped actions. Watch mode prevents embedded input while the agent fills. When paused, choose Take control, then Refresh form state to review your edits. Open browser window provides a larger live view. The browser uses only the approved packet, pauses at unfamiliar required fields and consent controls, and blocks LinkedIn and Indeed automation. Users can import those links for tracking and handoff. Public ATS posting APIs verify listings. Applications are filled and submitted through the employer’s public browser form. No employer submission API keys are required.
 
@@ -45,7 +45,17 @@ The global $500 monthly projected ceiling covers drafting, matching, and browser
 
 The pilot report keeps all real initiated applications in its denominator, including blocked, uncertain, failed and cancelled attempts. It requires at least 20 real attempts, both internship and new-grad evidence, an 80% unattended confirmed-receipt rate, and explicit suitability and factual-accuracy review for confirmed attempts. Controlled validation remains excluded, and a report that does not meet the gate states its failure reasons instead of implying launch readiness. Configure `USAGE_OPERATOR_USER_IDS` only for the small set of server-authorized reviewers; the client cannot grant operator access.
 
-## Jev shadow evaluation
+## JEV matching and testing
+
+The Matches panel includes **Search jobs (test)**. It requests a fresh personal search without waiting four hours, retains the monthly budget guard, and prevents duplicate active runs. This is the normal search pipeline: existing automatic-application permission still applies to eligible strong results. Pause automation in Settings when testing discovery alone. The controlled demo does not offer live search.
+
+Set server-only `TYPESAFE_API_KEY` in Vercel and Trigger.dev. Apply the JEV model-usage migration before deployment. OpenAI continues to handle web discovery and application drafting. JEV outages, malformed decisions, and missing evidence produce uncertain matches rather than an automatic-application fallback.
+
+```bash
+npm run test:jev                         # Four synthetic cases against the live JEV provider
+npm run test:personal-search:ui          # Desktop/mobile UI; local app on port 3013
+npm run test:personal-search:cloud       # Production API and workers; temporary isolated users
+```
 
 Prepare 10–100 **user-labeled** profile and job pairs in JSON, each with `profile`, `job`, and `label` (`strong`, `possible`, or `uncertain`). Set `TYPESAFE_API_KEY`, then run:
 
@@ -53,7 +63,7 @@ Prepare 10–100 **user-labeled** profile and job pairs in JSON, each with `prof
 npm run eval:jev -- /absolute/path/to/labeled-pairs.json
 ```
 
-Label jobs in Settings and export the owner-scoped dataset from `/api/evaluation/pairs`. The output compares category accuracy and mean latency against the current matcher, and reports Jev token usage. It deliberately leaves `enableJev: false`; compare actual service costs and review errors before enabling it. Names and contact fields are excluded from Jev requests.
+Label jobs in Settings and export the owner-scoped dataset from `/api/evaluation/pairs`. The output compares the production JEV matcher with the preserved OpenAI baseline, reporting category accuracy, mean latency, fallback counts, and JEV token usage. Usage is saved locally; the comparison never starts applications. Names and contact fields are excluded from JEV requests. Real labeled evaluation and invoice reconciliation are still required before claiming ranking quality or actual billed-cost savings.
 
 ## Verification and remaining gates
 
