@@ -42,13 +42,20 @@ function prepared() {
   const job = importedJob();
   state.jobs = [job];
   const app = selectApplication(state, job.id, state.profile.id);
-  app.importedCompatibility = createImportedCompatibilityRecord({ application: app, job, observed: { ...observed(job), postingEvidence: { title: job.title, company: job.company, markers: [job.title, job.company], identityHash: "identity-proof" }, observedContext: { title: job.title, company: job.company, text: `${job.title} at ${job.company}` } }, status: "reachable", checkedAt: "2026-10-01T00:00:00.000Z" });
+  app.importedCompatibility = createImportedCompatibilityRecord({ application: app, job, observed: { ...observed(job), postingEvidence: { title: job.title, company: job.company, markers: [job.title, job.company], identityHash: "identity-proof" }, observedContext: { title: job.title, company: job.company, location: "New York, NY", text: `${job.title} at ${job.company}` } }, status: "reachable", checkedAt: "2026-10-01T00:00:00.000Z" });
   return { state, job, app };
 }
 
 describe("imported employer compatibility", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each(["London, United Kingdom", "Remote", "Boston, MA"])("invalidates previous US posting proof when the saved destination changes: %s", (location) => {
+    const { state, job, app } = prepared();
+    const updated = { ...job, location };
+    state.jobs = [updated];
+    expect(() => authorizeKnownAnswerApplication(app, state.profile, updated)).toThrow(/destination changed|US.*destination|destination.*US/);
   });
 
   it("requires an observed exact form and action proof for sparse arbitrary imports", () => {

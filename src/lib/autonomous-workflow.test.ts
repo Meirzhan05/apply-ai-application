@@ -41,6 +41,33 @@ import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
+
+it.each(["London, United Kingdom", "Remote", "Worldwide"])("rejects application actions for unverified US job destinations: %s", async (location) => {
+  const state = fixture.state!;
+  state.jobs = [{ ...state.jobs[0], location, remote: true }];
+  for (const name of ["select", "startAutonomous"]) {
+    const response = await action(name, { jobId: state.jobs[0].id });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toMatch(/US.*destination|destination.*US/);
+  }
+  expect(state.applications).toEqual([]);
+  expect(fixture.pending).toEqual([]);
+  expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
+it.each(["London, United Kingdom", "Remote"])("blocks a selected application after the destination changes: %s", async (location) => {
+  const state = fixture.state!;
+  const selected = await action("select", { jobId: state.jobs[0].id });
+  expect(selected.status).toBe(200);
+  const app = state.applications[0];
+  state.jobs = [{ ...state.jobs[0], location }];
+  const response = await action("draft", { applicationId: app.id });
+  expect(response.status).toBe(400);
+  expect(await response.text()).toMatch(/US.*destination|destination.*US/);
+  expect(app.status).toBe("selected");
+  expect(app.jobSnapshot?.location).toContain("New York");
+  expect(fixture.pending).toEqual([]);
+});
 function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
   const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const form = new FormData();
@@ -1015,7 +1042,7 @@ it("runs the imported posting check and queues the same application when the pub
     return {
       form: { version: 1 as const, url: job.applyUrl, fields: [{ label: "Email", value: "", identifier: "email", kind: "email", required: true, valid: false }], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: false, blockers: ["Correct or complete the field: Email"], submitControl: { label: "Submit", identifier: "submit", action: `${job.applyUrl}/submit`, method: "post" } },
       contextHash: "route-context",
-      postingContext: { title: job.title, company: job.company, text: `${job.title} at ${job.company}` },
+      postingContext: { title: job.title, company: job.company, location: "New York, NY", text: `${job.title} at ${job.company}` },
       postingEvidence: { postingUrl: job.url, postingIdentityHash: "route-posting-identity", title: job.title, company: job.company, markers: [job.title, job.company], identityHash: "route-identity" },
       sessionId: "route-preflight",
       provider: "browser-use" as const,

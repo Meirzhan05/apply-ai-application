@@ -3,6 +3,9 @@ import { applyImportedRefresh, importedPosting, newImportedJob, refreshImportedJ
 import { initialDemoState } from "@/lib/demo-data";
 import { assessMatchLocally } from "@/lib/matching";
 import { matchKey } from "@/lib/match-cache";
+import { publicState } from "@/lib/public-state";
+import { assertJobEligible } from "@/lib/application-policy";
+import { selectApplication } from "@/lib/workflow";
 
 afterEach(() => vi.unstubAllGlobals());
 const gh = (id = 42) => ({ id, title: "Junior Data Analyst", location: { name: "New York, NY" },
@@ -11,6 +14,25 @@ const mockFeed = (data: unknown) => vi.stubGlobal("fetch", vi.fn().mockResolvedV
 const imported = (url = "https://boards.greenhouse.io/acme/jobs/42") => newImportedJob({ url });
 
 describe("private ATS imports", () => {
+  it.each(["Toronto, Canada", "Remote"])("invalidates eligible private matches when a monitored posting changes destination: %s", async (location) => {
+    mockFeed({ jobs: [gh()] });
+    const [original] = await refreshImportedJobs([imported()]);
+    const state = initialDemoState();
+    state.profile.workAuthorization = "Authorized to work in the US";
+    state.jobs = [original]; state.importedJobs = [original];
+    state.feedback = [{ jobId: original.id, kind: "saved", updatedAt: "2026-10-01" }];
+    const application = selectApplication(state, original.id, state.profile.id);
+    const history = structuredClone(application);
+    state.matchCache = { [matchKey(state.profile, original)]: { ...assessMatchLocally(state.profile, original), category: "strong", score: 99 } };
+    mockFeed({ jobs: [{ ...gh(), location: { name: location } }] });
+    const refreshed = await refreshImportedJobs([original]);
+    applyImportedRefresh(state, [original], refreshed);
+    expect(publicState(state).matches[0].assessment.category).toBe("excluded");
+    expect(() => assertJobEligible(state.profile, state.jobs[0])).toThrow(/US.*destination|destination.*US/);
+    expect(state.matchCache).toEqual({});
+    expect(state.applications[0]).toEqual(history);
+    expect(state.feedback[0].kind).toBe("saved");
+  });
   it.each([
     ["https://boards.greenhouse.io/acme/jobs/42?gh_src=email#app", "greenhouse", "42"],
     ["https://jobs.lever.co/acme/job-id/apply", "lever", "job-id"],

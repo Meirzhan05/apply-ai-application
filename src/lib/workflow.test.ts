@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { draftPacket } from "@/lib/drafting";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { hashJson } from "@/lib/crypto";
 import {
   approveFill,
@@ -52,6 +53,24 @@ function attachSourceMetadata(packet: ApplicationPacket, format: "docx" | "pdf")
 }
 
 describe("application approval gates", () => {
+  it("requires fresh materials when a prepared US job moves to another US destination", async () => {
+    const state = initialDemoState();
+    const job = state.jobs[0];
+    const app = selectApplication(state, job.id, state.profile.id);
+    setPacket(state, app, await draftPacket(state.profile, job));
+    const updated = { ...job, location: "Boston, MA" };
+    state.jobs = [updated];
+    expect(() => assertSourceJobCurrent(app, updated)).toThrow(/destination changed/);
+    setPacket(state, app, await draftPacket(state.profile, updated));
+    expect(() => assertSourceJobCurrent(app, updated)).not.toThrow();
+  });
+  it.each(["London, United Kingdom", "Remote", "Worldwide"])("refuses manually imported applications without a verified US destination: %s", (location) => {
+    const state = initialDemoState();
+    state.profile.facts.push({ id: "current-location", text: "My current location is Almaty, Kazakhstan.", verified: true, source: "user" });
+    state.jobs = [{ ...state.jobs[1], source: "imported", location }];
+    expect(() => selectApplication(state, state.jobs[0].id, state.profile.id)).toThrow(/US.*destination|destination.*US/);
+    expect(state.applications).toEqual([]);
+  });
   it("records autonomous authorization without changing legacy reviewed approvals", () => {
     const state = initialDemoState();
     const app = selectApplication(state, state.jobs[0].id, state.profile.id);

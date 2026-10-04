@@ -7,6 +7,8 @@ import { isDemo, loadState, mutateState } from "@/lib/repository";
 import { transition } from "@/lib/workflow";
 import { validatePacket } from "@/lib/drafting";
 import { explicitConflict } from "@/lib/matching";
+import { importedAutonomyJob } from "@/lib/import-compatibility";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { runDraft, runFill, type RunPayload } from "@/lib/application-runs";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { AppState } from "@/lib/types";
@@ -29,12 +31,14 @@ export async function queueApplicationRun(userId: string, applicationId: string,
     if (kind === "draft" && !["selected", "draft_review"].includes(app.status)) throw new Error("This application cannot be drafted now.");
     if (kind === "fill") {
       if (app.status !== "authorized_to_fill" || !app.packet) throw new Error("Approve the current packet first.");
+      const currentJob = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
+      if (currentJob) assertSourceJobCurrent(app, currentJob);
       validatePacket(state.profile, app.packet);
       if (isDemo() && app.jobSnapshot?.source !== "demo") throw new Error("Demo runs are limited to controlled forms.");
     }
     const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
     if (!job?.active) throw new Error("The listing has closed.");
-    const conflict = explicitConflict(state.profile, job);
+    const conflict = explicitConflict(state.profile, importedAutonomyJob(app, job));
     if (conflict) throw new Error(conflict);
     app.queuedRun = { id: newId(), kind, ...(draftMode ? { draftMode } : {}), requestedAt: new Date().toISOString(), reason: "waiting" };
     app.error = undefined;
@@ -91,10 +95,10 @@ export async function dispatchUserQueue(userId: string) {
         catch (error) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; transition(target, [target.status], "needs_user_action"); target.error = error instanceof Error ? error.message : "Automation blocked."; recordApplicationBlocker(target, blockerReason(target.error), target.error, { packetHash: target.packetHash, targetUrl: target.jobSnapshot?.applyUrl }); return false; }
       }
       if (!job?.active) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; target.error = "This queued listing closed before the run started."; return false; }
-      const conflict = explicitConflict(current.profile, job);
+      const conflict = explicitConflict(current.profile, importedAutonomyJob(target, job));
       if (conflict) { target.queuedRun = undefined; target.budgetReservation = { ...receipt, status: "release_pending" }; target.error = conflict; return false; }
       if (queued.kind === "fill") {
-        try { validatePacket(current.profile, target.packet!); }
+        try { assertSourceJobCurrent(target, job); validatePacket(current.profile, target.packet!); }
         catch (error) {
           target.queuedRun = undefined;
           target.budgetReservation = { ...receipt, status: "release_pending" };

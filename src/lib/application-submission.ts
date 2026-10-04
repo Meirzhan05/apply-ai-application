@@ -5,6 +5,7 @@ import {
   cancelBrowser,
 } from "@/lib/browser-runner";
 import { ApplicationEligibilityError, assertJobEligible } from "@/lib/application-policy";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { sendActionNeeded } from "@/lib/email";
 import { loadState, mutateState } from "@/lib/repository";
 import { formDigest, hasSubmissionApproval, setFormSnapshot, transition } from "@/lib/workflow";
@@ -70,6 +71,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
     if (!app || app.status !== "submitting") return { skipped: true };
     try {
       assertJobEligible(state.profile, state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot);
+      assertSourceJobCurrent(app, state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot!);
       if (!app.packet) throw new Error("The approved packet is unavailable.");
       validatePacket(state.profile, app.packet);
       if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((job) => job.id === app.jobId), "submit");
@@ -82,6 +84,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
             formDigest(target.form) !== app.form!.hash || hashJson(current.profile) !== hashJson(state.profile)) return false;
           const currentJob = current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot;
           assertJobEligible(current.profile, currentJob);
+          assertSourceJobCurrent(target, currentJob!);
           const initialJob = state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot;
           if (!currentJob?.active || !initialJob || autonomyJobHash(currentJob) !== autonomyJobHash(initialJob)) return false;
           validatePacket(current.profile, target.packet!);
@@ -100,7 +103,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
           if (!target || target.status !== "submitting" || !target.submissionWorkerClaimedAt || target.submissionAttemptedAt ||
               target.browserSessionId !== baseline.sessionId || target.form?.url !== baseline.targetUrl || target.form.hash !== app.form?.hash) return false;
           if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((job) => job.id === target.jobId), "submit");
-          else { assertJobEligible(current.profile, current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot); if (!hasSubmissionApproval(target)) return false; }
+          else { const currentJob = assertJobEligible(current.profile, current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot); assertSourceJobCurrent(target, currentJob); if (!hasSubmissionApproval(target)) return false; }
           target.submissionMaterials = { resumeMode: target.packet!.resumeMode ?? "tailored", coverLetterMode: current.profile.automationSettings?.coverLetterMode,
             files: structuredClone(target.packet!.files?.filter((file) => target.form?.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ?? []), capturedAt: baseline.attemptedAt };
           target.submissionAttemptedAt = baseline.attemptedAt;
