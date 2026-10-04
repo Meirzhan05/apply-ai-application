@@ -5,6 +5,7 @@ import { initialDemoState } from "../src/lib/demo-data";
 import { publicState } from "../src/lib/public-state";
 import { selectApplication } from "../src/lib/workflow";
 
+async function main() {
 const state = initialDemoState();
 const application = selectApplication(state, state.jobs[0].id, state.profile.id);
 state.applications = [application];
@@ -35,3 +36,5 @@ try {
     await page.close();
   }
 } finally { await browser.close(); }
+}
+main().catch((error) => { console.error(error.message); process.exitCode = 1; });
