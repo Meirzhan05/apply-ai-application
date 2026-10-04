@@ -21,6 +21,7 @@ import { prepareApiApplication } from "@/lib/ats-application";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { unconfirmedPdfFactSuggestions, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { AppState, Application, Profile } from "@/lib/types";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
 
@@ -54,6 +55,12 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
       throw new Error("The saved PDF could not be re-inspected against its original bytes. Re-upload and confirm the current source before tailoring.");
   }
   inspected = sourceWithCurrentEvidenceClaims(inspected, profile.name);
+  const previousAnchors = new Map(previous.anchors.map((anchor) => [anchor.id, anchor]));
+  // Re-inspecting the same bytes repairs metadata, not the owner's source-claim selection.
+  inspected = { ...inspected, anchors: inspected.anchors.map((anchor) => {
+    const original = previousAnchors.get(anchor.id);
+    return original?.text === anchor.text ? { ...anchor, candidateClaim: original.candidateClaim } : anchor;
+  }) };
   const inspectedAnchorIds = new Set(inspected.anchors.map((anchor) => anchor.id));
   if (previous.version < 3 && profile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
     throw new Error("A confirmed résumé fact no longer matches the same source text after PDF re-inspection. Re-upload and reconfirm that fact before tailoring.");
@@ -72,7 +79,8 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
       throw new Error("A confirmed résumé fact changed while the PDF was being re-inspected. Retry after reviewing the current source facts.");
     currentProfile.resumeSourceDocument = inspected;
     currentProfile.resumeText = inspected.text;
-    const suggestions = unconfirmedPdfFactSuggestions(currentProfile, inspected);
+    const selectedAnchors = new Set(inspected.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => anchor.id));
+    const suggestions = unconfirmedPdfFactSuggestions(currentProfile, inspected).filter((suggestion) => selectedAnchors.has(suggestion.sourceAnchorId));
     for (const suggestion of suggestions) {
       if (currentProfile.facts.length >= 80) break;
       currentProfile.facts.push({ id: newId(), text: suggestion.text, verified: false, source: "resume", sourceAnchorId: suggestion.sourceAnchorId });
@@ -142,6 +150,7 @@ async function currentDraftRun(userId: string, applicationId: string, runToken: 
 
 async function claimRun(userId: string, applicationId: string, runToken: string | undefined, status: "drafting" | "filling") {
   return mutateState(userId, (state) => {
+    if (!isResumeOnboardingComplete(state.profile)) return false;
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app || app.status !== status || app.runToken !== runToken || app.runWorkerClaimedAt) return false;
     app.runWorkerClaimedAt = new Date().toISOString();

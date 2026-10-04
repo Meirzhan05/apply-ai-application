@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { currentUserId, loadState } from "@/lib/repository";
+import { currentUserId, isDemo, loadState } from "@/lib/repository";
 import { publicState } from "@/lib/public-state";
 import { workspaceVersion } from "@/lib/workspace-version";
 
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
       return new Response(null, { status: 304, headers });
     }
     const state = await loadState(userId);
-    return NextResponse.json(publicState(state), {
+    return NextResponse.json({ ...publicState(state), demoMode: isDemo() }, {
       headers,
     });
   } catch (error) {

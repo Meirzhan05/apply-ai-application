@@ -45,6 +45,10 @@ export interface OnboardingQuestionnaire {
 export interface OnboardingProfile {
   questionnaire: OnboardingQuestionnaire;
   completedAt?: string;
+  completedVersion?: number;
+  completedResumeHash?: string;
+  reviewedHash?: string;
+  draftStage?: "resume" | "profile" | "answers" | "review";
 }
 
 export interface AutomationSettings {

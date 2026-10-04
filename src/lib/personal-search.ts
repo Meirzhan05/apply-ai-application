@@ -12,20 +12,21 @@ import { importedPosting, refreshImportedJobs } from "@/lib/import-jobs";
 import { dedupeJobs } from "@/lib/sources";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import type { AppState } from "@/lib/types";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 const refreshMs = 4 * 60 * 60 * 1000;
 const activeMs = 15 * 60 * 1000;
-const currentRequest = (state: AppState, requestId: string) => state.personalSearch?.requestId === requestId && personalSearchReadiness(state.profile).ready && state.personalSearch.profileKey === personalSearchKey(state.profile);
+const currentRequest = (state: AppState, requestId: string) => state.personalSearch?.requestId === requestId && isResumeOnboardingComplete(state.profile) && personalSearchReadiness(state.profile).ready && state.personalSearch.profileKey === personalSearchKey(state.profile);
 
 export async function queuePersonalSearch(userId: string, scheduled = false): Promise<boolean> {
   if (isDemo()) return false;
   const state = await loadState(userId);
-  if (!personalSearchReadiness(state.profile).ready) return false;
+  if (!isResumeOnboardingComplete(state.profile) || !personalSearchReadiness(state.profile).ready) return false;
   const profileKey = personalSearchKey(state.profile);
   const requestId = randomUUID();
   const requestedAt = new Date().toISOString();
   const queued = await mutateState(userId, (current) => {
-    if (!personalSearchReadiness(current.profile).ready || personalSearchKey(current.profile) !== profileKey) return false;
+    if (!isResumeOnboardingComplete(current.profile) || !personalSearchReadiness(current.profile).ready || personalSearchKey(current.profile) !== profileKey) return false;
     const previous = current.personalSearch;
     if (previous?.profileKey === profileKey) {
       const age = Date.now() - Date.parse(previous.requestedAt);
@@ -53,6 +54,8 @@ export async function queuePersonalSearch(userId: string, scheduled = false): Pr
 }
 
 export async function runPersonalSearch(userId: string, requestId: string) {
+  const beforeClaim = await loadState(userId);
+  if (!isResumeOnboardingComplete(beforeClaim.profile)) return { stopped: "onboarding_incomplete" };
   const claimed = await mutateState(userId, (state) => {
     if (!currentRequest(state, requestId) || state.personalSearch?.status !== "queued") return false;
     state.personalSearch.status = "searching"; return true;

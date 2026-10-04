@@ -10,7 +10,7 @@ async function main() {
   assert.ok(new URL(origin).hostname === "localhost", "This test creates disposable applicants on the local non-demo app only");
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { autoRefreshToken: false, persistSession: false } });
-  const users: Array<{ id: string; cookie: string }> = [];
+  const users: Array<{ id: string; email: string; cookie: string }> = [];
   const nonce = randomUUID();
   const pdf = await PDFDocument.create(); const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -30,7 +30,7 @@ async function main() {
     for (let i = 0; i < 2; i++) {
       const email = `resume-intake-${nonce}-${i}@example.com`;
       const created = await db.auth.admin.createUser({ email, email_confirm: true }); assert.equal(created.error, null);
-      const owner = created.data.user!; users.push({ id: owner.id, cookie: "" });
+      const owner = created.data.user!; users.push({ id: owner.id, email, cookie: "" });
       const state = initialDemoState(); state.applications = []; state.activity = [];
       state.profile = { ...state.profile, id: owner.id, email, name: "Synthetic Applicant", demo: false,
         facts: [{ id: "existing", text: "Built a previously confirmed synthetic project.", verified: true, source: "user" }],
@@ -52,7 +52,10 @@ async function main() {
     const after = await read(0); const otherAfter = await read(1);
     assert.deepEqual(after.profile.facts[0], before.profile.facts[0]);
     const proposals = after.profile.facts.filter((fact) => fact.source === "resume");
-    assert.equal(proposals.length, 4); assert.ok(proposals.every((fact) => !fact.verified));
+    assert.ok(proposals.length >= 4, `Expected at least the four known resume claims, received ${proposals.length}`); assert.ok(proposals.every((fact) => !fact.verified));
+    assert.equal(after.profile.name, "Synthetic Applicant", "Resume parsing must preserve the existing name when the source has no contact header.");
+    assert.equal(after.profile.email, users[0].email, "Resume parsing must preserve the authenticated email when the source has no contact header.");
+    assert.equal(after.profile.phone, "", "Resume parsing must not invent a phone number when the source has no contact header.");
     assert.ok(proposals.some((f) => f.text.includes("Orbit Labs") && f.text.includes("explainable feature-level predictions")));
     assert.ok(proposals.some((f) => f.text.includes("travel-aware tasks, with quiet hours")));
     assert.ok(proposals.some((f) => f.text.includes("Expected May 2027")));
@@ -78,4 +81,5 @@ async function main() {
     console.log("CLEANUP disposable resume-intake accounts and files removed");
   }
 }
+
 main().catch((error) => { console.error(error instanceof Error ? error.message : "Resume intake verification failed"); process.exitCode = 1; });

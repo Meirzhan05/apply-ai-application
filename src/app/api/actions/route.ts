@@ -66,6 +66,8 @@ import {
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 import { enrollPilot, withdrawPilot } from "@/lib/pilot";
 import { onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
+import { actionNeedsCompletedOnboarding, assertResumeOnboardingComplete, isResumeOnboardingComplete } from "@/lib/onboarding-gate";
+import { finishResumeOnboarding, OnboardingCompletionError, saveOnboardingDraft } from "@/lib/onboarding-completion";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -117,6 +119,15 @@ async function perform(
   payload: Record<string, unknown>,
 ) {
   const ownerContext = { actor: { kind: "owner" as const, userId }, action };
+  if (action === "onboardingDraft" || action === "finishOnboarding") {
+    return mutateState(userId, (state) => {
+      if (action === "onboardingDraft") saveOnboardingDraft(state.profile, payload);
+      else finishResumeOnboarding(state.profile, z.string().length(64).parse(payload.reviewHash));
+      state.matchCache = {};
+      activity(state, action === "finishOnboarding" ? "Onboarding completed" : "Onboarding draft saved",
+        action === "finishOnboarding" ? "Reviewed imported information and job preferences were confirmed." : "Your progress is saved for your next visit.");
+    }, ownerContext);
+  }
   if (action === "enrollPilot") {
     return mutateState(userId, (state) => {
       const input = z.object({ consentVersion: z.string().max(80), confirmed: z.literal(true) }).parse(payload);
@@ -655,8 +666,21 @@ export async function POST(request: Request) {
     const userId = await currentUserId();
     return await withAccountOperation(userId, "request", async () => {
     const { action, payload } = Input.parse(await request.json());
+    if (actionNeedsCompletedOnboarding(action) && action !== "resumeBrowser") {
+      assertResumeOnboardingComplete(await loadState(userId).then((state) => state.profile), action);
+    }
+    if (action === "resumeBrowser") {
+      const state = await loadState(userId);
+      const application = state.applications.find((item) => item.id === text(payload.applicationId, 100));
+      const outcomeObservation = Boolean(application?.submissionAttemptedAt) ||
+        ["awaiting_verification", "uncertain", "submitted"].includes(application?.status ?? "");
+      if (!outcomeObservation) assertResumeOnboardingComplete(state.profile, action);
+    }
     await perform(userId, action, payload);
-    if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action)) {
+    const currentProfile = !isDemo() || ["profile", "onboarding", "automationSettings", "import"].includes(action)
+      ? (await loadState(userId)).profile
+      : undefined;
+    if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action) && currentProfile && isResumeOnboardingComplete(currentProfile)) {
       const searching = await queuePersonalSearch(userId);
       // Unchanged search inputs reuse the private discovery results, but profile
       // edits still invalidate fit assessments (for example new fact IDs).
@@ -669,7 +693,7 @@ export async function POST(request: Request) {
       !isDemo() &&
       process.env.OPENAI_API_KEY &&
       process.env.TRIGGER_SECRET_KEY &&
-      ["import"].includes(action)
+      ["import"].includes(action) && currentProfile && isResumeOnboardingComplete(currentProfile)
     ) {
       await queueMatchAssessment(userId).catch(() => undefined);
     }
@@ -701,7 +725,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Action failed.";
     return NextResponse.json(
-      { error: message },
+      { error: message, ...(error instanceof OnboardingCompletionError ? { missing: error.missing } : {}) },
       { status: message === "AUTH_REQUIRED" ? 401 : error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
   }

@@ -4,6 +4,7 @@ import { hashJson } from "@/lib/crypto";
 import { assertJobEligible } from "@/lib/application-policy";
 import { validatePacket } from "@/lib/drafting";
 import { onboardingCompleteness } from "@/lib/onboarding";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 import { canonicalJobUrl } from "@/lib/sources";
 import { formDigest } from "@/lib/workflow";
 import { answerOwner } from "@/lib/answer-responsibility";
@@ -67,11 +68,19 @@ export function hasBoundSubmissionAttempt(application: Application, profile: Pro
   const attempt = application.submissionVerification;
   if (application.status !== "submitting" || !application.submissionWorkerClaimedAt || !attempt ||
       attempt.sessionId !== application.browserSessionId || attempt.attemptedAt !== application.submissionAttemptedAt || attempt.targetUrl !== application.form?.url) return false;
-  try { assertAutonomous({ ...application, submissionAttemptedAt: undefined }, profile, job, "submit"); return true; }
+  try {
+    // An already attempted submission may still need outcome observation after
+    // a session expires or onboarding remains incomplete. This branch proves
+    // the saved attempt binding above without authorizing another click.
+    if (!isResumeOnboardingComplete(profile) && application.submissionAttemptedAt) return true;
+    assertAutonomous({ ...application, submissionAttemptedAt: undefined }, profile, job, "submit"); return true;
+  }
   catch { return false; }
 }
 
-export function assertAutomationEnabled(profile: Profile): void {
+export function assertAutomationEnabled(profile: Profile, allowInFlight = false): void {
+  if (!allowInFlight && !isResumeOnboardingComplete(profile))
+    throw new Error("Complete the required onboarding before starting automated application work.");
   if (!profile.onboarding?.completedAt || !onboardingCompleteness(profile).complete ||
       profile.automationAuthorization?.status !== "enabled" || profile.automationAuthorization.version !== profile.automationVersion ||
       profile.automationSettings?.version !== profile.automationVersion)
@@ -91,7 +100,10 @@ export function authorizeKnownAnswerApplication(application: Application, profil
 
 /** Each phase validates current persisted inputs. Unsealed legacy records cannot authorize automation. */
 export function assertAutonomous(application: Application, profile: Profile, job: Job | undefined, phase: "draft" | "fill" | "submit"): void {
-  assertAutomationEnabled(profile);
+  const inFlight = !isResumeOnboardingComplete(profile) &&
+    ((["drafting", "filling"].includes(application.status) && Boolean(application.runWorkerClaimedAt)) ||
+      (application.status === "submitting" && Boolean(application.submissionStartedAt)));
+  assertAutomationEnabled(profile, inFlight);
   if (!job?.active) throw new Error("The listing closed before this application could proceed.");
   const eligibilityJob = importedAutonomyJob(application, job);
   assertJobEligible(profile, eligibilityJob);

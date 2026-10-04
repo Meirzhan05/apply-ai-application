@@ -9,6 +9,7 @@ import { appendDiscoveryEvent, enqueueStrongMatch } from "../src/lib/discovery";
 import { queueMatchAssessment } from "../src/lib/match-queue";
 import { controlledFixtureAllowsJob } from "../src/lib/controlled-tests";
 import { withAccountOperation } from "../src/lib/account-lifecycle";
+import { isResumeOnboardingComplete } from "../src/lib/onboarding-gate";
 
 class MatchingContextChanged extends Error {
   constructor(readonly reason: "profile_changed" | "authorization_changed" | "job_closed" | "job_changed" | "controlled_scope_changed") {
@@ -39,6 +40,7 @@ export const assessUserMatches = task({
     const runId = options?.ctx.run.id ?? newId();
     if (!process.env.OPENAI_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
+    if (!isResumeOnboardingComplete(state.profile)) return { assessed: 0, stopped: "onboarding_incomplete" };
     if (!state.profile.facts.some((fact) => fact.verified)) return { assessed: 0 };
     if (continuationToken) {
       const marker = state.discovery?.matchContinuation;
@@ -56,6 +58,7 @@ export const assessUserMatches = task({
     let budgetExhausted = false;
     for (const job of pending) {
       const latest = await loadState(userId);
+      if (!isResumeOnboardingComplete(latest.profile)) return { assessed, stopped: "onboarding_incomplete" };
       if (latest.profile.updatedAt !== profileVersion)
         return { assessed, stopped: "profile_changed" };
       const allowed = await reserveServiceBudget(

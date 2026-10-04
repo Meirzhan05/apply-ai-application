@@ -15,6 +15,7 @@ import { ApiPreparationError, submitApiApplication } from "@/lib/ats-application
 import { assertAutonomous, autonomyJobHash } from "@/lib/autonomous-policy";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { Application } from "@/lib/types";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 async function releaseSubmissionBrowser(userId: string, application: Application): Promise<boolean> {
   const sessionId = application.browserSessionId ?? application.browserReleasePending?.sessionId;
@@ -44,6 +45,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
     const claimed = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
       if (!target || target.status !== "submitting" || target.submissionWorkerClaimedAt || target.submissionAttemptedAt || (target.autonomousAuthorization ? !target.submissionDispatch?.token || target.submissionDispatch.token !== submissionToken : !hasSubmissionApproval(target))) return false;
+      if (!isResumeOnboardingComplete(current.profile) && !target.submissionStartedAt) return false;
       if (target.autonomousAuthorization) {
         try { assertAutonomous(target, current.profile, current.jobs.find((job) => job.id === target.jobId), "submit"); }
         catch (error) {

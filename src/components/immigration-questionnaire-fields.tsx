@@ -8,7 +8,7 @@ export function ImmigrationQuestionnaireFields({ questionnaire, onChange }: {
   return <>
     <label>
       US Immigration Status
-      <select id="setup-immigrationStatus" value={questionnaire.immigrationStatus ?? ""} onChange={event => {
+      <select id="setup-immigrationStatus" aria-label="US Immigration Status" value={questionnaire.immigrationStatus ?? ""} onChange={event => {
         const immigrationStatus = event.target.value as OnboardingQuestionnaire["immigrationStatus"];
         onChange({ ...questionnaire, immigrationStatus, visaType: immigrationStatus === "visa-holder" ? questionnaire.visaType : undefined, immigrationStatusDetails: immigrationStatus === "other" ? questionnaire.immigrationStatusDetails : undefined });
       }}>
@@ -21,11 +21,11 @@ export function ImmigrationQuestionnaireFields({ questionnaire, onChange }: {
     </label>
     {questionnaire.immigrationStatus === "visa-holder" && <label>
       Visa Type
-      <input id="setup-visaType" required maxLength={200} value={questionnaire.visaType ?? ""} onChange={event => patch({ visaType: event.target.value })} />
+      <input id="setup-visaType" aria-label="Visa Type" required maxLength={200} value={questionnaire.visaType ?? ""} onChange={event => patch({ visaType: event.target.value })} />
     </label>}
     {questionnaire.immigrationStatus === "other" && <label>
       US Immigration Status details
-      <input id="setup-immigrationStatusDetails" required maxLength={500} value={questionnaire.immigrationStatusDetails ?? ""} onChange={event => patch({ immigrationStatusDetails: event.target.value })} />
+      <input id="setup-immigrationStatusDetails" aria-label="US Immigration Status details" required maxLength={500} value={questionnaire.immigrationStatusDetails ?? ""} onChange={event => patch({ immigrationStatusDetails: event.target.value })} />
     </label>}
     {([
       ["workAuthorization", "Are you currently authorized to work in the United States?"],
@@ -33,7 +33,7 @@ export function ImmigrationQuestionnaireFields({ questionnaire, onChange }: {
       ["sponsorshipFuture", "Will you need employer sponsorship in the future?"],
     ] as const).map(([key, label]) => <label key={key}>
       {label}
-      <select id={`setup-${key}`} value={questionnaire[key] ?? ""} onChange={event => patch({ [key]: event.target.value as FactualDeclaration })}>
+      <select id={`setup-${key}`} aria-label={label} value={questionnaire[key] ?? ""} onChange={event => patch({ [key]: event.target.value as FactualDeclaration })}>
         <option value="" disabled>Choose an answer</option>
         <option value="yes">Yes</option>
         <option value="no">No</option>

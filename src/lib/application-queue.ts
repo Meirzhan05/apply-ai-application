@@ -14,6 +14,7 @@ import { blockerReason, recordApplicationBlocker } from "@/lib/application-block
 import type { AppState } from "@/lib/types";
 import type { PilotMutationContext } from "@/lib/pilot";
 import { withAccountOperation } from "@/lib/account-lifecycle";
+import { assertResumeOnboardingComplete, isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
   return state.applications.some((app) => app.id !== exceptId &&
@@ -23,6 +24,7 @@ export function hasActiveBrowser(state: AppState, exceptId: string): boolean {
 
 export async function queueApplicationRun(userId: string, applicationId: string, kind: "draft" | "fill", draftMode?: "resume" | "essays", context?: PilotMutationContext) {
   await mutateState(userId, (state) => {
+    assertResumeOnboardingComplete(state.profile, kind === "draft" ? "drafting an application packet" : "filling an application");
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app) throw new Error("Application not found.");
     if (app.budgetReservation?.status === "release_pending") throw new Error("A previous budget reservation is still being released.");
@@ -48,6 +50,7 @@ export async function queueApplicationRun(userId: string, applicationId: string,
 
 export async function dispatchUserQueue(userId: string) {
   const state = await loadState(userId);
+  const onboardingComplete = isResumeOnboardingComplete(state.profile);
   for (const app of state.applications) {
     const reservation = app.budgetReservation;
     const token = reservation?.reservationId.startsWith("queued:") ? reservation.reservationId.slice("queued:".length) : undefined;
@@ -69,6 +72,9 @@ export async function dispatchUserQueue(userId: string) {
   }
   const pending = state.applications.filter((app) => app.queuedRun).sort((a, b) => a.queuedRun!.requestedAt.localeCompare(b.queuedRun!.requestedAt));
   for (const pendingApp of pending) {
+    // A queued record from before the mandatory rollout remains durable for
+    // review, but cannot start a new provider run until v2 is complete.
+    if (!onboardingComplete) continue;
     const queued = pendingApp.queuedRun!;
     const latest = await loadState(userId);
     if (pendingApp.autonomousAuthorization) {

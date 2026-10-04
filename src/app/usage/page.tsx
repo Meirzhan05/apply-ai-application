@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import type { UsageView } from "@/lib/usage-view";
 import styles from "./usage.module.css";
+import { MandatoryOnboardingGate } from "@/components/mandatory-onboarding-gate";
 
 const money = (value: number | null) => value === null ? "Unknown" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 }).format(value);
 const tokens = (value: number | null) => value === null ? "Unknown" : value.toLocaleString();
@@ -24,7 +25,7 @@ export default function UsagePage() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { const initial = setTimeout(() => { void refresh(); }, 0); return () => clearTimeout(initial); }, [refresh]);
-  return <main className={styles.sheet}>
+  return <MandatoryOnboardingGate><main className={styles.sheet}>
     <nav className={styles.navigation} aria-label="Usage navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><div><Link href="/costs">Service costs</Link><button onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh usage"}</button></div></nav>
     <header className={styles.heading}><h1>AI usage</h1><p>Provider reports for your applications and background matching, including work that failed or was cancelled.</p></header>
     {error && <p role="alert" className={styles.error}>{error}</p>}
@@ -70,5 +71,5 @@ export default function UsagePage() {
       </section>
       <section className={styles.reservations} aria-labelledby="reservations-heading"><h2 id="reservations-heading">Projected scheduling reservations</h2><p>{data.projectedReservations.length} saved application runs · {money(data.projectedReservations.reduce((sum, run) => sum + run.projectedUsd, 0))} projected.</p><p>These amounts reserve service capacity before a run. They are separate from measured tokens, model estimates and provider invoices.</p></section>
     </>}
-  </main>;
+  </main></MandatoryOnboardingGate>;
 }
