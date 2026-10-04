@@ -86,4 +86,14 @@ describe("personal student discovery", () => {
     for (const value of [profile.name, profile.email, profile.phone, "protected answer", "Unconfirmed secret", "raw private resume", "resumeSourceDocument"]) expect(input).not.toContain(value);
     expect(input).toContain("Python project");
   });
+  it("sends nationwide destinations and acceptable arrangements without exposing residence or relocation answers", () => {
+    const profile = mocks.states.get("student-a")!.profile;
+    profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+    profile.preferredLocations = ["United States"];
+    profile.workArrangements = ["remote", "hybrid"];
+    profile.willingToRelocate = false;
+    expect(personalSearchInput(profile)).toMatchObject({ preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"] });
+    const input = JSON.stringify(personalSearchInput(profile));
+    for (const value of ["Almaty", "Kazakhstan", "willingToRelocate", "currentLocation"]) expect(input).not.toContain(value);
+  });
 });

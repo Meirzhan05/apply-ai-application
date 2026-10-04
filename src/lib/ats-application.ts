@@ -2,6 +2,8 @@ import { z } from "zod";
 import { hashJson } from "@/lib/crypto";
 import { importedPosting } from "@/lib/import-jobs";
 import { canonicalJobUrl } from "@/lib/sources";
+import { reusableFactualAnswers } from "@/lib/onboarding";
+import { savedLocationAnswerKey } from "@/lib/location-answers";
 import { answerNeedsAction } from "@/lib/answer-responsibility";
 import { reviewedPacketFile } from "@/lib/packet-files";
 import { bytesHash } from "@/lib/resume-artifacts";
@@ -162,7 +164,8 @@ function fieldValue(field: Field, application: Application, profile: Profile): s
   const contact: Record<string, string> = { first_name: name[0] ?? "", last_name: name.slice(1).join(" "),
     name: profile.name, _systemfield_name: profile.name, email: profile.email, _systemfield_email: profile.email,
     phone: profile.phone, _systemfield_phone: profile.phone };
-  return contact[field.name] ?? "";
+  const locationKey = savedLocationAnswerKey(field.label);
+  return contact[field.name] ?? (locationKey ? reusableFactualAnswers(profile)[locationKey] : undefined) ?? "";
 }
 
 /** Read/prepare only: never uploads files, creates an application, or allocates a browser. */

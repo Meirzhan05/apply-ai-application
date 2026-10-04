@@ -32,12 +32,22 @@ describe("resume upload confirmation boundaries", () => {
   it("stores complete contextual suggestions unconfirmed without changing applications or sensitive answers", async () => {
     const applications = structuredClone(mocks.state!.applications);
     const sensitive = structuredClone(mocks.state!.profile.sensitiveAnswers);
+    Object.assign(mocks.state!.profile, {
+      currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+      onboarding: { questionnaire: { availability: "June 2027" } },
+    });
     expect((await POST(request())).status).toBe(200);
     expect(mocks.state!.profile.facts).toEqual(expect.arrayContaining([
       expect.objectContaining({ text: expect.stringContaining("Built a search index for 1,200 users."), verified: false, source: "resume", sourceAnchorId: expect.any(String) }),
     ]));
     expect(mocks.state!.applications).toEqual(applications);
     expect(mocks.state!.profile.sensitiveAnswers).toEqual(sensitive);
+    expect(mocks.state!.profile).toMatchObject({
+      currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+      onboarding: { questionnaire: { availability: "June 2027" } },
+    });
     expect(mocks.state!.profile.automationVersion).toBeGreaterThan(1);
     expect(mocks.upload.mock.calls[0][0]).toMatch(/^synthetic-owner\//);
     expect(mocks.mutate).toHaveBeenCalledWith("synthetic-owner");

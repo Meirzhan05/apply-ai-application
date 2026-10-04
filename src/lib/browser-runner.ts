@@ -17,6 +17,7 @@ import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workfl
 import { assertAutonomous, autonomyProfileHash, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
 import { reusableFactualAnswers } from "@/lib/onboarding";
+import { savedLocationAnswerKey } from "@/lib/location-answers";
 import { graduationSeasonOption } from "@/lib/education-options";
 import { automaticEssayQuestions, hasBoundAutonomousEssayControl } from "@/lib/autonomous-essays";
 import { browserQuestions } from "@/lib/browser-questions";
@@ -380,6 +381,8 @@ function deterministicKey(
   if (/full.?name|your name|candidate name/.test(label)) return "full_name";
   if (/e.?mail/.test(label) || field.kind === "email") return "email";
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
+  const locationKey = savedLocationAnswerKey(label);
+  if (locationKey) return `saved_${locationKey}`;
   if (/school|university|college/.test(label)) return "school";
   if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";

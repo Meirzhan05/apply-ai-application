@@ -233,6 +233,14 @@ async function perform(
       if ("remoteOnly" in payload)
         profile.remoteOnly = payload.remoteOnly === true;
       if ("strictLocations" in payload) profile.strictLocations = payload.strictLocations === true;
+      if ("currentLocation" in payload) profile.currentLocation = z.object({
+        city: z.string().trim().max(120), region: z.string().trim().max(120), country: z.string().trim().max(120),
+      }).parse(payload.currentLocation);
+      if ("workArrangements" in payload) {
+        profile.workArrangements = [...new Set(z.array(z.enum(["remote", "hybrid", "on-site"])).max(3).parse(payload.workArrangements))];
+        profile.remoteOnly = profile.workArrangements.length === 1 && profile.workArrangements[0] === "remote";
+      }
+      if ("willingToRelocate" in payload) profile.willingToRelocate = z.boolean().nullable().parse(payload.willingToRelocate) ?? undefined;
       if ("timeZone" in payload) {
         const timeZone = z.string().max(100).parse(payload.timeZone);
         new Intl.DateTimeFormat("en-US", { timeZone });
@@ -272,7 +280,7 @@ async function perform(
       if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
       if (settings) updateAutomationSettings(profile, settings);
       if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
-      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations", "workArrangements"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
