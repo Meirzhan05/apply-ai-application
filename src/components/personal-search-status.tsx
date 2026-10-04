@@ -1,10 +1,11 @@
 import type { PersonalSearchState, Profile } from "@/lib/types";
 import { personalSearchReadiness } from "@/lib/personal-search-policy";
 
-export function PersonalSearchStatus({ profile, search, onConfigure }: {
-  profile: Profile; search?: PersonalSearchState; onConfigure: () => void;
+export function PersonalSearchStatus({ profile, search, onConfigure, onSearch, busy = false }: {
+  profile: Profile; search?: PersonalSearchState; onConfigure: () => void; onSearch: () => void; busy?: boolean;
 }) {
   const readiness = personalSearchReadiness(profile);
+  const searching = search?.status === "queued" || search?.status === "searching";
   const message = !readiness.ready
     ? `Add ${readiness.missing.join(", ")} to start your personal search automatically.`
     : search?.status === "queued" ? "Your personal search is queued. Your agent will use your confirmed experience and saved preferences."
@@ -15,6 +16,9 @@ export function PersonalSearchStatus({ profile, search, onConfigure }: {
     : "Your profile is ready. Your personal search will start on the next scheduled check.";
   return <div className="profile-context" role="status" aria-label="Personal search status">
     <span>{message}</span>
-    <button className="text-button" onClick={onConfigure}>{readiness.ready ? "Edit search preferences" : "Set up my profile"}</button>
+    <div className="personal-search-actions">
+      <button className="outline-action" disabled={!readiness.ready || busy || searching} onClick={onSearch}>{searching ? "Searching…" : "Search jobs (test)"}</button>
+      <button className="text-button" onClick={onConfigure}>{readiness.ready ? "Edit search preferences" : "Set up my profile"}</button>
+    </div>
   </div>;
 }

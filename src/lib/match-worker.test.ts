@@ -17,7 +17,7 @@ vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: mocks.continueQueue 
 const run = (assessUserMatches as unknown as { run: (payload: { userId: string; continuationToken?: string }) => Promise<Record<string, unknown>> }).run;
 let state: AppState;
 beforeEach(() => {
-  vi.stubEnv("OPENAI_API_KEY", "synthetic-test-key");
+  vi.stubEnv("TYPESAFE_API_KEY", "synthetic-test-key");
   state = initialDemoState();
   state.jobs = state.jobs.slice(0, 2);
   state.matchCache = {};

@@ -1,8 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { z } from "zod";
-import { assessMatch } from "../src/lib/matching";
-import { jevTriage } from "../src/lib/jev";
-import type { Job, Profile } from "../src/lib/types";
+import { assessMatch, assessMatchWithOpenAI } from "../src/lib/matching";
+import { randomUUID } from "node:crypto";
+import { readModelUsage, withModelUsageContext } from "../src/lib/model-usage";
+import type { Job, Profile, MatchAssessment } from "../src/lib/types";
 
 const Example = z.object({
   profile: z.record(z.string(), z.unknown()),
@@ -10,6 +11,9 @@ const Example = z.object({
   label: z.enum(["strong", "possible", "uncertain"]),
 });
 async function main() {
+// Exported profiles have anonymous IDs. Keep evaluation usage local and never mutate production owner state.
+Object.assign(process.env, { NODE_ENV: "test", MODEL_USAGE_TEST_DIR: ".data" });
+await mkdir(".data", { recursive: true });
 const inputPath = process.argv[2];
 if (!inputPath)
   throw new Error("Usage: npm run eval:jev -- labeled-pairs.json");
@@ -26,7 +30,7 @@ const results: {
   baseline: string;
   baselineModel: string;
   baselineLatencyMs: number;
-  jev: Awaited<ReturnType<typeof jevTriage>>;
+  jev: MatchAssessment & { latencyMs: number; inputTokens?: number; outputTokens?: number };
 }[] = [];
 for (const [index, example] of examples.entries()) {
   const profile = example.profile as unknown as Profile;
@@ -34,10 +38,15 @@ for (const [index, example] of examples.entries()) {
   const [{ baseline, baselineLatencyMs }, jev] = await Promise.all([
     (async () => {
       const started = performance.now();
-      const baseline = await assessMatch(profile, job);
+      const baseline = await assessMatchWithOpenAI(profile, job);
       return { baseline, baselineLatencyMs: Math.round(performance.now() - started) };
     })(),
-    jevTriage(profile, job),
+    (async () => {
+      const started = performance.now(), runId = randomUUID();
+      const assessment = await withModelUsageContext({ userId: profile.id, jobId: job.id, runId }, () => assessMatch(profile, job));
+      const usage = (await readModelUsage(profile.id)).records.find(record => record.runId === runId);
+      return { ...assessment, latencyMs: Math.round(performance.now() - started), inputTokens: usage?.tokens.input ?? undefined, outputTokens: usage?.tokens.output ?? undefined };
+    })(),
   ]);
   results.push({
     index,
@@ -62,6 +71,7 @@ const summary = {
   baselineAccuracy: accuracy("baseline"),
   baselineFallbackCount: results.filter((row) => row.baselineModel === "rules").length,
   jevAccuracy: accuracy("jev"),
+  jevFallbackCount: results.filter(row => !row.jev.model.startsWith("jev")).length,
   baselineMeanLatencyMs: mean(results.map((row) => row.baselineLatencyMs)),
   jevMeanLatencyMs: mean(results.map((row) => row.jev.latencyMs)),
   jevInputTokens: results.reduce(
@@ -72,8 +82,8 @@ const summary = {
     (sum, row) => sum + (row.jev.outputTokens ?? 0),
     0,
   ),
-  enableJev: false,
-  note: "Shadow evaluation only. Compare service cost separately before enabling Jev for triage.",
+  productionMatcher: "jev",
+  note: "Offline comparison against the preserved OpenAI baseline. Human labels are required; this run never starts applications.",
 };
 const path = inputPath.replace(/\.json$/i, "") + ".results.json";
 await writeFile(path, JSON.stringify({ summary, results }, null, 2));

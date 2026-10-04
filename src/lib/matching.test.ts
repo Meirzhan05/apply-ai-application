@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
-import { assessMatch, assessMatchLocally, explicitConflict } from "@/lib/matching";
+import { assessMatchWithOpenAI as assessMatch, assessMatchLocally, explicitConflict } from "@/lib/matching";
 import { matchKey, matchReservationId } from "@/lib/match-cache";
 import { publicState } from "@/lib/public-state";
 import { feedbackAdjustment } from "@/lib/ranking";

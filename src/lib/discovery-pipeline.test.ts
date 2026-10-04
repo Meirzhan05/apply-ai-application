@@ -208,8 +208,14 @@ async function runPipeline(hoursAfterRefresh: number) {
   vi.stubEnv("INTERNAL_TASK_SECRET", "synthetic");
   vi.stubEnv("TRIGGER_SECRET_KEY", "synthetic");
   vi.stubEnv("OPENAI_API_KEY", "synthetic");
+  vi.stubEnv("TYPESAFE_API_KEY", "synthetic");
   vi.stubEnv("JOB_BOARDS", "greenhouse:controlled");
-  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Shared feed must not be read")));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string, init: { body: string }) => {
+    if (url !== "https://api.typesafe.ai/v1/systemone") throw new Error("Shared feed must not be read");
+    const payload = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ model: "jev-fixture", usage: { input_tokens: 10, output_tokens: 10 }, answers: Object.fromEntries(Object.keys(payload.questions).map(id => [id,
+      { type: "choice", choice: id === "experience" ? "fit" : id === "skills" ? "strong" : "fact_0", confidence: .95 }])) }) };
+  }));
   const response = await POST(new Request("https://example.com/api/internal/refresh", { method: "POST", headers: { authorization: "Bearer synthetic" } }));
   expect(response.status, await response.clone().text()).toBe(200);
   const searchRequest = fixture.calls.find((call) => call.task === "discover-user-jobs");

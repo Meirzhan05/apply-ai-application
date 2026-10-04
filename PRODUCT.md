@@ -35,7 +35,7 @@ Users upload a resume, confirm profile facts and search preferences, review matc
 - Applications require distinct approval to fill a form and approval to submit its final state.
 - A controlled demo precedes a free invited beta for 50–100 users.
 - Invited pilot participation is an explicit, versioned opt-in after onboarding. It measures initiated applications and their evidence without enabling automation, public signup, billing, or a daily application cap.
-- TypeSafe Jev is evaluated in parallel before taking over matching decisions.
+- TypeSafe JEV now evaluates career level, skills, and support for each requirement in production. An offline comparison against OpenAI remains available; real labeled evaluation is pending. A temporary Search jobs (test) control lets applicants request discovery immediately.
 
 ## Evidence on Hand
 

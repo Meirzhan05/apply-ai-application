@@ -826,7 +826,7 @@ export default function Dashboard() {
                 </button>
                 </div>
               </div>
-              {!data.profile.demo && <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => navigateSection("profile")} />}
+              {!data.profile.demo && <PersonalSearchStatus profile={data.profile} search={data.personalSearch} busy={Boolean(busy)} onSearch={() => void act("searchJobs")} onConfigure={() => navigateSection("profile")} />}
               {!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
                 <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
@@ -983,6 +983,7 @@ export default function Dashboard() {
                           {job.importCheck && job.importCheck.status !== "verified" && <p className="job-review-note">{job.importCheck.message || "Posting details need verification on the employer site."}</p>}
                           <details className="fit-evidence">
                           <summary aria-label={`Review fit evidence for ${context}${checkLabel}`}>Review fit evidence{checkLabel}</summary>
+                          {match?.model.startsWith("jev") && <p className="muted">JEV assessment{typeof match.confidence === "number" ? ` · Confidence ${Math.round(match.confidence * 100)}%` : ""}</p>}
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
                             <strong>Posting terms found in confirmed facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>

@@ -37,7 +37,7 @@ export const assessUserMatches = task({
   maxDuration: 300,
   run: async ({ userId, continuationToken }: { userId: string; continuationToken?: string }, options) => withAccountOperation(userId, "worker", async () => {
     const runId = options?.ctx.run.id ?? newId();
-    if (!process.env.OPENAI_API_KEY) return { assessed: 0 };
+    if (!process.env.TYPESAFE_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
     if (!state.profile.facts.some((fact) => fact.verified)) return { assessed: 0 };
     if (continuationToken) {
