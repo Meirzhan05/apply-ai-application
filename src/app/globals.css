@@ -2026,3 +2026,23 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
   .matches-workspace .sidebar { height: auto; overflow: visible; }
   .matches-feedback-rail { padding: 6px 16px; }
 }
+
+/* Automatically extracted resume facts use the existing profile typography and controls. */
+.resume-extraction-status { margin: 16px 0; }
+.resume-extraction-status p { margin: 6px 0; }
+.resume-fact-group { margin: 24px 0; }
+.resume-fact-group h4 { margin-bottom: 8px; }
+.resume-fact-list { list-style: none; margin: 0; padding: 0; }
+.resume-fact-list > li { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.resume-fact-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.resume-fact-content p { margin: 0; }
+.resume-fact-content textarea { width: 100%; min-height: 100px; margin: 8px 0; resize: vertical; }
+.resume-fact-actions { display: flex; flex-shrink: 0; gap: 4px; }
+.resume-fact-source { margin-top: 8px; font-size: 13px; }
+.resume-fact-source summary { cursor: pointer; }
+.resume-fact-source blockquote { margin: 8px 0; padding: 0; color: var(--muted); }
+.resume-fact-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.resume-fact-actions button:hover { background: var(--tint); color: var(--ink); }
+.resume-fact-actions button:focus-visible { outline: 2px solid var(--forest); outline-offset: 2px; }
+.resume-fact-actions button:disabled { opacity: .5; cursor: default; }
+.resume-facts-panel .add-fact button { white-space: nowrap; }

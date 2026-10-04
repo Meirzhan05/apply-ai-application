@@ -23,6 +23,30 @@ export interface VerifiedFact {
   verified: boolean;
   source: "resume" | "user";
   sourceAnchorId?: string;
+  status?: "accepted";
+  category?: ResumeFactCategory;
+  context?: string;
+  grounding?: {
+    version: 1;
+    sourceHash: string;
+    model: string;
+    acceptedText: string;
+    evidence: Array<{ anchorId: string; quote: string }>;
+  };
+}
+
+export type ResumeFactCategory = "experience" | "project" | "education" | "skill" | "certification" | "publication" | "other";
+
+export interface ResumeExtraction {
+  id: string;
+  status: "queued" | "extracting" | "checking" | "ready" | "failed" | "budget_limited";
+  requestedAt: string;
+  updatedAt: string;
+  attempts: number;
+  uploadSequence?: number;
+  filename: string;
+  error?: string;
+  pending?: { source: ResumeSource; document?: ResumeSourceDocument };
 }
 
 export type FactualDeclaration = "yes" | "no" | "unknown";
@@ -203,6 +227,8 @@ export interface Profile {
   resumeText?: string;
   resumeSource?: ResumeSource;
   resumeSourceDocument?: ResumeSourceDocument;
+  resumeExtraction?: ResumeExtraction;
+  resumeUploadSequence?: number;
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;

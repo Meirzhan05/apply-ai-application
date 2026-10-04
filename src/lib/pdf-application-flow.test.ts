@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { rm } from "node:fs/promises";
 import type { AppState } from "@/lib/types";
@@ -9,6 +10,13 @@ const fixture = vi.hoisted(() => ({
   parse: vi.fn(),
   browser: null as unknown,
 }));
+
+vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
+  (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
+vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {
+  const actual = await importOriginal<typeof import("@/lib/resume-extraction-jobs")>();
+  return { ...actual, dispatchResumeExtraction: async (userId: string, requestId: string) => actual.runResumeExtraction({ userId, requestId }) };
+});
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
   fixture.tasks.push({ task, payload }); return { id: `dispatch-${fixture.tasks.length}` };
@@ -116,21 +124,21 @@ afterEach(async () => {
   if (originalKey) await rm(`.data/resumes/${originalKey}`, { force: true });
 });
 
-it("uploads, confirms unbulleted qualifications, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
+it("uploads, automatically grounds unbulleted qualifications, drafts, renders, previews, downloads, and attaches the exact PDFBox artifact", async () => {
   const sourceBytes = await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL", positionedWordSpacing: true, sectionDivider: true });
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
+  expect(upload.status, await upload.clone().text()).toBe(202);
   expect(fixture.state!.profile.resumeSourceDocument?.text).toContain("Built a search index for 1,200 users.");
   const skillsAnchor = fixture.state!.profile.resumeSourceDocument!.anchors.find((anchor) => anchor.text === "Python, scikit-learn, and PostgreSQL")!;
   expect(skillsAnchor.candidateClaim).toBe(true);
   expect(fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === skillsAnchor.id)).toMatchObject({ verified: false, source: "resume" });
 
-  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId);
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
-  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every(isUsableFact)).toBe(true);
 
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
@@ -194,8 +202,8 @@ it("re-inspects a cached parser-v2 PDF before drafting and keeps confirmed sourc
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
-  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  expect(upload.status, await upload.clone().text()).toBe(202);
+  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId);
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   const originalAnchorIds = fixture.state!.profile.resumeSourceDocument!.anchors.map((anchor) => anchor.id);
@@ -224,7 +232,7 @@ it("re-inspects a cached parser-v2 PDF before drafting and keeps confirmed sourc
   expect(fixture.state!.profile.resumeText).toBe(fixture.state!.profile.resumeSourceDocument!.text);
   expect(fixture.state!.profile.resumeSourceDocument!.anchors.map((anchor) => anchor.id)).toEqual(originalAnchorIds);
   expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ id: fact.id, anchorId: fact.sourceAnchorId }))).toEqual(originalFactLinks);
-  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every(isUsableFact)).toBe(true);
   expect(application.packet?.resumeArtifact).toMatchObject({ format: "pdf", renderer: "apache-pdfbox", layoutValidation: { outcome: "passed" } });
 
   const priorPacket = structuredClone(application.packet);
@@ -263,7 +271,7 @@ it("blocks a pre-feature PDF at the worker instead of using a generic résumé",
   expect(fixture.parse).not.toHaveBeenCalled();
 });
 
-it("blocks a new enabled worker draft without an owner-checked original before model work", async () => {
+it("blocks a new enabled worker draft without an extracted original before model work", async () => {
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
   expect(selected.status, await selected.clone().text()).toBe(200);
@@ -272,7 +280,7 @@ it("blocks a new enabled worker draft without an owner-checked original before m
   expect(requested.status, await requested.clone().text()).toBe(200);
   const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
 
-  await expect(runDraft(handoff.payload)).rejects.toThrow(/upload and confirm your original pdf or docx/i);
+  await expect(runDraft(handoff.payload)).rejects.toThrow(/upload your original pdf or docx.*wait for fact extraction/i);
   expect(application.status).toBe("selected");
   expect(application.packet).toBeUndefined();
   expect(fixture.parse).not.toHaveBeenCalled();
@@ -283,8 +291,8 @@ it.each([undefined, "resume"] as const)("prepares exact original bytes after tai
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
-  const confirmed = await publicAction("onboarding", { facts: fixture.state!.profile.facts.map((fact) => ({ ...fact, verified: true })) });
+  expect(upload.status, await upload.clone().text()).toBe(202);
+  const confirmed = await publicAction("onboarding", { facts: fixture.state!.profile.facts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
 
   fixture.demo = false;

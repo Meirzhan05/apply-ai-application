@@ -1,3 +1,4 @@
+import { isUsableFact, factAnchorIds, evidenceBelongsToEntry } from "@/lib/fact-evidence";
 import type { Profile, ResumeSourceAnchor, ResumeSourceDocument, ResumeSourceEdit, ResumeSourcePlan, ResumeGroundingSnapshot, ResumeSourceClaim } from "@/lib/types";
 import { evidenceRequiredAnchorIds } from "@/lib/resume-source-semantics";
 
@@ -15,8 +16,9 @@ export function sourceWithCurrentEvidenceClaims<T extends ResumeSourceDocument>(
 
 export function confirmedFactIdsForAnchor(profile: Profile, anchor: ResumeSourceAnchor): string[] {
   const sourceText = normalized(anchor.text);
-  return profile.facts.filter((fact) => fact.verified && (
-    fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText))
+  return profile.facts.filter((fact) => isUsableFact(fact) && (
+    (fact.grounding ? fact.grounding.evidence.some(item => item.anchorId === anchor.id && normalized(item.quote).includes(sourceText))
+      : fact.sourceAnchorId === anchor.id || (!fact.sourceAnchorId && normalized(fact.text).includes(sourceText)))
   )).map((fact) => fact.id);
 }
 
@@ -29,7 +31,7 @@ function validateLegacySourcePlan(input: {
 }): boolean {
   const anchors = sourceEvidenceAnchors(input.source, 1);
   const anchorById = new Map(input.source.anchors.map((anchor) => [anchor.id, anchor]));
-  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const verified = new Map(input.profile.facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact]));
   const claims = new Map(input.claims.map((claim) => [claim.anchorId, claim]));
   const edits = new Map(input.edits.map((edit) => [edit.anchorId, edit]));
   if (claims.size !== input.claims.length || edits.size !== input.edits.length || anchors.length !== input.claims.length ||
@@ -61,7 +63,7 @@ export function validateSourcePlanEvidence(input: {
   if ((input.evidencePolicyVersion ?? 1) === 1) return validateLegacySourcePlan(input);
   const anchors = sourceEvidenceAnchors(input.source, input.evidencePolicyVersion ?? 1, input.profile.name);
   const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]));
-  const verified = new Map(input.profile.facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const verified = new Map(input.profile.facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact]));
   const claimById = new Map<string, ResumeSourceClaim>();
   const editById = new Map<string, ResumeSourceEdit>();
   if (input.claims.length !== anchors.length || input.claims.some((claim) => {
@@ -76,9 +78,11 @@ export function validateSourcePlanEvidence(input: {
     } else if (input.edits.some((edit) => edit.anchorId === anchor.id)) return true;
     for (const id of claim.factIds) {
       const fact = verified.get(id)!;
-      if (!fact.sourceAnchorId) continue;
-      const evidenceAnchor = input.source.anchors.find((candidate) => candidate.id === fact.sourceAnchorId);
-      if (!evidenceAnchor || evidenceAnchor.entryId !== anchor.entryId) return true;
+      if (fact.grounding && fact.grounding.sourceHash !== input.source.sourceHash) return true;
+      for (const id of factAnchorIds(fact)) {
+        const evidenceAnchor = input.source.anchors.find(candidate => candidate.id === id);
+        if (!evidenceAnchor || !evidenceBelongsToEntry(evidenceAnchor, anchor)) return true;
+      }
     }
     claimById.set(anchor.id, claim);
     return false;

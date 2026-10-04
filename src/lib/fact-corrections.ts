@@ -28,5 +28,23 @@ export function applyFactCorrection(current: VerifiedFact[], input: unknown): Ve
   if (expected.some(fact => !current.some(item => sameSourceFact(item, fact)))) {
     throw new Error("These source facts changed since you opened them. Your corrections are preserved; copy any wording you need, then close and review the current facts.");
   }
-  return current.map(fact => updated.find(item => item.id === fact.id) ?? fact);
+  return current.map(fact => {
+    const next = updated.find(item => item.id === fact.id);
+    return !next || sameSourceFact(fact, next) ? fact : next;
+  });
+}
+
+/** Evidence acceptance is server-owned; client payloads can only retain it unchanged. */
+export function parseEditableFacts(input: unknown, current: VerifiedFact[], expected?: unknown): VerifiedFact[] {
+  const parsed = z.array(sourceFactSchema).max(80).parse(input);
+  if (new Set(parsed.map(fact => fact.id)).size !== parsed.length) throw new Error("Facts must have unique identifiers.");
+  if (expected !== undefined) {
+    const previous = z.array(sourceFactSchema).max(80).parse(expected);
+    if (previous.length !== current.length || previous.some(fact => !current.some(item => sameSourceFact(item, fact))))
+      throw new Error("Your resume facts changed. Refresh your profile before saving these edits.");
+  }
+  return parsed.map(fact => {
+    const existing = current.find(item => sameSourceFact(item, fact));
+    return existing ?? fact;
+  });
 }

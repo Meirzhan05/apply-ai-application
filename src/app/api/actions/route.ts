@@ -15,7 +15,7 @@ import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
 import { returnToMaterials, returnToFinalReview } from "@/lib/material-review-recovery";
-import { applyFactCorrection } from "@/lib/fact-corrections";
+import { applyFactCorrection, parseEditableFacts } from "@/lib/fact-corrections";
 import { answerReviewHash } from "@/lib/answer-responsibility";
 import { assertJobEligible } from "@/lib/application-policy";
 import { reopenManualAttempt } from "@/lib/submission-recovery";
@@ -138,20 +138,7 @@ async function perform(
           graduationYear: z.string().max(20).optional(),
         })
         .parse(payload.questionnaire ?? payload);
-      const facts = payload.facts === undefined
-        ? undefined
-        : z
-            .array(
-              z.object({
-                id: z.string(),
-                text: z.string().min(1).max(500),
-                verified: z.boolean(),
-                source: z.enum(["resume", "user"]),
-                sourceAnchorId: z.string().max(160).optional(),
-              }),
-            )
-            .max(80)
-            .parse(payload.facts);
+      const facts = payload.facts === undefined ? undefined : parseEditableFacts(payload.facts, state.profile.facts, payload.expectedFacts);
       const currentAnchors = new Set(state.profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
       if (facts?.some((fact) => fact.sourceAnchorId && (!currentAnchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
       saveOnboarding(state.profile, { questionnaire, facts });
@@ -237,18 +224,8 @@ async function perform(
         new Intl.DateTimeFormat("en-US", { timeZone });
         profile.timeZone = timeZone;
       }
-      const facts = "factPatch" in payload ? applyFactCorrection(profile.facts, payload.factPatch) : "facts" in payload ? z
-          .array(
-            z.object({
-              id: z.string(),
-              text: z.string().min(1).max(500),
-              verified: z.boolean(),
-              source: z.enum(["resume", "user"]),
-              sourceAnchorId: z.string().max(160).optional(),
-            }),
-          )
-          .max(80)
-          .parse(payload.facts) : undefined;
+      const facts = "factPatch" in payload ? applyFactCorrection(profile.facts, payload.factPatch)
+        : "facts" in payload ? parseEditableFacts(payload.facts, profile.facts, payload.expectedFacts) : undefined;
       if (facts) {
         const anchors = new Set(profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
         if (facts.some((fact) => fact.sourceAnchorId && (!anchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");

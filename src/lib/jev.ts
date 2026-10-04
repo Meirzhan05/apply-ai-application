@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { z } from "zod";
 import type { Job, Profile } from "@/lib/types";
 import { explicitConflict } from "@/lib/matching";
@@ -42,9 +43,9 @@ export function redactedProfile(profile: Profile): Profile {
     preferredTitles: profile.preferredTitles.map(redact),
     preferredLocations: profile.preferredLocations.map(redact),
     workAuthorization: redact(profile.workAuthorization),
-    resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, sensitiveAnswers: {},
+    resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, resumeSourceDocument: undefined, resumeExtraction: undefined, resumeUploadSequence: undefined, sensitiveAnswers: {},
     onboarding: undefined, automationAuthorization: undefined,
-    facts: profile.facts.filter((fact) => fact.verified).map((fact) => ({ ...fact, text: redact(fact.text) })),
+    facts: profile.facts.filter(isUsableFact).map(fact => ({ id: fact.id, text: redact(fact.text), verified: true, source: fact.source })),
   };
 }
 
@@ -64,7 +65,7 @@ export async function jevTriage(
       skills: minimal.skills,
       graduationYear: minimal.graduationYear,
       verifiedFacts: minimal.facts
-        .filter((fact) => fact.verified)
+        .filter((fact) => isUsableFact(fact))
         .map((fact) => fact.text),
     },
     job: {

@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -11,6 +12,13 @@ const fixture = vi.hoisted(() => ({
   parse: vi.fn(),
   browser: null as unknown,
 }));
+
+vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
+  (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
+vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {
+  const actual = await importOriginal<typeof import("@/lib/resume-extraction-jobs")>();
+  return { ...actual, dispatchResumeExtraction: async (userId: string, requestId: string) => actual.runResumeExtraction({ userId, requestId }) };
+});
 
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: async (task: string, payload: { userId: string; applicationId: string; runToken?: string }) => {
   fixture.tasks.push({ task, payload }); return { id: `dispatch-${fixture.tasks.length}` };
@@ -134,15 +142,15 @@ async function exerciseDocxFlow(multiPage: boolean, headerText?: string) {
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
+  expect(upload.status, await upload.clone().text()).toBe(202);
   const source = fixture.state!.profile.resumeSourceDocument!;
   expect(source.text).toContain("Built a recommender with 92% precision.");
   expect(source.anchors.some((anchor) => anchor.kind === "bullet" && anchor.candidateClaim)).toBe(true);
 
-  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId);
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
-  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every((fact) => fact.verified)).toBe(true);
+  expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every(isUsableFact)).toBe(true);
   const storedDegree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
   storedDegree.candidateClaim = false;
 
@@ -225,7 +233,7 @@ it("blocks a new draft when an older stored source flag hides an unconfirmed unb
   const form = new FormData();
   form.append("file", new File([new Uint8Array(sourceBytes)], "source.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
-  expect(upload.status, await upload.clone().text()).toBe(200);
+  expect(upload.status, await upload.clone().text()).toBe(202);
   const source = fixture.state!.profile.resumeSourceDocument!;
   const degree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
   const degreeFact = fixture.state!.profile.facts.find((fact) => fact.sourceAnchorId === degree.id)!;

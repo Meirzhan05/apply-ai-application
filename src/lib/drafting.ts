@@ -1,3 +1,4 @@
+import { isUsableFact, factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { draftAutonomousEssays } from "@/lib/autonomous-essays";
 import { originalResumeManifest, readOriginalResume } from "@/lib/original-resume";
 import { meterModelResponse } from "@/lib/model-usage";
@@ -40,7 +41,7 @@ function relevantFacts(profile: Profile, job: Job): VerifiedFact[] {
   const terms =
     `${job.title} ${job.description} ${job.requirements.join(" ")}`.toLowerCase();
   return profile.facts
-    .filter((fact) => fact.verified)
+    .filter((fact) => isUsableFact(fact))
     .sort((a, b) => {
       const score = (fact: VerifiedFact) =>
         fact.text
@@ -62,7 +63,7 @@ export async function draftPacket(
   const originalResume = originalResumeOnly ? originalResumeManifest(profile) : undefined;
   if (!originalResumeOnly && profile.resumeSource && !profile.resumeSourceDocument) {
     const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
-    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
+    throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect its original layout and extract facts before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
   }
   if (!originalResumeOnly && options && profile.resumeSourceDocument && !(options.preserveResume && previous?.resumeArtifact))
     assertSourceInformationComplete(profile.resumeSourceDocument, profile);
@@ -73,7 +74,7 @@ export async function draftPacket(
   }
   if (facts.length === 0 && !originalResumeOnly)
     throw new Error(
-      "Confirm at least one profile fact before preparing an application.",
+      "Upload a resume or add at least one experience fact before preparing an application.",
     );
   let preparedDocxBaseline: PreparedDocxResumeBaseline | undefined;
   let validatedSourceRender: { plan: NonNullable<ApplicationPacket["resumeSourcePlan"]>; format: "pdf"; rendered: Awaited<ReturnType<typeof renderPdfResume>> }
@@ -241,7 +242,7 @@ export function validatePacket(
     }
   }
   if (packet.profileHash && packet.profileHash !== packetProfileHash(profile)) throw new Error("Your confirmed profile changed. Prepare and review a new packet.");
-  const verified = profile.facts.filter((fact) => fact.verified);
+  const verified = profile.facts.filter((fact) => isUsableFact(fact));
   const verifiedIds = new Set(verified.map((fact) => fact.id));
   if (packet.resumeMode === "original" && (!packet.originalResume || hashJson(packet.originalResume) !== hashJson(originalResumeManifest(profile)) || packet.resumeDocument || packet.resumeSourcePlan || packet.resumeArtifact || packet.resumeLines.length || packet.files?.find((file) => file.kind === "resume")?.storageKey !== packet.originalResume.storageKey)) throw new Error("The confirmed original résumé changed. Prepare a new application.");
   if (packet.resumeMode !== "original" && !packet.resumeLines.length)
@@ -254,7 +255,7 @@ export function validatePacket(
     validateResumeArtifact(profile, packet);
     const source = profile.resumeSourceDocument;
     const plan = packet.resumeSourcePlan;
-    const factsHash = hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) })));
+    const factsHash = hashJson(factEvidenceSnapshot(profile.facts));
     if (!source || source.support.status !== "candidate" || !plan || plan.sourceHash !== source.sourceHash || plan.representationVersion !== source.version ||
       plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== factsHash || plan.settingsHash !== hashJson(profile.automationSettings ?? null) ||
       plan.grounding.findings.some((finding) => finding.outcome !== "supported") ||

@@ -1,3 +1,4 @@
+import { ensureResumeExtraction } from "@/lib/resume-extraction-jobs";
 import { NextResponse } from "next/server";
 import { currentUserId, loadState } from "@/lib/repository";
 import { publicState } from "@/lib/public-state";
@@ -14,7 +15,9 @@ export async function GET(request?: Request) {
     if (version && request?.headers.get("if-none-match") === version) {
       return new Response(null, { status: 304, headers });
     }
-    const state = await loadState(userId);
+
+    let state = await loadState(userId);
+    if (await ensureResumeExtraction(userId, state.profile)) state = await loadState(userId);
     if (!isDemo()) {
       const { data } = await adminSupabase().auth.admin.getUserById(userId);
       state.profile.email = data.user?.email || "";

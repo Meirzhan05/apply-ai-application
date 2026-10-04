@@ -83,7 +83,7 @@ it("gives the writer full source context and saves an anchored, grounded edit pl
   expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0 });
 });
 
-it("asks for confirmation of source claims before writing and never treats source text as evidence", async () => {
+it("requires usable source evidence before writing and never treats source text as verified evidence", async () => {
   const { profile, job, source } = await fixture();
   profile.facts[0].verified = false;
 

@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import OpenAI from "openai";
@@ -45,7 +46,7 @@ export function resumeDraftDiagnosticMessage(diagnostics: ResumeDraftDiagnostics
   }
   const details = diagnostics.findings.filter((finding) => finding.outcome !== "supported").map((finding) => {
     const outcome = finding.outcome === "contradiction" ? "conflicts with confirmed evidence" : finding.outcome === "uncertain" ? "could not be verified" : "is unsupported by the confirmed facts";
-    const request = (finding.requiredInformation ?? "add or confirm the missing information in your profile, then retry").replace(/[.!?]+$/, "");
+    const request = (finding.requiredInformation ?? "add or correct the missing information in your profile, then retry").replace(/[.!?]+$/, "");
     return `“${finding.affectedText}” ${outcome}: ${finding.reason} Please ${request}.`;
   });
   return ["The resume needs confirmed information before it can be attached.", ...details].join(" ");
@@ -63,7 +64,7 @@ export function resumeContentHash(doc: ResumeDocument): string {
 }
 export function resumeEvidenceHash(profile: Profile, doc: ResumeDocument): string {
   const ids = [...new Set([...resumeFactIds(doc), ...doc.omitted.flatMap((field) => field.factIds)])].sort();
-  return hashJson(ids.map((id) => profile.facts.find((fact) => fact.id === id && fact.verified)).map((fact) => fact ? { id: fact.id, text: fact.text } : null));
+  return hashJson(ids.map((id) => profile.facts.find((fact) => fact.id === id && isUsableFact(fact))).map((fact) => fact ? { id: fact.id, text: fact.text } : null));
 }
 export function sealResume(profile: Profile, doc: ResumeDocument): ResumeDocument {
   return { ...doc, contentHash: resumeContentHash(doc), evidenceHash: resumeEvidenceHash(profile, doc) };
@@ -78,19 +79,19 @@ export function validateResumeDocument(profile: Profile, doc: ResumeDocument): v
     doc.contentHash !== resumeContentHash(doc) || doc.evidenceHash !== resumeEvidenceHash(profile, doc)) throw new Error("The resume changed or lost its verified sources. Rebuild it before review.");
   const fields = [...resumeFields(doc), ...doc.omitted];
   if (!resumeFactIds(doc).length || fields.some((field) => !field.text.trim() || !field.factIds.length ||
-    new Set(field.factIds).size !== field.factIds.length || field.factIds.some((id) => !profile.facts.some((fact) => fact.verified && fact.id === id)))) throw new Error("A resume claim has no confirmed source fact.");
+    new Set(field.factIds).size !== field.factIds.length || field.factIds.some((id) => !profile.facts.some((fact) => isUsableFact(fact) && fact.id === id)))) throw new Error("A resume claim has no confirmed source fact.");
   const entries = [...doc.education, ...doc.experience, ...doc.projects];
   if (entries.some((entry) => !entry.heading.text.trim() || entryFields(entry).some((field) => !field.text && field.factIds.length)) ||
     [doc.education, doc.experience, doc.projects].some((group) => new Set(group.map((entry) => entry.heading.text.trim().toLowerCase())).size !== group.length)) throw new Error("Resume entries need distinct headings and valid source references.");
   if (doc.omitted.some((field) => !["relevance", "page-length"].includes(field.reason))) throw new Error("Invalid omitted resume content.");
   if (doc.grounding && (doc.grounding.version !== 1 || !Number.isInteger(doc.grounding.writerAttempts) || doc.grounding.writerAttempts < 1 || doc.grounding.writerAttempts > 3 ||
     doc.grounding.checkerAttempts !== doc.grounding.writerAttempts || doc.grounding.repairAttempts !== doc.grounding.writerAttempts - 1 ||
-    doc.grounding.findings.some((finding) => finding.outcome !== "supported" || !finding.claimId || !finding.affectedText || !finding.reason || finding.evidenceFactIds.some((id) => !profile.facts.some((fact) => fact.verified && fact.id === id)))))
+    doc.grounding.findings.some((finding) => finding.outcome !== "supported" || !finding.claimId || !finding.affectedText || !finding.reason || finding.evidenceFactIds.some((id) => !profile.facts.some((fact) => isUsableFact(fact) && fact.id === id)))))
     throw new Error("The saved resume grounding report is incomplete or no longer matches confirmed facts.");
   for (const link of doc.links) {
     let url: URL;
     try { url = new URL(link.text); } catch { throw new Error("Resume links must be confirmed HTTPS URLs."); }
-    if (url.protocol !== "https:" || url.username || url.password || !profile.facts.some((fact) => fact.verified && link.factIds.includes(fact.id) && fact.text.includes(link.text))) throw new Error("Resume links must be confirmed HTTPS URLs.");
+    if (url.protocol !== "https:" || url.username || url.password || !profile.facts.some((fact) => isUsableFact(fact) && link.factIds.includes(fact.id) && fact.text.includes(link.text))) throw new Error("Resume links must be confirmed HTTPS URLs.");
   }
 }
 
@@ -141,7 +142,7 @@ function prepareWriterOutput(profile: Profile, parsed: unknown): ResumeDocument 
   value.projects.sort((a, b) => Math.max(0, ...b.bullets.map((bullet) => bullet.relevance)) - Math.max(0, ...a.bullets.map((bullet) => bullet.relevance)));
   let doc: ResumeDocument = { ...value, version: 1, templateVersion: "classic-1", layout: "standard", model: DEFAULT_AI_MODEL, omitted: [], contentHash: "", evidenceHash: "" };
   const used = new Set(resumeFactIds(doc));
-  doc.omitted = profile.facts.filter((fact) => fact.verified && !used.has(fact.id)).map((fact) => ({ text: fact.text, factIds: [fact.id], reason: "relevance" }));
+  doc.omitted = profile.facts.filter((fact) => isUsableFact(fact) && !used.has(fact.id)).map((fact) => ({ text: fact.text, factIds: [fact.id], reason: "relevance" }));
   doc = sealResume(profile, doc);
   validateResumeDocument(profile, doc);
   return doc;
@@ -256,8 +257,8 @@ function exhausted(findings: ResumeGroundingFinding[], counts: ResumeDraftAttemp
 export async function draftResumeDocument(profile: Profile, job: Job, deadline: number, beforeModelCall?: () => Promise<void>): Promise<ResumeDocument> {
   const counts: ResumeDraftAttempts = { writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0 };
   if (!process.env.OPENAI_API_KEY) throw new ResumeDraftError({ version: 1, outcome: "technical_failure", ...counts, findings: [], requiredInformation: [], technicalFailure: "provider" }, "Resume drafting is unavailable. Configure OpenAI, then retry; your existing packet is preserved.");
-  const facts = profile.facts.filter((fact) => fact.verified).map(({ id, text }) => ({ id, text }));
-  if (!facts.length) throw new Error("Confirm resume facts in your profile before drafting.");
+  const facts = profile.facts.filter((fact) => isUsableFact(fact)).map(({ id, text }) => ({ id, text }));
+  if (!facts.length) throw new Error("Upload a resume or add facts in your profile before drafting.");
   const remaining = () => {
     if (deadline - Date.now() < 1000) throw providerFailure(counts, deadline);
     return Math.min(45_000, deadline - Date.now());

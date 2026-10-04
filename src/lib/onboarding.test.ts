@@ -27,7 +27,7 @@ describe("autonomous onboarding", () => {
     expect(onboardingCompleteness(profile).complete).toBe(false);
     expect(onboardingCompleteness(profile).missing).toContain("workAuthorization");
     expect(onboardingCompleteness(profile).missing).toContain("requiresSponsorship");
-    expect(onboardingMissingLabel("confirmedResumeFact")).toBe("one confirmed résumé fact");
+    expect(onboardingMissingLabel("confirmedResumeFact")).toBe("resume experience");
   });
 
   it("persists confirmed facts, explicit legal answers, settings, and a versioned activation", () => {
@@ -85,7 +85,7 @@ describe("autonomous onboarding", () => {
     expect(profile.onboarding?.questionnaire.workAuthorization).toBe("no");
   });
 
-  it("rejects activation until a required fact is confirmed", () => {
+  it("rejects activation until experience facts are available", () => {
     const profile = initialDemoState().profile;
     saveOnboarding(profile, {
       questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" },
@@ -93,7 +93,7 @@ describe("autonomous onboarding", () => {
     });
 
     expect(() => activateAutomation(profile, "applicant-confirmed")).toThrow(
-      /confirm at least one resume fact/i,
+      /upload a resume or add at least one experience fact/i,
     );
     expect(automationStatus(profile).enabled).toBe(false);
   });

@@ -31,7 +31,11 @@ export function assertAutonomousDestination(application: Application, form: Pick
   }
 }
 
-export function autonomyProfileHash(profile: Profile): string { return hashJson(profile); }
+export function autonomyProfileHash(profile: Profile): string {
+  const { resumeExtraction: _processing, resumeUploadSequence: _upload, ...active } = profile;
+  void _processing; void _upload;
+  return hashJson(active);
+}
 export function autonomyJobHash(job: Job): string {
   const material = { ...job };
   delete material.lastCheckedAt;

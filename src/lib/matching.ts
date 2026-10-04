@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import { meterModelResponse } from "@/lib/model-usage";
 import { DEFAULT_AI_MODEL } from "@/lib/ai-model";
 import OpenAI from "openai";
@@ -74,7 +75,7 @@ export function assessMatchLocally(
       model: "rules",
     };
   }
-  const verified = profile.facts.filter((fact) => fact.verified);
+  const verified = profile.facts.filter((fact) => isUsableFact(fact));
   const profileWords = words(
     [
       profile.headline,
@@ -150,7 +151,7 @@ export async function assessMatch(
   const base = assessMatchLocally(profile, job);
   if (base.category === "excluded" || !process.env.OPENAI_API_KEY) return base;
   const facts = profile.facts
-    .filter((fact) => fact.verified)
+    .filter((fact) => isUsableFact(fact))
     .map((fact) => ({ id: fact.id, text: fact.text }));
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
   let freshnessGuardPassed = !options?.beforeModelCall;

@@ -1,3 +1,4 @@
+import { factEvidenceSnapshot } from "@/lib/fact-evidence";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
@@ -362,7 +363,7 @@ export async function renderDocxSourceBytes(originalBytes: Buffer, source: DocxS
 export async function renderDocxResume(profile: Profile, plan: ResumeSourcePlan, deadline = Date.now() + 90_000, beforeRender?: () => Promise<void>, preparedBaseline?: PreparedDocxResumeBaseline): Promise<RenderedDocxResume> {
   const source = profile.resumeSourceDocument;
   if (!source || source.format !== "docx" || source.support.status !== "candidate" || source.sourceHash !== profile.resumeSource?.sha256) throw new Error(source?.support.reason ?? "The inspected DOCX source is no longer available. Upload and inspect it again.");
-  if (plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== hashJson(profile.facts.filter((fact) => fact.verified).map(({ id, text, source, sourceAnchorId }) => ({ id, text, source, ...(sourceAnchorId ? { sourceAnchorId } : {}) }))) || plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error("The DOCX edit plan is stale. Prepare a new draft after reviewing your source and facts.");
+  if (plan.profileHash !== sourceProfileHash(profile) || plan.factsHash !== hashJson(factEvidenceSnapshot(profile.facts)) || plan.settingsHash !== hashJson(profile.automationSettings ?? null)) throw new Error("The DOCX edit plan is stale. Prepare a new draft after reviewing your source and facts.");
   await beforeRender?.();
   const originalBytes = await readOriginalResume(profile.id, originalResumeManifest(profile));
     const baseline = preparedBaseline ?? await prepareDocxResumeBaseline(originalBytes, source, deadline, beforeRender, profile.name);

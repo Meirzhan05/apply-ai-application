@@ -1,3 +1,4 @@
+import { isUsableFact } from "@/lib/fact-evidence";
 import type { Job, MatchAssessment, Profile } from "./types";
 
 function words(text: string) {
@@ -9,7 +10,7 @@ export function matchEvidence(profile: Profile, job: Job, assessment?: MatchAsse
   const comparisons = assessment?.category === "excluded" ? [] : job.requirements.flatMap(requirement => {
     const terms = [...words(requirement)].filter(term => term.length > 2);
     if (!terms.length) return [];
-    const fact = profile.facts.find(item => item.verified && terms.every(term => words(item.text).has(term)));
+    const fact = profile.facts.find(item => isUsableFact(item) && terms.every(term => words(item.text).has(term)));
     return fact ? [{ requirement, fact: fact.text, factId: fact.id }] : [];
   });
   const listedSkills = assessment?.category === "excluded" ? [] : job.requirements.flatMap(requirement => {

@@ -1,6 +1,6 @@
 import { prepareAutonomousFormEssays } from "@/lib/autonomous-essays";
 import { withModelUsageContext } from "@/lib/model-usage";
-import { assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
+import { autonomyProfileHash, assertAutonomous, assertAutonomousDestination, sealAutonomousPacket, unsupportedAutonomousForm } from "@/lib/autonomous-policy";
 import { queueAutonomousSubmission, saveAutonomousSubmission } from "@/lib/autonomous-application";
 import { hashJson, newId } from "@/lib/crypto";
 import { loadState, mutateState } from "@/lib/repository";
@@ -24,7 +24,7 @@ export type RunPayload = { userId: string; applicationId: string; runToken?: str
 
 async function assertTailoringSourceReady(profile: Profile): Promise<void> {
   if (!profile.resumeSource || !profile.resumeFileName)
-    throw new Error("Upload and confirm your original PDF or DOCX résumé before tailoring. Choose the original-résumé setting only when you want to attach unchanged source bytes.");
+    throw new Error("Upload your original PDF or DOCX résumé and wait for fact extraction before tailoring. Choose the original-résumé setting only when you want to attach unchanged source bytes.");
   const format = profile.resumeSource.mimeType === "application/pdf" ? "PDF" : "DOCX";
   if (!profile.resumeSourceDocument)
     throw new Error(`This saved ${format} predates source-aware résumé review. Re-upload it to inspect and confirm its original layout before tailoring; choose the original-résumé setting to attach its exact unchanged bytes.`);
@@ -120,7 +120,7 @@ async function currentDraftRun(userId: string, applicationId: string, runToken: 
     const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     const eligibilityJob = importedAutonomyJob(app, job);
-    if (Boolean(app.autonomousAuthorization) !== expected.autonomous || hashJson(state.profile) !== expected.profileHash ||
+    if (Boolean(app.autonomousAuthorization) !== expected.autonomous || autonomyProfileHash(state.profile) !== expected.profileHash ||
       hashJson(eligibilityJob) !== expected.jobHash || app.packetHash !== expected.packetHash || hashJson(app.packet ?? null) !== expected.packetContentHash)
       throw new Error("The profile, job, or prior packet changed before provider work. Start a new draft.");
     assertJobEligible(state.profile, eligibilityJob);
@@ -164,7 +164,7 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((item) => item.id === app.jobId), "draft");
     const expectedRunInputs = {
       claimedAt: app.runWorkerClaimedAt,
-      profileHash: hashJson(state.profile),
+      profileHash: autonomyProfileHash(state.profile),
       jobHash: hashJson(eligibilityJob),
       packetHash: app.packetHash,
       packetContentHash: hashJson(app.packet ?? null),

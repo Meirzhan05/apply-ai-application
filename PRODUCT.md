@@ -24,11 +24,11 @@ A reviewed application workflow: the agent discovers and prepares opportunities,
 
 ## Operating Context
 
-Users upload a resume, confirm profile facts and search preferences, review matches, choose jobs, edit tailored materials, and inspect a live browser before submission. Some sites require login, CAPTCHA, or manual takeover.
+Users upload a resume, receive automatically extracted resume facts and save search preferences, review matches, choose jobs, edit tailored materials, and inspect a live browser before submission. Some sites require login, CAPTCHA, or manual takeover.
 
 ## Capabilities and Constraints
 
-- Each student’s search agent starts automatically after they confirm their profile facts and save search preferences. It searches for that student, verifies public employer postings, and refreshes every four hours. New accounts start with no matches; discovered jobs and manually imported links remain private to their owner. A daily email digest summarizes that owner’s results.
+- Each student’s search agent starts automatically after resume facts are automatically extracted and they save search preferences. It searches for that student, verifies public employer postings, and refreshes every four hours. New accounts start with no matches; discovered jobs and manually imported links remain private to their owner. A daily email digest summarizes that owner’s results.
 - Begin with public Greenhouse, Lever, and Ashby postings and imported links. Broader feeds require authorized access.
 - No unauthorized LinkedIn or Indeed automation.
 - Unlimited initiated applications per user per day for now, one active browser run per user, and a global monthly service-spend ceiling of $500.

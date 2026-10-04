@@ -104,3 +104,32 @@ it("blocks oversized pages before the renderer allocates large comparison images
 
   expect(source.support).toMatchObject({ status: "blocked", reason: expect.stringMatching(/bounded page-size profile/i) });
 });
+
+
+it("keeps wrapped bullet lines under their employer while preserving original operators", async () => {
+  for (const separateBulletMarker of [undefined, "same-column"] as const) {
+    const bytes = await createPdfSourceFixture({ wrappedBullet: true, separateBulletMarker });
+    const source = await parsePdfSource(bytes);
+    const employer = source.anchors.find(a => a.text.startsWith("Orbit Labs"))!;
+    const first = source.anchors.find(a => a.text === "Built a search index")!;
+    const continuation = source.anchors.find(a => a.text === "for 1,200 users.")!;
+    const next = source.anchors.find(a => a.text === "Improved retrieval speed by 22%.")!;
+    expect([first.entryId, continuation.entryId, next.entryId]).toEqual([employer.entryId, employer.entryId, employer.entryId]);
+    expect(continuation.entryHeading).toBe(employer.entryHeading);
+    expect(first.editable).toBe(false);
+    expect(next.editable).toBe(true);
+    expect(source.support.status).toBe("candidate");
+    expect((await parsePdfSource(bytes)).anchors.map(a => [a.id, a.operatorFingerprint, a.boundsPt])).toEqual(source.anchors.map(a => [a.id, a.operatorFingerprint, a.boundsPt]));
+  }
+});
+
+it("starts a new employer after a wrapped bullet and declines ambiguous font changes", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ wrappedBullet: true, nextEmployer: true }));
+  const orbit = source.anchors.find(a => a.text.startsWith("Orbit Labs"))!;
+  const nova = source.anchors.find(a => a.text.startsWith("Nova Inc."))!;
+  const next = source.anchors.find(a => a.text === "Improved retrieval speed by 22%.")!;
+  expect(nova.entryId).not.toBe(orbit.entryId);
+  expect(next.entryId).toBe(nova.entryId);
+  const ambiguous = await parsePdfSource(await createPdfSourceFixture({ wrappedBullet: true, continuationBold: true }));
+  expect(ambiguous.anchors.find(a => a.text === "Built a search index")!.entryId).not.toBe(ambiguous.anchors.find(a => a.text === "for 1,200 users.")!.entryId);
+});

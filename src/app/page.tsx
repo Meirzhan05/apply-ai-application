@@ -1,4 +1,6 @@
 "use client";
+import { ResumeFacts } from "@/components/resume-facts";
+import { isUsableFact } from "@/lib/fact-evidence";
 import { AutonomousApplicationStatus, autonomousOutcome, importedPreflightHandoff, importedPreflightRecheckAvailable } from "@/components/autonomous-application-status";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createWorkspaceRefresh, type WorkspaceConnection } from "@/lib/workspace-refresh";
@@ -9,7 +11,7 @@ import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
-import { hasSourcePreservingResume, ResumeComparison, ResumeSourceSupportNotice } from "@/components/resume-comparison";
+import { hasSourcePreservingResume, ResumeComparison } from "@/components/resume-comparison";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { WorkspaceDialog } from "@/app/workspace-dialog";
@@ -140,7 +142,6 @@ export default function Dashboard() {
   const pendingApplicationFocus = useRef<string | null>(null);
   const [applicationOutcome, setApplicationOutcome] = useState<{ id: string; message: string } | null>(null);
   const [profileDraft, setProfileDraft] = useState<Profile | null>(null);
-  const [factText, setFactText] = useState("");
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
@@ -193,6 +194,11 @@ export default function Dashboard() {
   }, [data?.profile.id, collection, filter, search, sort, importFields, importOpen, shortcutsEnabled, dismissDraft, dismissJobId]);
   const act = async (action: string, payload: Record<string, unknown> = {}) => {
     if (!data) return null;
+    // Fact edits save through ResumeFacts; an older settings draft must not replace a new extraction.
+    if (action === "profile" && "id" in payload) {
+      const { facts: _facts, resumeExtraction: _extraction, ...settings } = payload;
+      void _facts; void _extraction; payload = settings;
+    }
     if (actionCheck) { setError(actionCheck.message); return null; }
     setFeedbackNotice(current => current?.batchResult ? { ...current, batchResult: undefined } : current);
     const launcher = document.activeElement;
@@ -328,7 +334,7 @@ export default function Dashboard() {
   const existingImport = error === "This link is already in your catalog." ? roleForPosting(jobs, importFields.url) : undefined;
   const importReady = !importCheck.error && (!importCheck.manual || Boolean(importFields.company.trim() && importFields.title.trim()));
   const incompleteFacts = (data?.profile.facts ?? []).filter(
-    (fact) => !fact.verified,
+    (fact) => !isUsableFact(fact),
   ).length;
   const needsAction = applications.filter(needsApplicationReview);
   const discoveryEvents = (data?.discovery?.events ?? [])
@@ -584,7 +590,7 @@ export default function Dashboard() {
                                 <small>
                                   Verified source: {line.factIds.map((id) => data.profile.facts.find((fact) => fact.id === id)?.text ?? "Source unavailable").join("; ")}
                                 </small>
-                                {activeApp.status === "draft_review" && <button type="button" className="text-button" onClick={() => correctClaim(line.factIds, line.text)}>Correct or unconfirm source facts</button>}
+                                {activeApp.status === "draft_review" && <button type="button" className="text-button" onClick={() => correctClaim(line.factIds, line.text)}>Correct source facts</button>}
                               </p>
                             ))}
                           </div>
@@ -819,7 +825,7 @@ export default function Dashboard() {
   };
   const emptyPersonalView = !data.profile.demo && jobs.length === 0 && !search.trim() && filter === "all" && collection === "all";
   const personalStatus = <PersonalSearchStatus profile={data.profile} search={data.personalSearch} onConfigure={() => {
-    pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => fact.verified && fact.text.trim()) ? "confirmed-resume-facts" : "search-preferences";
+    pendingSetupFocus.current = !data.profile.name.trim() ? "setup-basic-name" : !data.profile.facts.some(fact => isUsableFact(fact)) ? "confirmed-resume-facts" : "search-preferences";
     navigateSection("profile");
   }} onImport={() => { setError(""); setImportOpen(true); }} />;
   return (
@@ -1136,13 +1142,13 @@ export default function Dashboard() {
                           <details className="fit-evidence">
                           <summary aria-label={`Review fit evidence for ${context}${checkLabel}`}>Review fit evidence{checkLabel}</summary>
                           {evidence.comparisons.length > 0 && <div className="evidence-comparison">
-                            <strong>Posting terms found in confirmed facts</strong>
+                            <strong>Posting terms found in available profile facts</strong>
                             <p>Shared wording helps you compare. It does not establish that you meet a requirement.</p>
                             <dl>{evidence.comparisons.map(item => <div key={item.requirement}><dt>{item.requirement}</dt><dd>{item.fact}</dd></div>)}</dl>
                             <button className="text-button" onClick={() => navigateSection("profile")}>Review profile evidence</button>
                           </div>}
                           {!evidence.comparisons.length && evidence.listedSkills.length > 0 && <div className="evidence-comparison">
-                            <p>This overlap comes from skills you listed. No confirmed fact excerpt is linked to these terms here.</p>
+                            <p>This overlap comes from skills you listed. No source fact excerpt is linked to these terms here.</p>
                             <button className="text-button" onClick={() => navigateSection("profile")}>Review profile evidence</button>
                           </div>}
                           <div className={`match-reasons ${evidence.detailedReasons.length ? "" : "only-checks"}`}>
@@ -1159,7 +1165,7 @@ export default function Dashboard() {
                               <ul>
                                 {(match?.gaps.length || match?.uncertainty.length
                                   ? [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])]
-                                  : ["No obvious gaps from confirmed facts."]
+                                  : ["No obvious gaps from available profile facts."]
                                 ).map((gap, i) => (
                                   <li key={i}>{gap}</li>
                                 ))}
@@ -1281,7 +1287,7 @@ export default function Dashboard() {
                   <div className="empty">
                     <Search size={28} />
                     <h3>{search.trim() ? "No roles match your search" : filter !== "all" ? `No ${filter} fit roles in ${collection === "all" ? "all roles" : collection}` : collection === "saved" ? "Your shortlist starts here" : collection === "dismissed" ? "No dismissed roles" : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Your personal search starts here" : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Finding opportunities for you" : !data.profile.demo ? data.personalSearch?.status === "budget_limited" ? "Personal search is paused" : data.personalSearch?.status === "failed" ? "Your search needs another check" : data.personalSearch?.status === "complete" ? "No verified openings yet" : "Your profile is ready to search" : "No jobs in this view"}</h3>
-                    {!emptyPersonalView && <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Confirm your experience and save your search preferences. Your agent will start automatically." : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Your agent is searching employer job boards using your profile and preferences. Results appear after the postings are verified." : !data.profile.demo && data.personalSearch?.status === "complete" ? "Your last search found no verified openings in this view. Your agent will search again every four hours. You can update your preferences or import a specific job link." : "Try another filter or import a job link."}</p>}
+                    {!emptyPersonalView && <p>{search.trim() ? "Try a different title or company, or clear your search." : filter !== "all" ? "Try another fit category, or show any fit in this collection." : collection === "saved" ? "Save roles from your matches to compare them here." : collection === "dismissed" ? "Roles you dismiss will appear here. You can restore them at any time." : !data.profile.demo && !personalSearchReadiness(data.profile).ready ? "Upload your resume and save your search preferences. Your agent will start automatically." : !data.profile.demo && ["queued", "searching"].includes(data.personalSearch?.status ?? "") ? "Your agent is searching employer job boards using your profile and preferences. Results appear after the postings are verified." : !data.profile.demo && data.personalSearch?.status === "complete" ? "Your last search found no verified openings in this view. Your agent will search again every four hours. You can update your preferences or import a specific job link." : "Try another filter or import a job link."}</p>}
                     {emptyPersonalView && personalStatus}
                     {search.trim() && <button className="outline-action" onClick={() => setSearch("")}>Clear search</button>}
                     {filter !== "all" && <button className="outline-action" onClick={() => setFilter("all")}>Show any fit in this collection</button>}
@@ -1296,7 +1302,7 @@ export default function Dashboard() {
               <div className={`autonomy-strip ${data.automation.enabled ? "enabled" : data.automation.paused ? "paused" : "inactive"}`}>
                 <div>
                   <strong>{data.automation.enabled ? "Applications can run automatically" : data.automation.paused ? "Automation is paused" : data.onboarding.complete ? "Automation is off" : "Finish setup before enabling automation"}</strong>
-                  <p>{data.onboarding.complete ? "Your confirmed facts and saved settings are ready." : `Onboarding is incomplete: ${data.onboarding.missing.map(onboardingMissingLabel).join(", ")}.`}</p>
+                  <p>{data.onboarding.complete ? "Your available profile facts and saved settings are ready." : `Onboarding is incomplete: ${data.onboarding.missing.map(onboardingMissingLabel).join(", ")}.`}</p>
                 </div>
                 <button className="text-button" onClick={() => navigateSection("settings")}>Review settings <ArrowRight size={15} /></button>
               </div>
@@ -1333,17 +1339,17 @@ export default function Dashboard() {
                   )}
                 </section>
               )}
-              {(incompleteFacts > 0 || !data.profile.facts.some(fact => fact.verified)) && (
+              {(incompleteFacts > 0 || !data.profile.facts.some(isUsableFact)) && (
                 <div className="review-banner">
                   <div className="banner-icon">
                     <FileText size={27} />
                   </div>
                   <div>
-                    <strong>Review your profile facts</strong>
+                    <strong>Your resume experience</strong>
                     <p>
                       {incompleteFacts
-                        ? `${incompleteFacts} facts need your confirmation.`
-                        : "Upload a resume or add confirmed experience to improve your matches."}
+                        ? `${incompleteFacts} resume facts are awaiting automatic extraction.`
+                        : "Upload a resume or add your experience to improve your matches."}
                     </p>
                   </div>
                   <button
@@ -1515,12 +1521,12 @@ export default function Dashboard() {
                         <p>{activeApp.queuedRun.reason === "budget" ? "The service spending limit is full. Your request is saved and will start when budget is available." : activeApp.queuedRun.reason === "active_run" ? "Finish or cancel your active browser session. This saved request will start afterward." : "Your saved request is waiting for a worker."}</p>
                       </div>
                     )}
-                    {activeApp.status === "drafting" && <p role="status">Preparing your materials from confirmed facts…</p>}
+                    {activeApp.status === "drafting" && <p role="status">Preparing your materials from available profile facts…</p>}
                     {!activeAppIsAutomatic && activeApp.status === "selected" && !activeApp.queuedRun && (
                       <div className="step-card">
                         <h3>Prepare your application materials</h3>
                         <p>
-                          The agent will use confirmed facts to build a tailored
+                          The agent will use available profile facts to build a tailored
                           resume and write essays for your confirmation. You
                           provide personal, authorization and consent answers.
                         </p>
@@ -1944,7 +1950,7 @@ export default function Dashboard() {
                   Show only remote roles
                 </label>
                 <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
-                <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
+                <p className="muted">Your personal search starts automatically once you save these preferences and your resume facts are ready. Leave titles and locations blank to let your agent use your experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
                 {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
@@ -2028,7 +2034,7 @@ export default function Dashboard() {
                       <option value="enabled">Generate when supported</option>
                     </select>
                   </label>
-                  <p className="muted">Essay answers use confirmed facts and general truthful language when personal detail is unavailable.</p>
+                  <p className="muted">Essay answers use available profile facts and general truthful language when personal detail is unavailable.</p>
                 </>}
                 <button
                   className="dark-button"
@@ -2044,7 +2050,7 @@ export default function Dashboard() {
               </div>
               {section === "settings" && <section className="profile-card autonomy-card">
                 <h3>Automation authorization</h3>
-                <p className="muted">Automation acts only within your current confirmed facts and settings. You can pause future work at any time.</p>
+                <p className="muted">Automation acts only within your current available profile facts and settings. You can pause future work at any time.</p>
                 <div className={`automation-state ${data.automation.enabled ? "on" : data.automation.paused ? "paused" : "off"}`} role="status">
                   <strong>{data.automation.enabled ? "Enabled" : data.automation.paused ? "Paused" : "Not enabled"}</strong>
                   <span>Settings version {data.automation.version}</span>
@@ -2056,134 +2062,10 @@ export default function Dashboard() {
                     {data.automation.paused ? "Resume automation" : "Enable automation"}
                   </button>
                 )}
-                {!data.onboarding.complete && <p className="muted">Complete the required answers and confirm at least one resume fact before enabling automation.</p>}
+                {!data.onboarding.complete && <p className="muted">Complete the required answers and upload your resume before enabling automation.</p>}
               </section>}
-              <div className="profile-card">
-                <h3 id="confirmed-resume-facts" tabIndex={-1}>Resume and confirmed facts</h3>
-                <p className="muted">
-                  Uploading extracts text for your review. It never confirms
-                  claims automatically. Source-preserving PDF and DOCX layouts
-                  support up to eight pages and two text columns per page; DOCX
-                  page count is checked after rendering.
-                </p>
-                <label className="upload-box">
-                  <FileText size={24} />
-                  <span>
-                    {profileDraft.resumeFileName ||
-                      "Upload PDF or DOCX · 5 MB max"}
-                  </span>
-                  <input
-                    type="file"
-                    accept=".pdf,.docx"
-                    onChange={async (event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      setBusy("upload");
-                      setError("");
-                      const body = new FormData();
-                      body.set("file", file);
-                      try {
-                        const response = await fetch("/api/resume", {
-                          method: "POST",
-                          body,
-                        });
-                        const result = await response.json();
-                        if (!response.ok) throw new Error(result.error);
-                        const next = await reload();
-                        setProfileDraft(structuredClone(next.profile));
-                      } catch (err) {
-                        setError(
-                          err instanceof Error ? err.message : "Upload failed.",
-                        );
-                      } finally {
-                        setBusy("");
-                      }
-                    }}
-                  />
-                </label>
-                {profileDraft.resumeSourceDocument && <ResumeSourceSupportNotice source={profileDraft.resumeSourceDocument} />}
-                {profileDraft.resumeText && (
-                  <details className="resume-text">
-                    <summary>Review extracted resume text</summary>
-                    <pre>{profileDraft.resumeText}</pre>
-                  </details>
-                )}
-                <div className="facts-head">
-                  <h4>Facts the agent may use</h4>
-                  <small>Check each fact before use</small>
-                </div>
-                {profileDraft.facts.map((fact) => (
-                  <div className="fact-row" key={fact.id}>
-                    <input
-                      type="checkbox"
-                      checked={fact.verified}
-                      aria-label={`Confirm ${fact.text}`}
-                      onChange={(event) =>
-                        setProfileDraft({
-                          ...profileDraft,
-                          facts: profileDraft.facts.map((item) =>
-                            item.id === fact.id
-                              ? { ...item, verified: event.target.checked }
-                              : item,
-                          ),
-                        })
-                      }
-                    />
-                    <span>{fact.text}</span>
-                    <button
-                      onClick={() =>
-                        setProfileDraft({
-                          ...profileDraft,
-                          facts: profileDraft.facts.filter(
-                            (item) => item.id !== fact.id,
-                          ),
-                        })
-                      }
-                      aria-label="Remove fact"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                ))}
-                <div className="add-fact">
-                  <input
-                    placeholder="Add a specific experience or project fact"
-                    value={factText}
-                    onChange={(event) => setFactText(event.target.value)}
-                  />
-                  <button
-                    onClick={() => {
-                      if (!factText.trim()) return;
-                      setProfileDraft({
-                        ...profileDraft,
-                        facts: [
-                          ...profileDraft.facts,
-                          {
-                            id: crypto.randomUUID(),
-                            text: factText.trim(),
-                            source: "user",
-                            verified: true,
-                          },
-                        ],
-                      });
-                      setFactText("");
-                    }}
-                  >
-                    Add
-                  </button>
-                </div>
-                <button
-                  className="outline-action"
-                  onClick={() =>
-                    act(
-                      "profile",
-                      profileDraft as unknown as Record<string, unknown>,
-                    )
-                  }
-                >
-                  Save facts
-                </button>
-              </div>
+              <ResumeFacts profile={data.profile} busy={Boolean(busy)} onUploaded={reload}
+                onSave={(facts, expectedFacts) => act("profile", { facts, expectedFacts })} />
             </div>
             {section === "settings" && <section className="profile-card">
               <h3>Help evaluate match quality</h3>

@@ -1,3 +1,4 @@
+import { isUsableFact, factAnchorIds, evidenceBelongsToEntry } from "@/lib/fact-evidence";
 import { createHash } from "node:crypto";
 import JSZip from "jszip";
 import { DOMParser, XMLSerializer, type Node as XmlDomNode, type Element as XmlDomElement, type Document as XmlDomDocument } from "@xmldom/xmldom";
@@ -326,7 +327,7 @@ export async function parseDocxSourceAsync(bytes: Buffer, trustedName?: string):
     }
   }
   if (!sections.length) sections.push(activeSection);
-  if (!anchors.some((anchor) => anchor.candidateClaim)) reason ??= "This DOCX has no clearly separated résumé claim paragraphs to confirm and preserve. Add ordinary experience, project, or education paragraphs before tailoring.";
+  if (!anchors.some((anchor) => anchor.candidateClaim)) reason ??= "This DOCX has no clearly separated résumé claim paragraphs to extract and preserve. Add ordinary experience, project, or education paragraphs before tailoring.";
   const completeText = textLines.join("\n").trim();
   if (!completeText) throw new Error("This DOCX has no readable text. Add facts manually in your profile.");
   if (completeText.length > MAX_SOURCE_TEXT) throw new Error(`This DOCX contains ${completeText.length.toLocaleString()} readable characters, above the ${MAX_SOURCE_TEXT.toLocaleString()}-character source-context limit. Shorten the résumé or upload a supported version; no text was dropped.`);
@@ -352,11 +353,11 @@ export function suggestDocxFacts(source: DocxSourceRepresentation): DocxFactSugg
 }
 
 export async function applyDocxEdits(bytes: Buffer, source: DocxSourceRepresentation, edits: ResumeSourceEdit[], facts: VerifiedFact[]): Promise<Buffer> {
-  if (bytesHash(bytes) !== source.sourceHash || source.version !== 1 || source.format !== "docx") throw new Error("The original DOCX no longer matches its inspected source. Upload and confirm it again.");
+  if (bytesHash(bytes) !== source.sourceHash || source.version !== 1 || source.format !== "docx") throw new Error("The original DOCX no longer matches its inspected source. Upload it again.");
   if (source.support.status !== "candidate") throw new Error(source.support.reason ?? "This DOCX layout is unsupported. Upload a DOCX with supported fonts and no more than two columns; the renderer checks its actual page count (up to eight pages).");
   if (!Array.isArray(edits) || edits.length > source.anchors.length) throw new Error("The source edit plan is invalid.");
   const byId = new Map(source.anchors.map((anchor) => [anchor.id, anchor]));
-  const factsById = new Map(facts.filter((fact) => fact.verified).map((fact) => [fact.id, fact]));
+  const factsById = new Map(facts.filter((fact) => isUsableFact(fact)).map((fact) => [fact.id, fact]));
   const seen = new Set<string>();
   for (const edit of edits) {
     const target = byId.get(edit.anchorId);
@@ -365,9 +366,10 @@ export async function applyDocxEdits(bytes: Buffer, source: DocxSourceRepresenta
     for (const factId of edit.factIds) {
       const fact = factsById.get(factId);
       if (!fact) throw new Error("A source edit cites a fact that has not been confirmed.");
-      if (fact.sourceAnchorId) {
-        const evidenceAnchor = byId.get(fact.sourceAnchorId);
-        if (!evidenceAnchor || evidenceAnchor.entryId !== target.entryId) throw new Error("A source edit cites evidence from a different source entry.");
+      if (fact.grounding && fact.grounding.sourceHash !== source.sourceHash) throw new Error("A source edit cites stale resume evidence.");
+      for (const anchorId of factAnchorIds(fact)) {
+        const evidenceAnchor = byId.get(anchorId);
+        if (!evidenceAnchor || !evidenceBelongsToEntry(evidenceAnchor, target)) throw new Error("A source edit cites evidence from a different source entry.");
       }
     }
     seen.add(edit.anchorId);
@@ -379,7 +381,7 @@ export async function applyDocxEdits(bytes: Buffer, source: DocxSourceRepresenta
   for (const edit of edits) {
     const target = byId.get(edit.anchorId)!;
     const paragraph = paragraphs[target.paragraphIndex];
-    if (!paragraph || styleHash(paragraph) !== target.styleHash || normalized(paragraphText(paragraph).replace(bulletText, "")) !== normalized(target.text)) throw new Error("A source paragraph changed after inspection. Upload and confirm the original DOCX again.");
+    if (!paragraph || styleHash(paragraph) !== target.styleHash || normalized(paragraphText(paragraph).replace(bulletText, "")) !== normalized(target.text)) throw new Error("A source paragraph changed after inspection. Upload the original DOCX again.");
     const textNode = descendants(paragraph, "t")[0];
     if (!textNode) throw new Error("This source paragraph is no longer safely editable.");
     while (textNode.firstChild) textNode.removeChild(textNode.firstChild);
