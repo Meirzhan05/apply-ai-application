@@ -6,12 +6,13 @@ import { reserveServiceBudget } from "@/lib/budget";
 import { withModelUsageContext } from "@/lib/model-usage";
 import { withAccountOperation } from "@/lib/account-lifecycle";
 import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
-import { applyResumeProfile, extractResumeProfile } from "@/lib/resume-profile-extraction";
+import { applyResumeProfile, extractResumeProfile, type ResumeProfileDetail } from "@/lib/resume-profile-extraction";
+import { resumeProfileBasics } from "@/lib/resume-profile-basics";
 import { extractResumeFacts } from "@/lib/resume-fact-extraction";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import { readOriginalResume } from "@/lib/original-resume";
-import { bumpAutomationVersion, saveOnboarding } from "@/lib/onboarding";
+import { saveOnboarding } from "@/lib/onboarding";
 import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import type { Profile, ResumeExtraction } from "@/lib/types";
@@ -19,6 +20,47 @@ import type { Profile, ResumeExtraction } from "@/lib/types";
 const processing = new Set(["queued", "extracting", "checking"]);
 export function resumeExtractionPending(profile: Profile): boolean {
   return Boolean(profile.resumeExtraction && processing.has(profile.resumeExtraction.status));
+}
+
+export function fillImportedCurrentLocation(profile: Profile, source: NonNullable<Profile["resumeSourceDocument"]>, groundedLocation?: string): void {
+  if (!groundedLocation || Object.values(profile.currentLocation ?? {}).some(value => value.trim())) return;
+  const location = resumeProfileBasics({ ...source, text: groundedLocation }).currentLocation;
+  if (location) profile.currentLocation = location;
+}
+
+export function fillReusedOnboardingBasics(profile: Profile, source: NonNullable<Profile["resumeSourceDocument"]>): void {
+  for (const key of ["name", "contactEmail", "phone"] as const) {
+    const previous = profile.detailSources?.[key];
+    if (!profile[key]?.trim() && previous?.source === "resume" && previous.sourceHash === source.sourceHash) profile[key] = previous.value;
+  }
+  if (!profile.links?.length) profile.links = [...new Set([profile.linkedinUrl, profile.githubUrl, profile.portfolioUrl].filter((value): value is string => Boolean(value)))];
+  const location = profile.detailSources?.location;
+  if (location?.source === "resume" && location.sourceHash === source.sourceHash) fillImportedCurrentLocation(profile, source, location.value);
+}
+
+function applyOnboardingBasics(profile: Profile, source: NonNullable<Profile["resumeSourceDocument"]>, details: ResumeProfileDetail[], incoming: NonNullable<ResumeExtraction["pending"]>["onboardingImport"]): void {
+  if (!incoming) return;
+  const values = new Map(details.map(detail => [detail.key, detail.value]));
+  const baseline = incoming.baseline;
+  const fields = { name: values.get("name") ?? "", contactEmail: values.get("contactEmail") ?? "", phone: values.get("phone") ?? "" };
+  profile.detailSources ??= {};
+  for (const key of ["name", "contactEmail", "phone"] as const) {
+    // The queued snapshot lets replacement import update old answers, but never overwrite a later edit.
+    if (profile[key] !== baseline[key] || (incoming.reused && profile[key]?.trim())) continue;
+    profile[key] = fields[key];
+    const detail = details.find(item => item.key === key);
+    if (detail) profile.detailSources[key] = { source: "resume", value: fields[key], sourceHash: source.sourceHash, anchorId: detail.anchorId, quote: detail.quote };
+    else delete profile.detailSources[key];
+  }
+  if (!incoming.reused && JSON.stringify(profile.links) === JSON.stringify(baseline.links)) {
+    for (const key of ["linkedinUrl", "githubUrl", "portfolioUrl"] as const) {
+      if (profile[key] !== baseline[key]) continue;
+      // Mark unchanged prior values as replaceable resume data. applyResumeProfile
+      // will overwrite or clear them from the newly grounded detail set.
+      profile.detailSources[key] = { source: "resume", value: profile[key] ?? "", sourceHash: source.sourceHash };
+    }
+  }
+  fillImportedCurrentLocation(profile, source, values.get("location"));
 }
 
 export async function dispatchResumeExtraction(userId: string, requestId: string): Promise<void> {
@@ -94,10 +136,11 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
   const profile = (await loadState(userId)).profile;
   const job = profile.resumeExtraction!;
   const pending = job.pending!;
+  const profileNameAtStart = profile.name;
   let extractionName = profile.name;
   const assertCurrent = async () => {
     const current = (await loadState(userId)).profile;
-    if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status) || current.name !== extractionName)
+    if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status) || current.name !== profileNameAtStart)
       throw new Error("The uploaded resume or profile name changed during extraction.");
   };
   try {
@@ -120,21 +163,13 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
     }
     source = sourceWithCurrentEvidenceClaims(source, profile.name);
     if (source.sourceHash !== pending.source.sha256) throw new Error("The resume no longer matches its stored original. Upload it again.");
+    let details: ResumeProfileDetail[] | undefined;
     if (job.profileSourceHash !== source.sourceHash) {
-      const details = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeProfile(source!, { userId, beforeModelCall: assertCurrent, deadline }));
-      const savedName = await mutateState(userId, state => {
-        const current = state.profile;
-        const extraction = current.resumeExtraction;
-        if (extraction?.id !== requestId || !processing.has(extraction.status)) return undefined;
-        if (current.name !== extractionName) throw new Error("Your profile name changed. Retry extraction using the current name.");
-        applyResumeProfile(current, source!, details);
-        extraction.profileSourceHash = source!.sourceHash;
-        current.updatedAt = extraction.updatedAt = new Date().toISOString();
-        bumpAutomationVersion(current);
-        return current.name;
-      });
-      if (savedName === undefined) return { ready: false };
-      extractionName = savedName;
+      details = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeProfile(source!, { userId, beforeModelCall: assertCurrent, deadline }));
+      const current = (await loadState(userId)).profile;
+      if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status)) return { ready: false };
+      if (current.name !== profileNameAtStart) throw new Error("Your profile name changed. Retry extraction using the current name.");
+      extractionName = details.find(detail => detail.key === "name")?.value ?? extractionName;
     }
     const facts = await withModelUsageContext({ userId, runId: requestId, backgroundJobId: `resume-facts:${requestId}` }, () => extractResumeFacts(source!, {
       userId, trustedName: extractionName, deadline, beforeModelCall: assertCurrent,
@@ -147,16 +182,24 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
     const published = await mutateState(userId, state => {
       const current = state.profile;
       if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status)) return false;
-      if (current.name !== extractionName) throw new Error("Your profile name changed. Retry extraction using the current name.");
+      if (current.name !== profileNameAtStart) throw new Error("Your profile name changed. Retry extraction using the current name.");
       const manual = current.facts.filter(fact => fact.source === "user");
       if (manual.length + facts.length > 80) throw new Error("The resume and manually added facts exceed 80 facts. Shorten the resume or remove unused manual facts, then retry.");
+      if (details) {
+        applyOnboardingBasics(current, source!, details, pending.onboardingImport);
+        applyResumeProfile(current, source!, details);
+        const incoming = pending.onboardingImport;
+        if (incoming && JSON.stringify(current.links) === JSON.stringify(incoming.baseline.links) && (!incoming.reused || !current.links?.length))
+          current.links = [...new Set([current.linkedinUrl, current.githubUrl, current.portfolioUrl].filter((value): value is string => Boolean(value)))];
+      }
       current.resumeFileName = job.filename; current.resumeSource = pending.source;
       current.resumeSourceDocument = source; current.resumeText = source.text;
       saveOnboarding(current, { facts: [...manual, ...facts] });
       const now = new Date().toISOString();
-      current.resumeExtraction = { ...current.resumeExtraction, status: "ready", pending: undefined, error: undefined, updatedAt: now };
+      current.resumeExtraction = { ...current.resumeExtraction, status: "ready", pending: undefined, error: undefined,
+        ...(details ? { profileSourceHash: source!.sourceHash } : {}), updatedAt: now };
       current.updatedAt = now; state.matchCache = {};
-      state.activity.unshift({ id: newId(), at: now, label: "Resume facts ready", detail: `${facts.length} facts extracted and grounded in your resume. No confirmation needed.` });
+      state.activity.unshift({ id: newId(), at: now, label: "Resume facts ready", detail: `${facts.length} facts extracted and grounded in your resume. Review your profile before finishing onboarding.` });
       return true;
     });
     if (published && !isDemo()) {

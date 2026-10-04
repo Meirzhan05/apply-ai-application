@@ -46,6 +46,19 @@ it("manual edits and intentional clears win over learned values; sign-in email s
   expect(profileDetailValue(profile, "contactEmail")).toBe("");
 });
 
+it("freezes canonical legacy links without guessing an ambiguous portfolio or resurrecting cleared links", () => {
+  const profile = initialDemoState().profile;
+  profile.links = ["https://linkedin.com/in/candidate", "https://github.com/candidate", "https://unrelated.example.com/project"];
+  expect(profileMemorySnapshot(profile)).toMatchObject({
+    linkedinUrl: "https://linkedin.com/in/candidate",
+    githubUrl: "https://github.com/candidate",
+    portfolioUrl: "",
+  });
+  profile.linkedinUrl = "";
+  profile.detailSources = { linkedinUrl: { source: "user", value: "" } };
+  expect(profileMemorySnapshot(profile).linkedinUrl).toBe("");
+});
+
 it("preserves automatic authorization and manual packet snapshots through later learning and packet revisions", async () => {
   const state = initialDemoState(); const app = selectApplication(state, state.jobs[0].id, state.profile.id);
   const fact = state.profile.facts[0];

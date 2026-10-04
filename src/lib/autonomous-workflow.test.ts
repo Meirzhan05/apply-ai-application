@@ -3,7 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { AppState, Application } from "@/lib/types";
 const fixture = vi.hoisted(() => ({ state: null as AppState | null, pending: [] as Array<{ task: string; payload: { userId: string; applicationId: string; runToken?: string } }>, queue: Promise.resolve(), saved: [] as AppState[], triggerFailure: "", afterLoad: undefined as undefined | ((state: AppState) => void | Promise<void>), afterSession: undefined as undefined | (() => void | Promise<void>), budget: true, storageDemo: false, captureAttachment: false, attached: [] as Array<{ bytes: Buffer; filename: string; mimeType: string }>, originalKey: "", originalBytes: null as Buffer | null, extractedText: "Confirmed experience from the uploaded résumé.", beforeUsageStart: undefined as undefined | ((operation: string) => Promise<void>), prepare: vi.fn(), preflight: vi.fn(), submit: vi.fn(), cancel: vi.fn(), refresh: vi.fn(), parse: vi.fn() }));
-vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(), extractResumeProfile: async () => [] }));
+vi.mock("@/lib/resume-profile-extraction", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/resume-profile-extraction")>(),
+  extractResumeProfile: async (source: import("@/lib/types").ResumeSourceDocument) => {
+    const anchor = source.anchors.find(item => item.text.includes("Avery Chen"));
+    return anchor ? [{ key: "name" as const, value: "Avery Chen", anchorId: anchor.id, quote: anchor.text }] : [];
+  },
+}));
 vi.mock("@/lib/resume-fact-extraction", () => ({ extractResumeFacts: async (source: import("@/lib/types").ResumeSourceDocument, options: { trustedName?: string }) =>
   (await import("@/lib/test-support/grounded-resume-facts")).groundedResumeFacts(source, options.trustedName) }));
 vi.mock("@/lib/resume-extraction-jobs", async importOriginal => {
@@ -33,7 +39,9 @@ vi.mock("@/lib/latex-compiler", () => ({ fitResume: async (_profile: unknown, do
 vi.mock("@/lib/browser-runner", () => ({ prepareBrowser: fixture.prepare, preflightBrowser: fixture.preflight, submitBrowser: fixture.submit, cancelBrowser: fixture.cancel, refreshBrowserSnapshot: fixture.refresh, repairEducationFields: vi.fn(), fillApprovedBrowserAnswers: vi.fn(), checkBrowserSubmission: vi.fn() }));
 import { latexFixture } from "@/lib/latex-fixture";
 import { initialDemoState } from "@/lib/demo-data";
-import { saveOnboarding, activateAutomation } from "@/lib/onboarding";
+import { activateAutomation } from "@/lib/onboarding";
+import { completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { runDraft, runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
 import { readModelUsage } from "@/lib/model-usage";
@@ -45,10 +53,38 @@ import { recordApplicationBlocker } from "@/lib/application-blockers";
 import { resumeGroundingOutput } from "@/lib/fixtures/resume-grounding";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
+import { parsePdfSource } from "@/lib/pdf-source";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
+
+it.each(["London, United Kingdom", "Remote", "Worldwide"])("rejects application actions for unverified US job destinations: %s", async (location) => {
+  const state = fixture.state!;
+  state.jobs = [{ ...state.jobs[0], location, remote: true }];
+  for (const name of ["select", "startAutonomous"]) {
+    const response = await action(name, { jobId: state.jobs[0].id });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toMatch(/US.*destination|destination.*US/);
+  }
+  expect(state.applications).toEqual([]);
+  expect(fixture.pending).toEqual([]);
+  expect(fixture.prepare).not.toHaveBeenCalled();
+});
+
+it.each(["London, United Kingdom", "Remote"])("blocks a selected application after the destination changes: %s", async (location) => {
+  const state = fixture.state!;
+  const selected = await action("select", { jobId: state.jobs[0].id });
+  expect(selected.status).toBe(200);
+  const app = state.applications[0];
+  state.jobs = [{ ...state.jobs[0], location }];
+  const response = await action("draft", { applicationId: app.id });
+  expect(response.status).toBe(400);
+  expect(await response.text()).toMatch(/US.*destination|destination.*US/);
+  expect(app.status).toBe("selected");
+  expect(app.jobSnapshot?.location).toContain("New York");
+  expect(fixture.pending).toEqual([]);
+});
 function resumeUploadRequest(extension: "pdf" | "docx", bytes: Buffer) {
   const mimeType = extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const form = new FormData();
@@ -77,6 +113,16 @@ async function uploadAndConfirmPdfSource() {
   const confirmedFacts = profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await action("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  const draft = await action("onboardingDraft", {
+    name: profile.name || "Synthetic Applicant", email: profile.email || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" },
+    preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review",
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const review = resumeOnboardingStatus(profile);
+  const finished = await action("finishOnboarding", { reviewHash: review.reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
   const settings = await action("automationSettings", { settings: { resumeTailoring: true } });
   expect(settings.status, await settings.clone().text()).toBe(200);
   const activated = await action("activateAutomation", { reason: "Confirmed the uploaded source facts." });
@@ -85,18 +131,33 @@ async function uploadAndConfirmPdfSource() {
   fixture.originalBytes = bytes;
   return { bytes, source: profile.resumeSourceDocument! };
 }
+async function finishUploadedOnboarding() {
+  const profile = fixture.state!.profile;
+  const draft = await action("onboardingDraft", {
+    name: profile.name || "Synthetic Applicant", email: profile.email || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" },
+    preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", requiresSponsorship: "no", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review",
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const review = resumeOnboardingStatus(profile);
+  const finished = await action("finishOnboarding", { reviewHash: review.reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
+}
 beforeAll(async () => { await ensurePdfTestRuntime(); }, 150_000);
 beforeEach(async () => {
   vi.clearAllMocks(); fixture.cancel.mockResolvedValue(undefined); fixture.refresh.mockReset(); fixture.pending = []; fixture.saved = []; fixture.triggerFailure = ""; fixture.afterLoad = undefined; fixture.afterSession = undefined; fixture.queue = Promise.resolve(); fixture.budget = true; fixture.storageDemo = false; fixture.captureAttachment = false; fixture.attached = []; fixture.extractedText = "Confirmed experience from the uploaded résumé."; fixture.beforeUsageStart = undefined;
   vi.stubEnv("DEMO_MODE", "true"); vi.stubEnv("OPENAI_API_KEY", "fixture"); vi.stubEnv("EMAIL_FROM", "");
   const source = latexFixture(); fixture.state = initialDemoState(); fixture.state.profile = source.profile; fixture.state.applications = [];
-  saveOnboarding(fixture.state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } }); activateAutomation(fixture.state.profile, "controlled-test");
   const sourceBytes = await createPdfSourceFixture();
   fixture.originalBytes = sourceBytes;
   fixture.originalKey = `${fixture.state.profile.id}/${randomUUID()}.pdf`;
   await saveDemoOriginalResume(fixture.originalKey, sourceBytes);
   fixture.state.profile.resumeFileName = "my-original.pdf";
   fixture.state.profile.resumeSource = { storageKey: fixture.originalKey, sha256: createHash("sha256").update(sourceBytes).digest("hex"), size: sourceBytes.length, mimeType: "application/pdf" };
+  fixture.state.profile.resumeSourceDocument = await parsePdfSource(sourceBytes);
+  fixture.state.profile = completeUploadedOnboardingFixture(fixture.state.profile);
+  activateAutomation(fixture.state.profile, "controlled-test");
   fixture.state.profile.automationSettings!.resumeTailoring = false;
   fixture.parse.mockImplementation(async (input) => {
     const format = input.text.format.name;
@@ -168,6 +229,8 @@ it("stops a manual résumé draft before checking when confirmed profile inputs 
 });
 it("carries a successful resume repair through artifact preview, download, and employer attachment", async () => {
   const { source } = await uploadAndConfirmPdfSource();
+  expect(fixture.state!.profile.name).toBe("Avery Chen");
+  const importedProfile = structuredClone(fixture.state!.profile);
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
   fixture.captureAttachment = true;
   fixture.parse.mockImplementation(async (input) => {
@@ -198,6 +261,7 @@ it("carries a successful resume repair through artifact preview, download, and e
 
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
   await progress();
+  expect(fixture.state!.profile).toEqual(importedProfile);
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("submitted");
   expect(app.approvals).toEqual([]);
@@ -217,6 +281,19 @@ it("carries a successful resume repair through artifact preview, download, and e
   expect(app.form?.fields.find((field) => field.identifier === "resume")?.fileHashes).toEqual([`${resume.filename}:${resume.size}:${resume.sha256}`]);
   expect(preview.headers.get("content-disposition")).toContain("inline");
   expect(download.headers.get("content-disposition")).toContain("attachment");
+}, 30_000);
+it("keeps corrected imported names and source claims stable after fresh authorization and preparation", async () => {
+  await uploadAndConfirmPdfSource();
+  const corrected = await action("profile", { name: "Avery Example" });
+  expect(corrected.status, await corrected.clone().text()).toBe(200);
+  const activated = await action("activateAutomation", { reason: "Use my corrected profile name." });
+  expect(activated.status, await activated.clone().text()).toBe(200);
+  const importedProfile = structuredClone(fixture.state!.profile);
+  const started = await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
+  expect(started.status, await started.clone().text()).toBe(200);
+  await step();
+  expect(fixture.state!.profile).toEqual(importedProfile);
+  expect(fixture.state!.applications[0]).toMatchObject({ status: "filling", packet: { resumeArtifact: { format: "pdf" } } });
 }, 30_000);
 it("stops repeated unsupported AI wording with an actionable blocker and schedules no attachment", async () => {
   const { source } = await uploadAndConfirmPdfSource();
@@ -310,6 +387,7 @@ it.each(["pdf", "docx"] as const)("uses the uploaded original %s for manual prep
     expect(profile.facts.some((fact) => !fact.verified)).toBe(true);
     expect((await action("profile", { facts: profile.facts.filter((fact) => !fact.verified) })).status).toBe(200);
     expect(profile.facts.some((fact) => fact.verified)).toBe(false);
+    await finishUploadedOnboarding();
     expect((await action("automationSettings", { settings: { resumeTailoring: false } })).status).toBe(200);
     fixture.storageDemo = false;
 
@@ -655,6 +733,8 @@ it.each(["pdf", "docx"])("uses the exact confirmed uploaded %s when tailoring is
   const key = `${profile.id}/00000000-0000-4000-8000-000000000001.${extension}`;
   await mkdir(`.data/resumes/${profile.id}`, { recursive: true }); await writeFile(`.data/resumes/${key}`, bytes);
   profile.resumeFileName = `my-original.${extension}`; profile.resumeSource = { storageKey: key, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, mimeType: extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  if (profile.resumeSourceDocument) profile.resumeSourceDocument = { ...profile.resumeSourceDocument, sourceHash: profile.resumeSource.sha256 };
+  Object.assign(profile, completeUploadedOnboardingFixture(profile));
   profile.automationSettings!.resumeTailoring = false; activateAutomation(profile, "original preference confirmed");
   fixture.captureAttachment = true;
   try {
@@ -1027,7 +1107,7 @@ it("runs the imported posting check and queues the same application when the pub
     return {
       form: { version: 1 as const, url: job.applyUrl, fields: [{ label: "Email", value: "", identifier: "email", kind: "email", required: true, valid: false }], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: false, blockers: ["Correct or complete the field: Email"], submitControl: { label: "Submit", identifier: "submit", action: `${job.applyUrl}/submit`, method: "post" } },
       contextHash: "route-context",
-      postingContext: { title: job.title, company: job.company, text: `${job.title} at ${job.company}` },
+      postingContext: { title: job.title, company: job.company, location: "New York, NY", text: `${job.title} at ${job.company}` },
       postingEvidence: { postingUrl: job.url, postingIdentityHash: "route-posting-identity", title: job.title, company: job.company, markers: [job.title, job.company], identityHash: "route-identity" },
       sessionId: "route-preflight",
       provider: "browser-use" as const,

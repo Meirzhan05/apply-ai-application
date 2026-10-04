@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { createOwnerScanTransport } from "@/lib/owner-scan-test-transport";
 import type { AppState } from "@/lib/types";
 
@@ -20,6 +21,8 @@ function request() {
 
 function stateWithQueuedRun(userId: string): AppState {
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
+  state.profile.id = userId;
   const job = state.jobs[0];
   const app = {
     id: "last-owner-app",

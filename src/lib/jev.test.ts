@@ -14,9 +14,11 @@ describe("Jev data minimization", () => {
     profile.linkedinUrl = "https://linkedin.com/in/private"; profile.githubUrl = "https://github.com/private";
     profile.savedAnswers = [{ key: "languages", question: "Languages spoken", value: "private answer", applicationId: "private", savedAt: "now" }];
     profile.detailSources = { contactEmail: { source: "resume", value: profile.contactEmail, quote: "private source quote" } };
+    profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+    profile.willingToRelocate = false;
     const result = redactedProfile(profile);
     const serialized = JSON.stringify(result);
-    for (const value of [profile.name, profile.email, profile.phone, "linkedin.com", "private", "Private address"]) expect(serialized).not.toContain(value);
+    for (const value of [profile.name, profile.email, profile.phone, "linkedin.com", "private", "Private address", "Almaty", "Kazakhstan", "willingToRelocate"]) expect(serialized).not.toContain(value);
     expect(result.facts[0].text).toContain("Python projects");
     expect(result.sensitiveAnswers).toEqual({});
   });

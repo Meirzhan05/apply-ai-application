@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { activateAutomation, saveOnboarding } from "@/lib/onboarding";
 import type { AppState, Job } from "@/lib/types";
 
@@ -15,6 +16,7 @@ import { runImportedPreflight, preflightStatus } from "@/lib/import-preflight";
 
 function setup() {
   const state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   saveOnboarding(state.profile, { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" } });
   activateAutomation(state.profile, "preflight test");
   const job: Job = { ...state.jobs[0], id: "imported-public", source: "imported", sourceId: "public-42", sourceLabel: "Imported link", company: "Example Employer", title: "Data Analyst", url: "https://careers.example.com/jobs/42", applyUrl: "https://careers.example.com/jobs/42/apply", importUrl: "https://careers.example.com/jobs/42", importCheck: { status: "manual", checkedAt: "2026-10-01T00:00:00.000Z" } };
@@ -33,7 +35,7 @@ function setup() {
 const result = (overrides: Record<string, unknown> = {}) => ({
   form: { version: 1 as const, url: "https://careers.example.com/jobs/42/application", fields: [{ label: "Email", value: "", identifier: "email", kind: "email", required: true, valid: false }], attachments: [], capturedAt: new Date().toISOString(), readyToSubmit: false, blockers: ["Correct or complete the field: Email"], submitControl: { label: "Submit application", identifier: "submit", action: "https://careers.example.com/jobs/42/submit", method: "post" } },
   contextHash: "context-proof",
-  postingContext: { title: "Data Analyst", company: "Example Employer", text: "Data Analyst at Example Employer" },
+  postingContext: { title: "Data Analyst", company: "Example Employer", location: "New York, NY", text: "Data Analyst at Example Employer" },
   postingEvidence: { postingUrl: "https://careers.example.com/jobs/42", postingIdentityHash: "posting-identity-proof", title: "Data Analyst", company: "Example Employer", markers: ["Data Analyst", "Example Employer"], identityHash: "identity-proof" },
   sessionId: "preflight-session",
   provider: "browser-use" as const,
@@ -44,6 +46,25 @@ describe("imported employer preflight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setup();
+  });
+
+  it.each(["Remote", "Worldwide", "London, United Kingdom"])("blocks filling when an inspected manual posting has no verified US destination: %s", async (location) => {
+    const { job } = setup();
+    job.location = "Location not listed";
+    const outcome = await runImportedPreflight("demo-user", job.id, async () => result({ postingContext: { title: job.title, company: job.company, location, text: "US company hiring internationally" } }));
+    expect(outcome.status).toBe("blocked");
+    expect(outcome.record.blocker).toMatch(/US.*destination|destination.*US/);
+    expect(fixture.state!.applications[0].packet).toBeUndefined();
+    expect(fixture.state!.applications[0].autonomousAuthorization).toBeUndefined();
+  });
+
+  it("can inspect an unresolved manual import and verify its explicit US location", async () => {
+    const { job } = setup();
+    job.location = "Remote";
+    const outcome = await runImportedPreflight("demo-user", job.id, async () => result({ postingContext: { location: "Remote (US)", text: "Data Analyst at Example Employer" } }));
+    expect(outcome.status).toBe("reachable");
+    expect(outcome.record.observedContext?.location).toBe("Remote (US)");
+    expect(fixture.state!.applications[0].packet).toBeUndefined();
   });
 
   it("claims before observation and persists reachable proof without an attempt", async () => {

@@ -17,7 +17,9 @@ import { isDemo } from "@/lib/demo-mode";
 import { formDigest, hasFillApproval, hasSubmissionApproval } from "@/lib/workflow";
 import { assertAutonomous, autonomyProfileHash, exactApplicationUrl } from "@/lib/autonomous-policy";
 import { validatePacket } from "@/lib/drafting";
-import { reusableFactualAnswers } from "@/lib/onboarding";
+import { factualAnswerKeyForQuestion, reusableFactualAnswers } from "@/lib/onboarding";
+import { savedLocationAnswerKey } from "@/lib/location-answers";
+import { profileLinkAnswers, profileLinkQuestion } from "@/lib/profile-links";
 import { graduationSeasonOption } from "@/lib/education-options";
 import { automaticEssayQuestions, hasBoundAutonomousEssayControl } from "@/lib/autonomous-essays";
 import { browserQuestions } from "@/lib/browser-questions";
@@ -352,6 +354,7 @@ function allowedValues(
     graduation_date: profile.onboarding?.questionnaire.graduationYear || personal.graduationYear,
     availability: profile.onboarding?.questionnaire.availability || "",
     cover_letter: application.packet?.coverLetter || "",
+    ...profileLinkAnswers(profile),
   };
   application.packet?.answers.forEach((answer, index) => {
     if (
@@ -386,11 +389,15 @@ function deterministicKey(
   if (/full.?name|your name|candidate name/.test(label)) return "full_name";
   if (/e.?mail/.test(label) || field.kind === "email") return "email";
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
+  const link = profileLinkQuestion(label);
+  if (link) return link;
+  const locationKey = savedLocationAnswerKey(label);
+  if (locationKey) return `saved_${locationKey}`;
   if (/school|university|college/.test(label)) return "school";
   if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
-  if (/sponsor/.test(label)) return "saved_requiresSponsorship";
-  if (/authorized.*work|work.*authoriz/.test(label)) return "saved_workAuthorization";
+  const factualKey = factualAnswerKeyForQuestion(label);
+  if (factualKey) return `saved_${factualKey}`;
   if (/gender/.test(label)) return "saved_gender";
   if (/ethnicity|ethnic|race\b/.test(label)) return "saved_ethnicity";
   if (/disability|disabled/.test(label)) return "saved_disability";
@@ -401,7 +408,7 @@ function deterministicKey(
 }
 
 function sensitiveQuestion(label: string): boolean {
-  return /authoriz|sponsor|visa|citizenship|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
+  return /authoriz|sponsor|visa|citizenship|immigration|consent|transcri|metaview|gender|ethnic|disab|veteran|race\b|record.*interview/i.test(label);
 }
 
 // Owner-confirmed screening values are separate from AI essay authorization.

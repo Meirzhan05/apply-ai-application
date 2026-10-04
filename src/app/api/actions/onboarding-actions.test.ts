@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import type { AppState } from "@/lib/types";
 import { preparePilotMutation } from "@/lib/pilot";
-import { selectApplication } from "@/lib/workflow";
 import { POST } from "@/app/api/actions/route";
+import { loadState } from "@/lib/repository";
+import { publicState } from "@/lib/public-state";
+import { draftPacket, packetProfileHash } from "@/lib/drafting";
+import { selectApplication, setPacket } from "@/lib/workflow";
 
 const mocks = vi.hoisted(() => ({
   memory: new Map<string, AppState>(),
@@ -61,6 +65,66 @@ describe("onboarding action boundary", () => {
     expect(mocks.memory.get("owner-b")!.applications).toEqual([]);
     expect((await POST(post("current"))).status).toBe(400);
   });
+  it("saves overseas residence independently of nationwide destinations and optional work answers for the owner", async () => {
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: {
+        currentLocation: { city: " Almaty ", region: " Almaty Region ", country: " Kazakhstan " },
+        preferredLocations: ["United States"], preferredTitles: [],
+        workArrangements: ["remote", "hybrid"], remoteOnly: true, willingToRelocate: false,
+        questionnaire: { availability: "June 2027" }, userId: "owner-b",
+      } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = (await loadState("owner-a")).profile;
+    expect(saved).toMatchObject({
+      currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      preferredLocations: ["United States"], preferredTitles: [],
+      workArrangements: ["remote", "hybrid"], remoteOnly: false, willingToRelocate: false,
+      onboarding: { questionnaire: { availability: "June 2027" } },
+    });
+    expect(saved.searchPreferencesConfirmedAt).toBeTruthy();
+    expect((await loadState("owner-b")).profile).not.toHaveProperty("currentLocation");
+  });
+
+  it("keeps optional location answers clearable and invalidates prior matching and materials after a profile save", async () => {
+    const state = mocks.memory.get("owner-a")!;
+    const app = selectApplication(state, state.jobs[0].id, "owner-a");
+    const legacyDraftProfile = structuredClone(state.profile);
+    delete legacyDraftProfile.resumeSource;
+    delete legacyDraftProfile.resumeSourceDocument;
+    const legacyPacket = await draftPacket(legacyDraftProfile, state.jobs[0]);
+    legacyPacket.profileHash = packetProfileHash(state.profile);
+    setPacket(state, app, legacyPacket);
+    state.profile.willingToRelocate = true;
+    state.matchCache = { prior: publicState(state).matches[0].assessment };
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: {
+        willingToRelocate: null, workArrangements: [], questionnaire: { availability: "" },
+        currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = await loadState("owner-a");
+    expect(saved.profile.willingToRelocate).toBeUndefined();
+    expect(saved.profile.onboarding?.questionnaire.availability).toBe("");
+    expect(saved.matchCache).toEqual({});
+    expect(publicState(saved).applications[0].materialsStale).toBe(true);
+  });
+
+  it.each([
+    { currentLocation: { city: "Almaty", region: "Almaty Region", country: 42 } },
+    { workArrangements: ["flexible"] }, { willingToRelocate: "no" },
+  ])("rejects malformed location answers atomically: %j", async (payload) => {
+    const before = await loadState("owner-a");
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: { name: "Uncommitted edit", ...payload } }),
+    }));
+    expect(response.status).toBe(400);
+    expect(await loadState("owner-a")).toEqual(before);
+  });
 
   it("saves, dismisses, and clears feedback only for the authenticated owner", async () => {
     const post = (kind: string) => new Request("http://localhost/api/actions", {
@@ -80,6 +144,8 @@ describe("onboarding action boundary", () => {
   });
 
   it("persists onboarding, activation, settings, and pause for one owner", async () => {
+    const owner = mocks.memory.get("owner-a")!;
+    owner.profile = completeOnboardingFixture(owner.profile);
     const facts = initialDemoState().profile.facts;
     const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {
       method: "POST",
@@ -120,6 +186,39 @@ describe("onboarding action boundary", () => {
     expect(state.profile.onboarding?.questionnaire.requiresSponsorship).toBeUndefined();
   });
 
+  it("round-trips distinct immigration declarations for the authenticated owner without enabling automation", async () => {
+    const questionnaire = { immigrationStatus: "visa-holder", visaType: " F-1 OPT ", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "yes" };
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: { questionnaire, userId: "owner-b" } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).toMatchObject({ ...questionnaire, visaType: "F-1 OPT" });
+    expect(saved.profile.onboarding?.questionnaire.requiresSponsorship).toBeUndefined();
+    expect(saved.profile.automationAuthorization).toBeUndefined();
+    expect(mocks.memory.get("owner-b")!.profile.onboarding?.questionnaire).toEqual({});
+  });
+
+  it("preserves partial drafts and clears obsolete conditional details when immigration status changes", async () => {
+    const save = (questionnaire: Record<string, unknown>) => POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "onboarding", payload: { questionnaire } }),
+    }));
+    expect((await save({ immigrationStatus: "visa-holder" })).status).toBe(200);
+    expect((await save({ visaType: "H-1B", sponsorshipNow: "no", sponsorshipFuture: "unknown" })).status).toBe(200);
+    expect((await save({ immigrationStatus: "other", immigrationStatusDetails: "Pending adjustment" })).status).toBe(200);
+    let saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).toMatchObject({ immigrationStatus: "other", immigrationStatusDetails: "Pending adjustment", sponsorshipNow: "no", sponsorshipFuture: "unknown" });
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("visaType");
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("workAuthorization");
+    expect((await save({ immigrationStatus: "us-citizen" })).status).toBe(200);
+    saved = JSON.parse(mocks.transport.at(-1)!.data) as AppState;
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("immigrationStatusDetails");
+    expect(saved.profile.onboarding?.questionnaire).not.toHaveProperty("workAuthorization");
+    expect(saved.profile.automationAuthorization).toBeUndefined();
+  });
+
   it("uses the authenticated owner instead of a user id supplied in the payload", async () => {
     const post = (action: string, payload: Record<string, unknown> = {}) => new Request("http://localhost/api/actions", {
       method: "POST",
@@ -141,6 +240,7 @@ describe("onboarding action boundary", () => {
     });
     const facts = initialDemoState().profile.facts;
     await POST(post("onboarding", { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, facts }));
+    mocks.memory.get("owner-a")!.profile = completeOnboardingFixture(mocks.memory.get("owner-a")!.profile);
     const before = mocks.memory.get("owner-a")!.profile.automationVersion;
     expect((await POST(post("enrollPilot", { confirmed: true, consentVersion: "pilot-consent-v1", userId: "owner-b" }))).status).toBe(200);
     expect(mocks.memory.get("owner-a")!.profile.automationVersion).toBe(before);
@@ -159,6 +259,7 @@ describe("onboarding action boundary", () => {
     });
     const facts = initialDemoState().profile.facts;
     await POST(post("onboarding", { questionnaire: { workAuthorization: "yes", requiresSponsorship: "no" }, facts }));
+    mocks.memory.get("owner-a")!.profile = completeOnboardingFixture(mocks.memory.get("owner-a")!.profile);
     await POST(post("enrollPilot", { confirmed: true, consentVersion: "pilot-consent-v1" }));
     await POST(post("select", { jobId: "demo-engineering-intern" }));
     const before = mocks.memory.get("owner-a")!.applications[0].pilotAttempt!;

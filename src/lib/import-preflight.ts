@@ -4,7 +4,8 @@ import { browserUsageContext, withBrowserUsageContext } from "@/lib/browser-usag
 import { loadState, mutateState } from "@/lib/repository";
 import { canonicalJobUrl } from "@/lib/sources";
 import { createImportedCompatibilityRecord, validateImportedPostingEvidence } from "@/lib/import-compatibility";
-import { formDigest, selectApplication } from "@/lib/workflow";
+import { formDigest, selectImportedPostingForVerification } from "@/lib/workflow";
+import { jobDestinationConflict } from "@/lib/matching";
 import { assertAutomationEnabled } from "@/lib/autonomous-policy";
 import { browserBudgetReservationId, releaseBrowserBudget, reserveBrowserBudget, serviceBudgetMonth } from "@/lib/budget";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
@@ -39,7 +40,7 @@ function findJob(state: AppState, jobId: string): Job {
 
 function findOrCreateApplication(state: AppState, job: Job, userId: string): Application {
   const existing = state.applications.find((item) => item.userId === userId && item.jobId === job.id && item.status !== "cancelled");
-  return existing ?? selectApplication(state, job.id, userId);
+  return existing ?? selectImportedPostingForVerification(state, job.id, userId);
 }
 
 function errorMetadata(error: unknown): PreflightError {
@@ -237,7 +238,8 @@ export async function runImportedPreflight(
   allocationStarted ||= Boolean(result);
   const now = new Date().toISOString();
   const identityError = result ? validateImportedPostingEvidence(job, result.postingEvidence) : undefined;
-  const status = result ? preflightStatus(result.form, identityError) : "blocked";
+  const destinationError = result ? jobDestinationConflict({ location: result.postingContext?.location ?? "" }) : undefined;
+  const status = result ? preflightStatus(result.form, identityError ?? destinationError ?? undefined) : "blocked";
   const formUrl = result?.form.url ?? job.applyUrl;
   const formHash = result?.form ? formDigest(result.form) : undefined;
   const record = createImportedCompatibilityRecord({
@@ -246,7 +248,7 @@ export async function runImportedPreflight(
     observed: { url: formUrl, hash: formHash, submitControl: result?.form.submitControl, contextHash: result?.contextHash, postingEvidence: result?.postingEvidence, observedContext: result?.postingContext },
     checkedAt: now,
     status,
-    blocker: error instanceof Error ? error.message : identityError ?? (status === "blocked" ? result?.form.blockers?.join(" ") : undefined),
+    blocker: error instanceof Error ? error.message : identityError ?? destinationError ?? (status === "blocked" ? result?.form.blockers?.join(" ") : undefined),
     controlled: app.controlledTest !== undefined,
   });
   let heldAfterSave = false;

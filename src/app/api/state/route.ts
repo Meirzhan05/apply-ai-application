@@ -1,12 +1,11 @@
 import { ensureResumeExtraction } from "@/lib/resume-extraction-jobs";
 import { NextResponse } from "next/server";
-import { currentUserId, loadState } from "@/lib/repository";
+import { currentUserId, isDemo, loadState } from "@/lib/repository";
 import { publicState } from "@/lib/public-state";
-import { adminSupabase } from "@/lib/supabase-admin";
-import { isDemo } from "@/lib/repository";
 import { workspaceVersion } from "@/lib/workspace-version";
+import { adminSupabase } from "@/lib/supabase-admin";
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   try {
     const userId = await currentUserId();
     const version = await workspaceVersion(userId);
@@ -15,14 +14,13 @@ export async function GET(request?: Request) {
     if (version && request?.headers.get("if-none-match") === version) {
       return new Response(null, { status: 304, headers });
     }
-
     let state = await loadState(userId);
     if (await ensureResumeExtraction(userId, state.profile)) state = await loadState(userId);
     if (!isDemo()) {
       const { data } = await adminSupabase().auth.admin.getUserById(userId);
       state.profile.email = data.user?.email || "";
     }
-    return NextResponse.json(publicState(state), {
+    return NextResponse.json({ ...publicState(state), demoMode: isDemo() }, {
       headers,
     });
   } catch (error) {

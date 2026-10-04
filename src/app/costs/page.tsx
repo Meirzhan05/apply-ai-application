@@ -5,6 +5,7 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import type { CostReport, ServiceCostCategory, AllocationMethod } from "@/lib/service-costs";
 import styles from "../usage/usage.module.css";
 import costStyles from "./costs.module.css";
+import { MandatoryOnboardingGate } from "@/components/mandatory-onboarding-gate";
 
 const money = (value: number | null) => value === null ? "Unknown" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 }).format(value);
 const label = (value: string) => value.replaceAll("-", " ").replaceAll("_", " ");
@@ -68,7 +69,7 @@ export default function CostsPage() {
   if (serviceScope) csvParams.set("scope", "service");
   csvParams.set("format", "csv");
   const csvHref = `/api/costs?${csvParams}`;
-  return <main className={styles.sheet}>
+  return <MandatoryOnboardingGate><main className={styles.sheet}>
     <nav className={styles.navigation} aria-label="Cost navigation"><Link href="/"><ArrowLeft size={16} /> Workspace</Link><div className={costStyles.actions}><Link href="/usage">Usage detail</Link>{report && <a href={csvHref}>Download CSV</a>}<button onClick={() => void refresh(window.location.search)} disabled={loading}><RefreshCw size={16} />{loading ? "Loading…" : "Refresh costs"}</button></div></nav>
     <header className={styles.heading}><h1>Service costs</h1><p>Projected reservations, measured estimates, reconciled charges and unknown evidence stay visible as separate operational signals.</p></header>
     <div className={costStyles.filters} aria-label="Cost filters"><label>Period <input type="month" value={period} onChange={(event) => setFilter({ period: event.target.value })} /></label>{report?.operator && <label className={costStyles.checkboxLabel}><input type="checkbox" checked={serviceScope} onChange={(event) => setFilter({ service: event.target.checked })} /> Service totals</label>}</div>
@@ -96,5 +97,5 @@ export default function CostsPage() {
       </section>
       <section className={styles.reservations} aria-labelledby="evidence-heading"><h2 id="evidence-heading">Usage evidence</h2><p>{report.evidence.length} model and browser record{report.evidence.length === 1 ? "" : "s"}. Failed, cancelled and background work remain in the ledger.</p>{report.evidence.length > 0 && <div className={styles.tableScroll} tabIndex={0} role="region" aria-label="Cost evidence"><table className={styles.table}><thead><tr><th scope="col">Kind / identity</th><th scope="col">Owner</th><th scope="col">Amount</th><th scope="col">State</th></tr></thead><tbody>{report.evidence.map((item) => <tr key={item.id}><td><strong>{label(item.category)}</strong><span className={styles.identifier}>{item.id}</span><span>{item.applicationId ? "Application work" : item.backgroundJobId ? "Background work" : "Unlinked work"}</span></td><td className={styles.identifier}>{report.scope === "service" ? item.ownerId : "Signed-in owner"}</td><td className={styles.numeric}>{money(item.amountUsd)}{item.unknown && <span>Measurement unknown</span>}</td><td>{label(item.status)}{item.reconciledUsd !== null && <span>Reconciled</span>}</td></tr>)}</tbody></table></div>}</section>
     </>}
-  </main>;
+  </main></MandatoryOnboardingGate>;
 }

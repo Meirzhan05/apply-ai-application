@@ -10,9 +10,10 @@ import { appendDiscoveryEvent, enqueueStrongMatch } from "../src/lib/discovery";
 import { queueMatchAssessment } from "../src/lib/match-queue";
 import { controlledFixtureAllowsJob } from "../src/lib/controlled-tests";
 import { withAccountOperation } from "../src/lib/account-lifecycle";
+import { isResumeOnboardingComplete } from "../src/lib/onboarding-gate";
 
 class MatchingContextChanged extends Error {
-  constructor(readonly reason: "profile_changed" | "authorization_changed" | "job_closed" | "job_changed" | "controlled_scope_changed") {
+  constructor(readonly reason: "profile_changed" | "onboarding_incomplete" | "authorization_changed" | "job_closed" | "job_changed" | "controlled_scope_changed") {
     super(reason);
   }
 }
@@ -40,6 +41,7 @@ export const assessUserMatches = task({
     const runId = options?.ctx.run.id ?? newId();
     if (!process.env.TYPESAFE_API_KEY) return { assessed: 0 };
     const state = await loadState(userId);
+    if (!isResumeOnboardingComplete(state.profile)) return { assessed: 0, stopped: "onboarding_incomplete" };
     if (!state.profile.facts.some(isUsableFact)) return { assessed: 0 };
     if (continuationToken) {
       const marker = state.discovery?.matchContinuation;
@@ -57,6 +59,7 @@ export const assessUserMatches = task({
     let budgetExhausted = false;
     for (const job of pending) {
       const latest = await loadState(userId);
+      if (!isResumeOnboardingComplete(latest.profile)) return { assessed, stopped: "onboarding_incomplete" };
       if (latest.profile.updatedAt !== profileVersion)
         return { assessed, stopped: "profile_changed" };
       const allowed = await reserveServiceBudget(
@@ -75,6 +78,8 @@ export const assessUserMatches = task({
           // this paid operation's setup.
           beforeModelCall: async () => {
             const current = await loadState(userId);
+            if (!isResumeOnboardingComplete(current.profile))
+              throw new MatchingContextChanged("onboarding_incomplete");
             if (current.profile.updatedAt !== profileVersion || authorizationContext(current.profile) !== initialAuthorizationContext)
               throw new MatchingContextChanged(current.profile.updatedAt !== profileVersion ? "profile_changed" : "authorization_changed");
             const currentJob = current.jobs.find((item) => item.id === job.id);
@@ -91,7 +96,11 @@ export const assessUserMatches = task({
       }
       try {
         const saved = await mutateState(userId, (current) => {
+          if (!isResumeOnboardingComplete(current.profile)) return false;
           if (current.profile.updatedAt !== profileVersion) return false;
+          const currentJob = current.jobs.find((item) => item.id === job.id);
+          if (!currentJob?.active || matchKey(current.profile, currentJob) !== matchKey(state.profile, job) ||
+              !controlledFixtureAllowsJob(current, userId, currentJob) || assessMatchLocally(current.profile, currentJob).category === "excluded") return false;
           current.matchCache ??= {};
           for (const key of Object.keys(current.matchCache))
             if (key.startsWith(`${job.id}:`)) delete current.matchCache[key];
@@ -108,7 +117,10 @@ export const assessUserMatches = task({
           });
           return true;
         });
-        if (!saved) return { assessed, stopped: "profile_changed" };
+        if (!saved) {
+          const current = await loadState(userId);
+          return { assessed, stopped: isResumeOnboardingComplete(current.profile) ? "profile_changed" : "onboarding_incomplete" };
+        }
       } catch (error) {
         // Auth deletion cascades through app_states. An in-flight model call
         // must not recreate that owner's state or continue assessing jobs.
@@ -123,11 +135,13 @@ export const assessUserMatches = task({
       if (assessment.category === "strong") await enqueueStrongMatch(userId, job.id, profileVersion);
     }
     const latest = await loadState(userId);
+    if (!isResumeOnboardingComplete(latest.profile)) return { assessed, stopped: "onboarding_incomplete" };
     if (latest.profile.updatedAt !== profileVersion) return { assessed, stopped: "profile_changed" };
     const remaining = pendingJobs(latest).length;
     if (remaining > 0 && !budgetExhausted) {
       const continuationToken = newId();
       const persisted = await mutateState(userId, (current) => {
+        if (!isResumeOnboardingComplete(current.profile)) return false;
         if (current.profile.updatedAt !== profileVersion) return false;
         current.discovery ??= { sources: [], events: [] };
         current.discovery.pendingMatches = pendingJobs(current).length;
@@ -138,10 +152,13 @@ export const assessUserMatches = task({
         await queueMatchAssessment(userId, continuationToken);
         return { assessed, continued: true, pending: remaining };
       }
-      return { assessed, stopped: "profile_changed" };
+      const current = await loadState(userId);
+      return { assessed, stopped: isResumeOnboardingComplete(current.profile) ? "profile_changed" : "onboarding_incomplete" };
     }
+    if (!isResumeOnboardingComplete(await loadState(userId).then((current) => current.profile)))
+      return { assessed, stopped: "onboarding_incomplete" };
     await mutateState(userId, (current) => {
-      if (current.profile.updatedAt === profileVersion && current.discovery) {
+      if (isResumeOnboardingComplete(current.profile) && current.profile.updatedAt === profileVersion && current.discovery) {
         current.discovery.pendingMatches = remaining;
         current.discovery.matchContinuation = undefined;
       }

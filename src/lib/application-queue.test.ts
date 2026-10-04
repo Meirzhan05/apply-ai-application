@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { withPacketFiles } from "@/lib/packet-files";
 import { approveFill, selectApplication, setPacket } from "@/lib/workflow";
 import { dispatchUserQueue, hasActiveBrowser, queueApplicationRun } from "@/lib/application-queue";
@@ -19,7 +20,7 @@ vi.mock("@/lib/budget", () => ({ reserveServiceBudget: async () => mocks.budget,
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: mocks.trigger } }));
 vi.mock("@/lib/application-runs", () => ({ runDraft: mocks.draft, runFill: mocks.fill }));
 
-beforeEach(() => { mocks.state = initialDemoState(); mocks.budget = true; mocks.release.mockResolvedValue(true); mocks.claim.mockResolvedValue(true); mocks.terminal.mockResolvedValue(true); mocks.queue = Promise.resolve(); vi.clearAllMocks(); });
+beforeEach(() => { mocks.state = initialDemoState(); mocks.state.profile = completeOnboardingFixture(mocks.state.profile); mocks.budget = true; mocks.release.mockResolvedValue(true); mocks.claim.mockResolvedValue(true); mocks.terminal.mockResolvedValue(true); mocks.queue = Promise.resolve(); vi.clearAllMocks(); });
 describe("durable application queue", () => {
   it("keeps a request across budget rejection, then dispatches it when spending permits", async () => {
     const app = selectApplication(mocks.state, mocks.state.jobs[0].id, mocks.state.profile.id);

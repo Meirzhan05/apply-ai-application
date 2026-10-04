@@ -35,7 +35,12 @@ function normalized(text: string) {
   return text.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
 }
 
+export function unitedStatesRegion(region: string): string | undefined {
+  return states[normalized(region)];
+}
+
 function place(raw: string): Place | undefined {
+  if (/^(?:united states(?: of america)?|usa|us)$/.test(normalized(raw))) return { state: "US" };
   const text = normalized(raw).replace(/[\s,]+(?:united states(?: of america)?|usa|us)$/, "").trim();
   if (!text) return;
   // "LA" can mean Los Angeles or Louisiana. A full state/city or a city
@@ -55,10 +60,44 @@ function place(raw: string): Place | undefined {
 }
 
 function compare(actual: Place, allowed: Place): LocationFit {
+  if (allowed.state === "US") return "compatible";
+  if (actual.state === "US") return "unknown";
   if (actual.state !== allowed.state) return "conflict";
   if (!allowed.city) return "compatible";
   if (!actual.city) return "unknown"; // A statewide posting doesn't confirm a required city.
   return actual.city === allowed.city ? "compatible" : "conflict";
+}
+
+export type UnitedStatesDestination = "verified_us" | "outside_us" | "unresolved";
+
+const countryNames = new Intl.DisplayNames(["en"], { type: "region" });
+const foreignCountries = new Set(["uk", "united kingdom", "great britain", "england", "scotland", "wales", "uae"]);
+for (let first = 65; first <= 90; first++) {
+  for (let second = 65; second <= 90; second++) {
+    const code = String.fromCharCode(first, second);
+    const name = countryNames.of(code);
+    if (name && name !== code && !["US", "PR", "GU", "VI"].includes(code) && !states[normalized(name)])
+      foreignCountries.add(normalized(name));
+  }
+}
+
+/** A work arrangement or candidate residence is never destination evidence. */
+export function unitedStatesDestination(location: string): UnitedStatesDestination {
+  const text = normalized(location);
+  const tokens = text.split(/[,;\n|/()·]+/).map((part) => part.trim());
+  if (tokens.some((part) => foreignCountries.has(part) || [...foreignCountries].some((country) => part.endsWith(` ${country}`))))
+    return "outside_us";
+  if (/\b(?:worldwide|global|anywhere|international|emea|apac|latam)\b/.test(text)) return "unresolved";
+  const alternatives = text.split(/\s*[;\n|/]\s*/).map((alternative) => alternative
+    .replace(/\b(?:remote|hybrid|on[ -]?site)\b/g, "").replace(/[()]/g, " ")
+    .split(/\s*·\s*/).map((part) => part.replace(/^[\s,:-]+|[\s,:-]+$/g, "")).filter(Boolean));
+  return alternatives.every((destinations) => destinations.length && destinations.every((part) =>
+    /(?:^|[\s,])(?:united states(?: of america)?|usa|us)$/.test(part) || Boolean(place(part))))
+    ? "verified_us" : "unresolved";
+}
+
+export function isUnitedStatesLocation(location: string): boolean {
+  return unitedStatesDestination(location) === "verified_us";
 }
 
 export function locationFit(location: string, preferences: string[]): LocationFit {

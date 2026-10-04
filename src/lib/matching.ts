@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import type { Job, MatchAssessment, Profile } from "@/lib/types";
-import { locationFit } from "@/lib/location-fit";
+import { locationFit, unitedStatesDestination } from "@/lib/location-fit";
 import { sponsorshipPolicy } from "@/lib/sponsorship-policy";
 
 const FitSchema = z.object({
@@ -24,6 +24,11 @@ export function explicitConflict(profile: Profile, job: Job): string | null {
   if (!job.active) return "This listing is closed.";
   if (job.deadline && new Date(job.deadline).getTime() < Date.now())
     return "The application deadline has passed.";
+  const destinationConflict = jobDestinationConflict(job);
+  if (destinationConflict) return destinationConflict;
+  const arrangement = job.workArrangement ?? (job.remote === true ? "remote" : undefined);
+  if (profile.workArrangements?.length && arrangement && !profile.workArrangements.includes(arrangement))
+    return "This role is outside your work arrangement preferences.";
   if (profile.remoteOnly && job.remote === false)
     return "This role is not remote.";
   if (profile.strictLocations && profile.preferredLocations.length && job.remote === false && locationFit(job.location, profile.preferredLocations) === "conflict")
@@ -39,6 +44,13 @@ export function explicitConflict(profile: Profile, job: Job): string | null {
   return null;
 }
 
+export function jobDestinationConflict(job: Pick<Job, "location">): string | null {
+  const destination = unitedStatesDestination(job.location);
+  if (destination === "outside_us") return "This job destination is outside the supported US market.";
+  if (destination === "unresolved") return "This job's US destination could not be verified. Check the posting's location before applying.";
+  return null;
+}
+
 export function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
   const uncertainty: string[] = [];
   if (!["authorized to work in the us", "requires sponsorship"].includes(profile.workAuthorization.trim().toLowerCase()))
@@ -49,6 +61,8 @@ export function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
     sponsorshipPolicy([job.description, ...job.requirements].join(" ")) === "unknown")
     uncertainty.push("The posting does not confirm whether employment sponsorship is available for this role.");
   const remoteUnknown = typeof job.remote !== "boolean";
+  if (profile.workArrangements?.length && !job.workArrangement && job.remote !== true)
+    uncertainty.push("The posting does not confirm whether this role meets your work arrangement preferences.");
   if (profile.remoteOnly && remoteUnknown) uncertainty.push("The posting does not confirm whether this role meets your remote-only rule.");
   if (profile.strictLocations && profile.preferredLocations.length && job.remote !== true) {
     const fit = locationFit(job.location, profile.preferredLocations);
@@ -173,6 +187,7 @@ export async function assessMatchWithOpenAI(
           content: JSON.stringify({
             preferredTitles: profile.preferredTitles,
             preferredLocations: profile.preferredLocations,
+            workArrangements: profile.workArrangements,
             skills: profile.skills,
             facts,
             job: {

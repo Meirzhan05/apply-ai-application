@@ -6,6 +6,7 @@ import { canonicalJobUrl } from "@/lib/sources";
 import { loadState, mutateState } from "@/lib/repository";
 import { selectApplication } from "@/lib/workflow";
 import { controlledFixtureAllowsJob } from "@/lib/controlled-tests";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 import type { AppState, DiscoveryEvent, DiscoverySource, DiscoveryState, Job, MatchAssessment, Profile } from "@/lib/types";
 
 export interface DiscoveryArrival {
@@ -91,6 +92,7 @@ export async function enqueueStrongMatch(
   try {
     result = await mutateState(userId, (state) => {
       if (state.profile.updatedAt !== expectedProfileUpdatedAt) return { queued: false, reason: "profile_changed" as const };
+      if (!isResumeOnboardingComplete(state.profile)) return { queued: false, reason: "automation_blocked" as const };
       try {
         assertAutomationEnabled(state.profile);
       } catch {

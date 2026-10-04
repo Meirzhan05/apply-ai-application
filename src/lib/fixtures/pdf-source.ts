@@ -3,7 +3,7 @@ import path from "node:path";
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFOperator, PDFOperatorNames, lineTo, moveTo, rgb, setFontAndSize, setLineWidth, setTextMatrix, stroke } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
-export async function createPdfSourceFixture(options: { wrappedBullet?: boolean; continuationBold?: boolean; nextEmployer?: boolean; pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; fragmentedSkillCategories?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
+export async function createPdfSourceFixture(options: { contactText?: string; wrappedBullet?: boolean; continuationBold?: boolean; nextEmployer?: boolean; pages?: number; pageSize?: [number, number]; columns?: boolean; scanned?: boolean; duplicateBullet?: boolean; longBullet?: string; separateBulletMarker?: "same-column" | "cross-column"; qualificationText?: string; languages?: boolean; fragmentedSkillCategories?: boolean; positionedWordSpacing?: boolean; sectionDivider?: boolean; pageTwoRightTop?: boolean; characterSpacing?: number; wordSpacing?: number; horizontalScaling?: number; graphicsStateRestore?: boolean } = {}) {
   const pdf = await PDFDocument.create({ updateMetadata: false });
   pdf.registerFontkit(fontkit);
   const regular = await pdf.embedFont(await readFile(path.join(process.cwd(), "src/assets/fonts/NotoSans-Regular.ttf")), { subset: true });
@@ -17,7 +17,7 @@ export async function createPdfSourceFixture(options: { wrappedBullet?: boolean;
   }
   page.drawText("Avery Chen", { x: 72, y: 744, size: 20, font: bold, color: rgb(0.12, 0.17, 0.24) });
   page.drawText("Machine Learning Engineer", { x: 72, y: 720, size: 11, font: regular, color: rgb(0.12, 0.17, 0.24) });
-  page.drawText("avery@example.com · linkedin.com/in/averychen", { x: 72, y: 702, size: 9, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  page.drawText(options.contactText ?? "avery@example.com · linkedin.com/in/averychen", { x: 72, y: 702, size: 9, font: regular, color: rgb(0.2, 0.2, 0.2) });
   page.drawText("Work Experience", { x: 72, y: 668, size: 12, font: bold, color: rgb(0.12, 0.17, 0.24) });
   if (options.sectionDivider) {
     page.pushOperators(setLineWidth(0.75), moveTo(72, 658), lineTo(540, 658), stroke());

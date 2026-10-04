@@ -1,28 +1,32 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AppState } from "@/lib/types";
 
-const fixture = vi.hoisted(() => ({ state: null as AppState | null }));
+const fixture = vi.hoisted(() => ({ state: null as AppState | null, otherState: null as AppState | null, owner: "demo-user", demo: true }));
 vi.mock("@/lib/repository", () => ({
-  isDemo: () => true,
-  currentUserId: async () => "demo-user",
-  loadState: async () => structuredClone(fixture.state),
-  mutateState: async (_user: string, change: (state: AppState) => unknown) => {
-    const next = structuredClone(fixture.state!);
+  isDemo: () => fixture.demo,
+  currentUserId: async () => fixture.owner,
+  loadState: async (owner: string) => structuredClone(owner === "other-owner" ? fixture.otherState : fixture.state),
+  mutateState: async (owner: string, change: (state: AppState) => unknown) => {
+    const next = structuredClone(owner === "other-owner" ? fixture.otherState! : fixture.state!);
     await change(next);
-    fixture.state = next;
+    if (owner === "other-owner") fixture.otherState = next;
+    else fixture.state = next;
     return next;
   },
 }));
+vi.mock("@/lib/supabase-admin", () => ({ adminSupabase: () => ({ auth: { admin: { getUserById: async () => ({ data: { user: { email: "signin@example.com" } } }) } } }) }));
 import { initialDemoState } from "@/lib/demo-data";
 import { onboardingCompleteness } from "@/lib/onboarding";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { POST } from "@/app/api/actions/route";
+import { GET } from "@/app/api/state/route";
 
 const save = (sensitiveAnswers: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", {
   method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" },
   body: JSON.stringify({ action: "profile", payload: { name: "Synthetic Student", email: "synthetic@example.com", sensitiveAnswers } }),
 }));
 
-beforeEach(() => { fixture.state = initialDemoState(); fixture.state.profile.sensitiveAnswers = {}; });
+beforeEach(() => { fixture.demo = true; fixture.owner = "demo-user"; fixture.state = initialDemoState(); fixture.state.profile.sensitiveAnswers = {}; fixture.otherState = initialDemoState(); fixture.otherState.profile.id = "other-owner"; });
 
 it("saves a new profile with all optional screening answers left blank", async () => {
   const response = await save({});
@@ -30,6 +34,31 @@ it("saves a new profile with all optional screening answers left blank", async (
   expect(fixture.state!.profile.name).toBe("Synthetic Student");
   expect(fixture.state!.profile.sensitiveAnswers).toEqual({});
   expect(onboardingCompleteness(fixture.state!.profile).missing).toEqual(expect.arrayContaining(["workAuthorization", "requiresSponsorship"]));
+});
+
+it("saves candidate-corrected contact details and optional normalized links for application use", async () => {
+  fixture.demo = false;
+  fixture.state!.profile.facts = [];
+  const response = await POST(new Request("https://apply.example/api/actions", {
+    method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "profile", payload: { email: "contact@example.com", phone: "+44 20 7946 0958", links: ["linkedin.com/in/candidate", " https://portfolio.example.com ", ""] } }),
+  }));
+  expect(response.status).toBe(200);
+  const state = await (await GET(new Request("https://apply.example/api/state"))).json();
+  expect(state.profile).toMatchObject({ email: "signin@example.com", contactEmail: "contact@example.com", phone: "+44 20 7946 0958", links: ["https://linkedin.com/in/candidate", "https://portfolio.example.com/"] });
+  expect(fixture.state!.profile).toMatchObject({ email: "taylor@example.com", contactEmail: "contact@example.com", phone: "+44 20 7946 0958", links: ["https://linkedin.com/in/candidate", "https://portfolio.example.com/"] });
+});
+
+it("keeps contact edits scoped to the authenticated owner even when another profile ID is supplied", async () => {
+  const other = structuredClone(fixture.otherState!.profile);
+  const response = await POST(new Request("https://apply.example/api/actions", {
+    method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "profile", payload: { id: "other-owner", name: "Owner correction", email: "owner@example.com", links: [] } }),
+  }));
+  expect(response.status).toBe(200);
+  expect((await (await GET(new Request("https://apply.example/api/state"))).json()).profile).toMatchObject({ id: "demo-user", name: "Owner correction", contactEmail: "owner@example.com" });
+  fixture.owner = "other-owner";
+  expect((await (await GET(new Request("https://apply.example/api/state"))).json()).profile).toEqual(other);
 });
 
 it("saves a partial screening answer without requiring demographic answers", async () => {
@@ -75,6 +104,7 @@ it.each(["javascript:alert(1)", "https://github.com/company/repository", "https:
 });
 
 it("edits and forgets an existing saved answer with stale-edit protection", async () => {
+  fixture.state!.profile = completeOnboardingFixture(fixture.state!.profile);
   fixture.state!.profile.savedAnswers = [{ key: "languages", question: "Languages spoken", value: "English", applicationId: "old-application", savedAt: new Date().toISOString() }];
   expect((await profileAction({ key: "languages", expectedValue: "stale", value: "Spanish" }, "savedProfileAnswer")).status).toBe(400);
   expect((await profileAction({ key: "languages", expectedValue: "English", value: "English, Spanish" }, "savedProfileAnswer")).status).toBe(200);

@@ -5,6 +5,7 @@ import {
   cancelBrowser,
 } from "@/lib/browser-runner";
 import { ApplicationEligibilityError, assertJobEligible } from "@/lib/application-policy";
+import { assertSourceJobCurrent } from "@/lib/resume-source-freshness";
 import { sendActionNeeded } from "@/lib/email";
 import { loadState, mutateState } from "@/lib/repository";
 import { hasSubmissionApproval, setFormSnapshot, transition } from "@/lib/workflow";
@@ -13,6 +14,7 @@ import { validatePacket } from "@/lib/drafting";
 import { assertAutonomous } from "@/lib/autonomous-policy";
 import { blockerReason, recordApplicationBlocker } from "@/lib/application-blockers";
 import type { Application } from "@/lib/types";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 async function releaseSubmissionBrowser(userId: string, application: Application): Promise<boolean> {
   const sessionId = application.browserSessionId ?? application.browserReleasePending?.sessionId;
@@ -42,6 +44,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
     const claimed = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
       if (!target || target.status !== "submitting" || target.submissionWorkerClaimedAt || target.submissionAttemptedAt || (target.autonomousAuthorization ? !target.submissionDispatch?.token || target.submissionDispatch.token !== submissionToken : !hasSubmissionApproval(target))) return false;
+      if (!isResumeOnboardingComplete(current.profile) && !target.submissionStartedAt) return false;
       if (target.autonomousAuthorization) {
         try { assertAutonomous(target, current.profile, current.jobs.find((job) => job.id === target.jobId), "submit"); }
         catch (error) {
@@ -69,6 +72,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
     if (!app || app.status !== "submitting") return { skipped: true };
     try {
       assertJobEligible(state.profile, state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot);
+      assertSourceJobCurrent(app, state.jobs.find((job) => job.id === app.jobId) ?? app.jobSnapshot!);
       if (!app.packet) throw new Error("The approved packet is unavailable.");
       validatePacket(state.profile, app.packet);
       if (app.autonomousAuthorization) assertAutonomous(app, state.profile, state.jobs.find((job) => job.id === app.jobId), "submit");
@@ -79,7 +83,7 @@ export async function runSubmission({ userId, applicationId, submissionToken }: 
           if (!target || target.status !== "submitting" || !target.submissionWorkerClaimedAt || target.submissionAttemptedAt ||
               target.browserSessionId !== baseline.sessionId || target.form?.url !== baseline.targetUrl || target.form.hash !== app.form?.hash) return false;
           if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((job) => job.id === target.jobId), "submit");
-          else { assertJobEligible(current.profile, current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot); if (!hasSubmissionApproval(target)) return false; }
+          else { const currentJob = assertJobEligible(current.profile, current.jobs.find((job) => job.id === target.jobId) ?? target.jobSnapshot); assertSourceJobCurrent(target, currentJob); if (!hasSubmissionApproval(target)) return false; }
           target.submissionMaterials = { resumeMode: target.packet!.resumeMode ?? "tailored", coverLetterMode: current.profile.automationSettings?.coverLetterMode,
             files: structuredClone(target.packet!.files?.filter((file) => target.form?.fields.some((field) => field.fileHashes?.includes(`${file.filename}:${file.size}:${file.sha256}`))) ?? []), capturedAt: baseline.attemptedAt };
           target.submissionAttemptedAt = baseline.attemptedAt;

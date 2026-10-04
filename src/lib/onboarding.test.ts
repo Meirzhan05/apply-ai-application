@@ -3,6 +3,7 @@ import { initialDemoState } from "@/lib/demo-data";
 import {
   activateAutomation,
   automationStatus,
+  factualAnswerKeyForQuestion,
   onboardingCompleteness,
   onboardingMissingLabel,
   pauseAutomation,
@@ -154,5 +155,27 @@ describe("autonomous onboarding", () => {
     });
     expect(reusableFactualAnswers(profile)).not.toHaveProperty("workAuthorization");
     expect(reusableFactualAnswers(profile).requiresSponsorship).toBe("No");
+  });
+
+  it("maps generic sponsorship questions to the combined current and future declaration", () => {
+    expect(factualAnswerKeyForQuestion("Do you require sponsorship?")).toBe("sponsorshipEither");
+    expect(factualAnswerKeyForQuestion("Do you require sponsorship now?")).toBe("sponsorshipNow");
+    expect(factualAnswerKeyForQuestion("Will you require sponsorship in the future?")).toBe("sponsorshipFuture");
+  });
+
+  it("derives a conservative combined sponsorship answer with a legacy fallback", () => {
+    const profile = initialDemoState().profile;
+    saveOnboarding(profile, { questionnaire: { sponsorshipNow: "no", sponsorshipFuture: "yes" } });
+    expect(reusableFactualAnswers(profile).sponsorshipEither).toBe("Yes");
+
+    saveOnboarding(profile, { questionnaire: { sponsorshipNow: "no", sponsorshipFuture: "no" } });
+    expect(reusableFactualAnswers(profile).sponsorshipEither).toBe("No");
+
+    saveOnboarding(profile, { questionnaire: { sponsorshipNow: "unknown", sponsorshipFuture: "no" } });
+    expect(reusableFactualAnswers(profile)).not.toHaveProperty("sponsorshipEither");
+
+    const legacy = initialDemoState().profile;
+    saveOnboarding(legacy, { questionnaire: { requiresSponsorship: "yes" } });
+    expect(reusableFactualAnswers(legacy).sponsorshipEither).toBe("Yes");
   });
 });

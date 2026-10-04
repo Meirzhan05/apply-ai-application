@@ -12,6 +12,7 @@ import type {
   Approval,
   ApplicationStatus,
   FormSnapshot,
+  Job,
 } from "@/lib/types";
 
 export function transition(
@@ -36,11 +37,22 @@ export function selectApplication(
   if (!job) throw new Error("This job is no longer available.");
   const conflict = explicitConflict(state.profile, job);
   if (conflict) throw new Error(conflict);
+  return createApplication(state, job, userId);
+}
+
+/** Inspection creates no materials or authorization; later phases enforce eligibility. */
+export function selectImportedPostingForVerification(state: AppState, jobId: string, userId: string): Application {
+  const job = state.jobs.find((item) => item.id === jobId && item.active);
+  if (!job || (job.source !== "imported" && !job.importUrl)) throw new Error("An available imported posting is required for verification.");
+  return createApplication(state, job, userId);
+}
+
+function createApplication(state: AppState, job: Job, userId: string): Application {
   if (
     state.applications.some(
       (application) =>
         application.userId === userId &&
-        (application.jobId === jobId || (application.jobSnapshot && canonicalJobUrl(application.jobSnapshot.url) === canonicalJobUrl(job.url))) &&
+        (application.jobId === job.id || (application.jobSnapshot && canonicalJobUrl(application.jobSnapshot.url) === canonicalJobUrl(job.url))) &&
         application.status !== "cancelled",
     )
   ) {
@@ -50,7 +62,7 @@ export function selectApplication(
   const application: Application = {
     id: newId(),
     userId,
-    jobId,
+    jobId: job.id,
     jobSnapshot: job,
     status: "selected",
     approvals: [],
@@ -78,6 +90,7 @@ export function setPacket(
     application.profileMemoryVersion = state.profile.automationVersion;
   }
   application.packet = packet;
+  application.jobSnapshot = state.jobs.find((job) => job.id === application.jobId) ?? application.jobSnapshot;
   application.packetHash = hashJson(packet);
   application.approvals = [];
   application.form = undefined;

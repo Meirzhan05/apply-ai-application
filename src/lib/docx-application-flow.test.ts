@@ -46,6 +46,8 @@ vi.mock("playwright-core", () => ({ chromium: { launch: async () => fixture.brow
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn().mockResolvedValue(undefined) }));
 
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import { parsePdfSource } from "@/lib/pdf-source";
@@ -76,6 +78,16 @@ const runtime = (() => {
 const publicAction = (action: string, payload: Record<string, unknown>) => actionRoute(new Request("https://apply.example/api/actions", {
   method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action, payload }),
 }));
+
+async function finishFixtureOnboarding() {
+  const profile = fixture.state!.profile;
+  const draft = await publicAction("onboardingDraft", { name: profile.name || "Synthetic Applicant", contactEmail: profile.contactEmail || "synthetic@example.com", phone: profile.phone || "+1 212 555 0100",
+    currentLocation: { city: "New York", region: "NY", country: "United States" }, preferredLocations: ["United States"], workArrangements: ["remote", "hybrid"],
+    questionnaire: { immigrationStatus: "us-citizen", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "no" }, stage: "review" });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  const finished = await publicAction("finishOnboarding", { reviewHash: resumeOnboardingStatus(profile).reviewHash });
+  expect(finished.status, await finished.clone().text()).toBe(200);
+}
 
 function responseFor(request: { input: Array<{ content: string }>; text: { format: { name: string } }; model: string }) {
   const name = request.text.format.name;
@@ -110,6 +122,7 @@ beforeEach(() => {
   vi.stubEnv("MODEL_USAGE_TEST_DIR", `/tmp/docx-flow-usage-${process.pid}`);
   fixture.demo = true; fixture.tasks = [];
   fixture.state = initialDemoState();
+  fixture.state.profile = completeOnboardingFixture(fixture.state.profile);
   fixture.state.profile.id = "docx-flow-owner";
   fixture.state.applications = [];
   fixture.state.jobs[0].url = "https://jobs.example/apply";
@@ -152,6 +165,7 @@ async function exerciseDocxFlow(multiPage: boolean, headerText?: string) {
   const confirmed = await publicAction("onboarding", { facts: confirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   expect(fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).every(isUsableFact)).toBe(true);
+  await finishFixtureOnboarding();
   const storedDegree = source.anchors.find((anchor) => anchor.text === "State University — B.S. Computer Science")!;
   storedDegree.candidateClaim = false;
 
@@ -243,6 +257,7 @@ it("blocks a new draft when an older stored source flag hides an unconfirmed unb
   const otherConfirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id).map((fact) => ({ ...fact, verified: true }));
   const confirmed = await publicAction("onboarding", { facts: otherConfirmedFacts });
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  await finishFixtureOnboarding();
   fixture.state!.profile.facts = fixture.state!.profile.facts.filter((fact) => fact.id !== degreeFact.id);
   degree.candidateClaim = false;
 
@@ -264,9 +279,6 @@ it("blocks a new draft when an older stored source flag hides an unconfirmed unb
 
 it("blocks a pre-feature DOCX at the worker instead of replacing it with a generic template", async () => {
   vi.stubEnv("DEMO_MODE", "true");
-  fixture.state!.profile.resumeFileName = "older-source.docx";
-  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.docx`,
-    sha256: "a".repeat(64), size: 1000, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
   fixture.demo = false;
   const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
   expect(selected.status, await selected.clone().text()).toBe(200);
@@ -274,9 +286,12 @@ it("blocks a pre-feature DOCX at the worker instead of replacing it with a gener
   const requested = await publicAction("draft", { applicationId: application.id });
   expect(requested.status, await requested.clone().text()).toBe(200);
   const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
-
-  await expect(runDraft(handoff.payload)).rejects.toThrow(/predates source-aware résumé review.*re-upload/i);
-  expect(application.status).toBe("selected");
+  fixture.state!.profile.resumeFileName = "older-source.docx";
+  fixture.state!.profile.resumeSource = { storageKey: `${fixture.state!.profile.id}/00000000-0000-4000-8000-000000000001.docx`,
+    sha256: "a".repeat(64), size: 1000, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  const statusBeforeWorker = application.status;
+  await expect(runDraft(handoff.payload)).resolves.toEqual({ skipped: true });
+  expect(application.status).toBe(statusBeforeWorker);
   expect(application.packet).toBeUndefined();
   expect(fixture.parse).not.toHaveBeenCalled();
 });

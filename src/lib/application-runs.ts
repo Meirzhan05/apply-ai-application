@@ -21,6 +21,7 @@ import { originalResumeManifest, readOriginalResume } from "@/lib/original-resum
 import { parsePdfSource } from "@/lib/pdf-source";
 import { unconfirmedPdfFactSuggestions, sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 import type { AppState, Application, Profile } from "@/lib/types";
+import { isResumeOnboardingComplete } from "@/lib/onboarding-gate";
 
 export type RunPayload = { userId: string; applicationId: string; runToken?: string; draftMode?: "resume" | "essays" };
 
@@ -54,6 +55,12 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
       throw new Error("The saved PDF could not be re-inspected against its original bytes. Re-upload and confirm the current source before tailoring.");
   }
   inspected = sourceWithCurrentEvidenceClaims(inspected, profile.name);
+  const previousAnchors = new Map(previous.anchors.map((anchor) => [anchor.id, anchor]));
+  // Re-inspecting the same bytes repairs metadata, not the owner's source-claim selection.
+  inspected = { ...inspected, anchors: inspected.anchors.map((anchor) => {
+    const original = previousAnchors.get(anchor.id);
+    return original?.text === anchor.text ? { ...anchor, candidateClaim: original.candidateClaim } : anchor;
+  }) };
   const inspectedAnchorIds = new Set(inspected.anchors.map((anchor) => anchor.id));
   if (previous.version < 3 && profile.facts.some((fact) => fact.sourceAnchorId && !inspectedAnchorIds.has(fact.sourceAnchorId)))
     throw new Error("A confirmed résumé fact no longer matches the same source text after PDF re-inspection. Re-upload and reconfirm that fact before tailoring.");
@@ -72,7 +79,8 @@ async function refreshLegacyPdfInspection(userId: string, state: AppState): Prom
       throw new Error("A confirmed résumé fact changed while the PDF was being re-inspected. Retry after reviewing the current source facts.");
     currentProfile.resumeSourceDocument = inspected;
     currentProfile.resumeText = inspected.text;
-    const suggestions = unconfirmedPdfFactSuggestions(currentProfile, inspected);
+    const selectedAnchors = new Set(inspected.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => anchor.id));
+    const suggestions = unconfirmedPdfFactSuggestions(currentProfile, inspected).filter((suggestion) => selectedAnchors.has(suggestion.sourceAnchorId));
     for (const suggestion of suggestions) {
       if (currentProfile.facts.length >= 80) break;
       currentProfile.facts.push({ id: newId(), text: suggestion.text, verified: false, source: "resume", sourceAnchorId: suggestion.sourceAnchorId });
@@ -129,6 +137,7 @@ async function currentDraftRun(userId: string, applicationId: string, runToken: 
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app || app.status !== "drafting" || app.runToken !== runToken || app.runWorkerClaimedAt !== expected.claimedAt)
       throw new Error("The application draft was cancelled or changed before provider work.");
+    if (!expected.autonomous && !isResumeOnboardingComplete(state.profile)) throw new Error("The required onboarding changed before provider work.");
     const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
     if (!job?.active) throw new Error("The job is closed or unavailable.");
     const eligibilityJob = importedAutonomyJob(app, job);
@@ -142,6 +151,7 @@ async function currentDraftRun(userId: string, applicationId: string, runToken: 
 
 async function claimRun(userId: string, applicationId: string, runToken: string | undefined, status: "drafting" | "filling") {
   return mutateState(userId, (state) => {
+    if (!isResumeOnboardingComplete(state.profile)) return false;
     const app = state.applications.find((item) => item.id === applicationId && item.userId === userId);
     if (!app || app.status !== status || app.runToken !== runToken || app.runWorkerClaimedAt) return false;
     app.runWorkerClaimedAt = new Date().toISOString();
@@ -185,11 +195,13 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
     const beforeModelCall = () => currentDraftRun(userId, applicationId, runToken, expectedRunInputs);
     await beforeModelCall();
     const packet = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? newId() }, () => draftPacket(state.profile, eligibilityJob, app.packet, { resumeFormat: "latex", personalValues: app.profileMemoryVersion === state.profile.automationVersion ? app.profileMemory : undefined, deadline: Date.now() + 540_000, beforeModelCall, knownAnswersOnly: Boolean(app.autonomousAuthorization), preserveResume: Boolean(app.packet) && draftMode !== "resume", regenerateEssays: draftMode === "essays" || (Boolean(app.packet) && !draftMode) }));
-    await mutateState(userId, (current) => {
+    const published = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
-      if (!target || target.status !== "drafting" || target.runToken !== runToken) return;
+      if (!target || target.status !== "drafting" || target.runToken !== runToken) return false;
+      if (!target.autonomousAuthorization && !isResumeOnboardingComplete(current.profile)) return false;
       const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
       if (!currentJob) throw new Error("The job is closed or unavailable.");
+      assertJobEligible(current.profile, importedAutonomyJob(target, currentJob));
       if (packet.resumeSourcePlan) assertSourceJobCurrent(target, currentJob, packet.resumeSourcePlan.jobHash, packet.resumeSourcePlan.jobHashPolicyVersion ?? 1);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "draft");
       validatePacket(current.profile, packet);
@@ -201,7 +213,9 @@ export async function runDraft({ userId, applicationId, runToken, draftMode }: R
         target.queuedRun = { id: newId(), kind: "fill", requestedAt: new Date().toISOString(), reason: "waiting" };
       }
       current.activity.unshift({ id: newId(), at: new Date().toISOString(), label: "Packet ready", detail: packet.summary });
+      return true;
     });
+    if (!published) return { skipped: true };
     if (app.autonomousAuthorization) await (await import("@/lib/application-queue")).queueApplicationRun(userId, applicationId, "fill");
     else if (process.env.EMAIL_FROM) await sendActionNeeded(await loadState(userId), "An application packet is ready for review").catch(() => undefined);
     return { drafted: true };
@@ -228,6 +242,7 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
   const state = await loadState(userId);
   const app = state.applications.find((item) => item.id === applicationId);
   if (!app || app.userId !== userId || app.status !== "filling" || app.runToken !== runToken) return { skipped: true };
+  if (!app.autonomousAuthorization && !isResumeOnboardingComplete(state.profile)) return { cancelled: true };
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   let session: Awaited<ReturnType<typeof prepareBrowser>> | undefined;
   try {
@@ -241,8 +256,10 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     session = await withBrowserUsageContext({ userId, applicationId, jobId: job.id, runId: runToken ?? app.runToken ?? newId() }, () => prepareBrowser(app, job, state.profile, async (opened) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      if (!target.autonomousAuthorization && !isResumeOnboardingComplete(current.profile)) return false;
       const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
       if (!currentJob) throw new Error("The job or approved packet is unavailable.");
+      assertJobEligible(current.profile, importedAutonomyJob(target, currentJob));
       assertSourceJobCurrent(target, currentJob);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       validatePacket(current.profile, target.packet!);
@@ -259,8 +276,10 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     }), async (label) => mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId && item.userId === userId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      if (!target.autonomousAuthorization && !isResumeOnboardingComplete(current.profile)) return false;
       const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
       if (!currentJob) throw new Error("The job or approved packet is unavailable.");
+      assertJobEligible(current.profile, importedAutonomyJob(target, currentJob));
       assertSourceJobCurrent(target, currentJob);
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       else validatePacket(current.profile, target.packet!);
@@ -304,6 +323,10 @@ export async function runFill({ userId, applicationId, runToken }: RunPayload) {
     const saved = await mutateState(userId, (current) => {
       const target = current.applications.find((item) => item.id === applicationId);
       if (!target || target.status !== "filling" || target.runToken !== runToken) return false;
+      if (!target.autonomousAuthorization && !isResumeOnboardingComplete(current.profile)) return false;
+      const currentJob = current.jobs.find((item) => item.id === target.jobId) ?? target.jobSnapshot;
+      if (!currentJob) throw new Error("The job or approved packet is unavailable.");
+      assertJobEligible(current.profile, importedAutonomyJob(target, currentJob));
       if (target.autonomousAuthorization) assertAutonomous(target, current.profile, current.jobs.find((item) => item.id === target.jobId), "fill");
       validatePacket(current.profile, target.packet!);
       for (const answer of target.autonomousHumanAnswers ?? []) {

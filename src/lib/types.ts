@@ -46,17 +46,39 @@ export interface ResumeExtraction {
   uploadSequence?: number;
   filename: string;
   error?: string;
-  /** Verified basic details are saved independently of the experience snapshot. */
+  /** Source hash for basic details published with the active resume snapshot. */
   profileSourceHash?: string;
-  pending?: { source: ResumeSource; document?: ResumeSourceDocument };
+  pending?: {
+    source: ResumeSource;
+    document?: ResumeSourceDocument;
+    onboardingImport?: {
+      token: string;
+      reused: boolean;
+      baseline: {
+        name: string;
+        contactEmail?: string;
+        phone: string;
+        links?: string[];
+        linkedinUrl?: string;
+        githubUrl?: string;
+        portfolioUrl?: string;
+      };
+    };
+  };
 }
 
 export type FactualDeclaration = "yes" | "no" | "unknown";
+export type WorkArrangement = "remote" | "hybrid" | "on-site";
 export type CoverLetterMode = "disabled" | "required-only" | "enabled";
 export type EssayMode = "automatic-truthful";
 
 export interface OnboardingQuestionnaire {
+  immigrationStatus?: "us-citizen" | "permanent-resident" | "visa-holder" | "other";
+  visaType?: string;
+  immigrationStatusDetails?: string;
   workAuthorization?: FactualDeclaration;
+  sponsorshipNow?: FactualDeclaration;
+  sponsorshipFuture?: FactualDeclaration;
   requiresSponsorship?: FactualDeclaration;
   availability?: string;
   graduationYear?: string;
@@ -65,6 +87,10 @@ export interface OnboardingQuestionnaire {
 export interface OnboardingProfile {
   questionnaire: OnboardingQuestionnaire;
   completedAt?: string;
+  completedVersion?: number;
+  completedResumeHash?: string;
+  reviewedHash?: string;
+  draftStage?: "resume" | "profile" | "answers" | "review";
 }
 
 export interface AutomationSettings {
@@ -223,6 +249,7 @@ export interface Profile {
   email: string;
   school: string;
   phone: string;
+  links?: string[];
   graduationYear: string;
   headline: string;
   /** Application contact email is independent of the authenticated account email. */
@@ -239,6 +266,9 @@ export interface Profile {
   skills: string[];
   preferredTitles: string[];
   preferredLocations: string[];
+  currentLocation?: { city: string; region: string; country: string };
+  workArrangements?: WorkArrangement[];
+  willingToRelocate?: boolean;
   remoteOnly: boolean;
   strictLocations?: boolean;
   searchPreferencesConfirmedAt?: string;
@@ -252,6 +282,7 @@ export interface Profile {
   resumeSourceDocument?: ResumeSourceDocument;
   resumeExtraction?: ResumeExtraction;
   resumeUploadSequence?: number;
+  resumeImport?: { token: string; startedAt: string };
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;
@@ -269,6 +300,7 @@ export interface Job {
   title: string;
   location: string;
   remote: boolean | null;
+  workArrangement?: WorkArrangement;
   employmentType: string;
   salary?: string;
   description: string;
@@ -611,6 +643,8 @@ export interface FormSnapshot {
 export type ImportedCompatibilityStatus = "reachable" | "blocked" | "uncertain";
 
 export interface ImportedCompatibilityRecord {
+  /** Saved location at verification; observedContext holds the actual posting evidence. */
+  jobLocation?: string;
   version: 1;
   ownerId: string;
   applicationId: string;

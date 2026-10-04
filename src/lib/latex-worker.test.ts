@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { AppState } from "@/lib/types";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture, completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
 import { createPdfSourceFixture } from "@/lib/fixtures/pdf-source";
 import { parsePdfSource } from "@/lib/pdf-source";
 import { saveDemoOriginalResume } from "@/lib/original-resume";
@@ -16,7 +17,7 @@ import { selectApplication } from "@/lib/workflow";
 import { ResumeDraftError } from "@/lib/resume-document";
 let sourcePath = "";
 beforeEach(async () => {
-  vi.clearAllMocks(); vi.stubEnv("DEMO_MODE", "true"); mocks.state = initialDemoState();
+  vi.clearAllMocks(); vi.stubEnv("DEMO_MODE", "true"); mocks.state = initialDemoState(); mocks.state.profile = completeOnboardingFixture(mocks.state.profile);
   const bytes = await createPdfSourceFixture();
   const key = `${mocks.state.profile.id}/${randomUUID()}.pdf`;
   sourcePath = `.data/resumes/${key}`;
@@ -24,6 +25,7 @@ beforeEach(async () => {
   mocks.state.profile.resumeFileName = "source-resume.pdf";
   mocks.state.profile.resumeSource = { storageKey: key, sha256: bytesHash(bytes), size: bytes.length, mimeType: "application/pdf" };
   mocks.state.profile.resumeSourceDocument = await parsePdfSource(bytes);
+  mocks.state.profile = completeUploadedOnboardingFixture(mocks.state.profile);
 });
 afterEach(async () => { vi.unstubAllEnvs(); if (sourcePath) await rm(sourcePath, { force: true }); });
 describe("LaTeX drafting worker recovery", () => {

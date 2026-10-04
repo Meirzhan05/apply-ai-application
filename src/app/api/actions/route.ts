@@ -24,7 +24,7 @@ import { reopenManualAttempt } from "@/lib/submission-recovery";
 import { checkSubmissionResult } from "@/lib/submission-verification";
 import { sameOrigin } from "@/lib/request-security";
 import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
-import { adminSupabase } from "@/lib/supabase-admin";
+import { applyProfileDraft, parseProfileDraft } from "@/lib/profile-draft";
 import {
   refreshBrowserSnapshot,
   repairEducationFields,
@@ -66,6 +66,9 @@ import {
 } from "@/lib/workflow";
 import type { AppState, Application, Job, Profile } from "@/lib/types";
 import { enrollPilot, withdrawPilot } from "@/lib/pilot";
+import { onboardingQuestionnaireSchema } from "@/lib/onboarding-questionnaire";
+import { actionNeedsCompletedOnboarding, assertResumeOnboardingComplete, isResumeOnboardingComplete } from "@/lib/onboarding-gate";
+import { finishResumeOnboarding, OnboardingCompletionError, saveOnboardingDraft } from "@/lib/onboarding-completion";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -129,6 +132,15 @@ async function perform(
     return;
   }
   const ownerContext = { actor: { kind: "owner" as const, userId }, action };
+  if (action === "onboardingDraft" || action === "finishOnboarding") {
+    return mutateState(userId, (state) => {
+      if (action === "onboardingDraft") saveOnboardingDraft(state.profile, payload);
+      else finishResumeOnboarding(state.profile, z.string().length(64).parse(payload.reviewHash));
+      state.matchCache = {};
+      activity(state, action === "finishOnboarding" ? "Onboarding completed" : "Onboarding draft saved",
+        action === "finishOnboarding" ? "Reviewed imported information and job preferences were confirmed." : "Your progress is saved for your next visit.");
+    }, ownerContext);
+  }
   if (action === "enrollPilot") {
     return mutateState(userId, (state) => {
       const input = z.object({ consentVersion: z.string().max(80), confirmed: z.literal(true) }).parse(payload);
@@ -144,14 +156,7 @@ async function perform(
   }
   if (action === "onboarding") {
     return mutateState(userId, (state) => {
-      const questionnaire = z
-        .object({
-          workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-          requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-          availability: z.string().max(200).optional(),
-          graduationYear: z.string().max(20).optional(),
-        })
-        .parse(payload.questionnaire ?? payload);
+      const questionnaire = onboardingQuestionnaireSchema.parse(payload.questionnaire ?? payload);
       const facts = payload.facts === undefined ? undefined : parseEditableFacts(payload.facts, state.profile.facts, payload.expectedFacts);
       const currentAnchors = new Set(state.profile.resumeSourceDocument?.anchors.map((anchor) => anchor.id) ?? []);
       if (facts?.some((fact) => fact.sourceAnchorId && (!currentAnchors.has(fact.sourceAnchorId) || fact.source !== "resume"))) throw new Error("A résumé fact references an unknown source location. Upload and inspect the résumé again.");
@@ -196,11 +201,6 @@ async function perform(
     }, ownerContext);
   }
   if (action === "profile") {
-    const verifiedEmail = isDemo()
-      ? null
-      : (await adminSupabase().auth.admin.getUserById(userId)).data.user?.email;
-    if (!isDemo() && !verifiedEmail)
-      throw new Error("Your sign-in email could not be verified.");
     return mutateState(userId, (state) => {
       const profile = state.profile;
       const fields: Array<keyof Profile> = ["workAuthorization"];
@@ -215,16 +215,14 @@ async function perform(
         profile.detailSources[key] = { source: "user", value };
         profile.savedAnswers = profile.savedAnswers?.filter(answer => answer.key !== key);
       }
+      applyProfileDraft(profile, parseProfileDraft(payload));
       fields.forEach((key) => {
         if (key in payload)
           Object.assign(profile, { [key]: text(payload[key], 500) });
       });
-      if (verifiedEmail) profile.email = verifiedEmail;
-      else if ("email" in payload) profile.email = text(payload.email, 254);
       for (const key of [
         "skills",
         "preferredTitles",
-        "preferredLocations",
       ] as const) {
         if (key in payload)
           profile[key] = z
@@ -235,7 +233,7 @@ async function perform(
             .filter(Boolean);
       }
       if ("skills" in payload) profile.skillsEdited = true;
-      if ("remoteOnly" in payload)
+      if ("remoteOnly" in payload && !("workArrangements" in payload))
         profile.remoteOnly = payload.remoteOnly === true;
       if ("strictLocations" in payload) profile.strictLocations = payload.strictLocations === true;
       if ("timeZone" in payload) {
@@ -253,12 +251,7 @@ async function perform(
       if ("sensitiveAnswers" in payload)
         profile.sensitiveAnswers = z.partialRecord(z.enum(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"]), z.string().max(200)).parse(payload.sensitiveAnswers);
       const questionnaire = payload.questionnaire ?? (typeof payload.onboarding === "object" && payload.onboarding !== null ? (payload.onboarding as Record<string, unknown>).questionnaire : undefined);
-      const parsedQuestionnaire = questionnaire === undefined ? undefined : z.object({
-        workAuthorization: z.enum(["yes", "no", "unknown"]).optional(),
-        requiresSponsorship: z.enum(["yes", "no", "unknown"]).optional(),
-        availability: z.string().max(200).optional(),
-        graduationYear: z.string().max(20).optional(),
-      }).parse(questionnaire);
+      const parsedQuestionnaire = questionnaire === undefined ? undefined : onboardingQuestionnaireSchema.parse(questionnaire);
       const settings = payload.automationSettings && typeof payload.automationSettings === "object" ? z.object({
         resumeTailoring: z.boolean().optional(),
         coverLetterMode: z.enum(["disabled", "required-only", "enabled"]).optional(),
@@ -267,7 +260,7 @@ async function perform(
       if (parsedQuestionnaire || facts) saveOnboarding(profile, { questionnaire: parsedQuestionnaire, facts });
       if (settings) updateAutomationSettings(profile, settings);
       if (!parsedQuestionnaire && !facts && !settings) bumpAutomationVersion(profile);
-      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
+      if (["preferredTitles", "preferredLocations", "remoteOnly", "strictLocations", "workArrangements"].some((key) => key in payload)) profile.searchPreferencesConfirmedAt = new Date().toISOString();
       profile.updatedAt = new Date().toISOString();
       state.matchCache = {};
       activity(
@@ -666,8 +659,21 @@ export async function POST(request: Request) {
     const userId = await currentUserId();
     return await withAccountOperation(userId, "request", async () => {
     const { action, payload } = Input.parse(await request.json());
+    if (actionNeedsCompletedOnboarding(action) && action !== "resumeBrowser") {
+      assertResumeOnboardingComplete(await loadState(userId).then((state) => state.profile), action);
+    }
+    if (action === "resumeBrowser") {
+      const state = await loadState(userId);
+      const application = state.applications.find((item) => item.id === text(payload.applicationId, 100));
+      const outcomeObservation = Boolean(application?.submissionAttemptedAt) ||
+        ["awaiting_verification", "uncertain", "submitted"].includes(application?.status ?? "");
+      if (!outcomeObservation) assertResumeOnboardingComplete(state.profile, action);
+    }
     await perform(userId, action, payload);
-    if (!isDemo() && ["profile", "onboarding", "automationSettings"].includes(action)) {
+    const currentProfile = !isDemo() || ["profile", "onboarding", "automationSettings", "import"].includes(action)
+      ? (await loadState(userId)).profile
+      : undefined;
+    if (!isDemo() && ["profile", "onboarding", "automationSettings", "finishOnboarding"].includes(action) && currentProfile && isResumeOnboardingComplete(currentProfile)) {
       const searching = await queuePersonalSearch(userId);
       // Unchanged search inputs reuse the private discovery results, but profile
       // edits still invalidate fit assessments (for example new fact IDs).
@@ -680,7 +686,7 @@ export async function POST(request: Request) {
       !isDemo() &&
       process.env.TYPESAFE_API_KEY &&
       process.env.TRIGGER_SECRET_KEY &&
-      ["import"].includes(action)
+      ["import"].includes(action) && currentProfile && isResumeOnboardingComplete(currentProfile)
     ) {
       await queueMatchAssessment(userId).catch(() => undefined);
     }
@@ -712,7 +718,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Action failed.";
     return NextResponse.json(
-      { error: message },
+      { error: message, ...(error instanceof OnboardingCompletionError ? { missing: error.missing } : {}) },
       { status: message === "AUTH_REQUIRED" ? 401 : error instanceof AccountDeletionInProgressError ? 409 : 400 },
     );
   }

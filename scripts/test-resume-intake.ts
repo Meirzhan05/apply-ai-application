@@ -46,7 +46,7 @@ async function main() {
     assert.equal(state.profile.resumeSource!.sha256, createHash("sha256").update(bytes).digest("hex"));
     const stored = await db.storage.from("resumes").download(state.profile.resumeSource!.storageKey!);
     assert.equal(stored.error, null); assert.deepEqual(Buffer.from(await stored.data!.arrayBuffer()), bytes);
-    console.log(JSON.stringify({ format: extension, facts: extracted.length, autoAcceptedWithoutConfirmation: true, sourceBytesVerified: true }));
+    console.log(JSON.stringify({ format: extension, facts: extracted.length, groundedBeforeOnboardingReview: true, sourceBytesVerified: true }));
     return state;
   };
   try {
@@ -60,6 +60,8 @@ async function main() {
         preferredTitles: [], preferredLocations: [], remoteOnly: false, searchPreferencesConfirmedAt: undefined,
         resumeFileName: undefined, resumeText: undefined, resumeSource: undefined, resumeSourceDocument: undefined,
         resumeExtraction: undefined, resumeUploadSequence: undefined,
+        resumeImport: undefined, currentLocation: undefined, contactEmail: undefined, detailSources: undefined,
+        onboarding: { questionnaire: {} }, automationAuthorization: undefined,
         facts: [{ id: "manual", text: "Built a previously entered synthetic project.", verified: true, source: "user" }],
         sensitiveAnswers: { requiresSponsorship: "Synthetic preserved answer" } };
       const stored: Partial<AppState> = { ...state }; delete stored.jobs;
@@ -73,6 +75,8 @@ async function main() {
     const beforeOther = await read(1);
     const first = await upload(0, "docx", await createResumeProfileFixture());
     assert.equal(first.profile.contactEmail, "riley@example.com");
+    assert.match(first.profile.email, /^resume-intake-/);
+    assert.deepEqual(first.profile.currentLocation, { city: "Seattle", region: "WA", country: "United States" });
     assert.equal(first.profile.githubUrl, "https://github.com/riley-example");
     assert.equal(first.profile.linkedinUrl, "https://www.linkedin.com/in/riley-example");
     assert.equal(first.profile.portfolioUrl, "https://riley.example.com");
@@ -90,6 +94,13 @@ async function main() {
     assert.equal(replacement.profile.portfolioUrl, "");
     assert.notEqual(replacement.profile.resumeSource!.sha256, firstHash);
     assert.ok(replacement.profile.facts.filter(f => f.source === "resume").every(f => f.grounding?.sourceHash !== firstHash));
+    assert.deepEqual(replacement.profile.currentLocation, first.profile.currentLocation);
+    assert.ok(replacement.profile.links?.includes("https://github.com/manual-example"));
+    const reuse = new FormData(); reuse.set("reuse", "true");
+    const reused = await fetch(`${origin}/api/resume`, { method: "POST", headers: { Origin: origin, Cookie: users[0].cookie }, body: reuse });
+    assert.equal(reused.status, 202, await reused.clone().text());
+    assert.equal((await reused.json()).status, "ready");
+    assert.deepEqual((await read(0)).profile.facts, replacement.profile.facts);
     const beforeFirst = await read(0);
     const pdf = await upload(1, "pdf", await createPdfSourceFixture({ qualificationText: "Python, scikit-learn, and PostgreSQL", wrappedBullet: true }));
     assert.equal(pdf.profile.contactEmail, "avery@example.com");
@@ -99,7 +110,9 @@ async function main() {
     const bucket = await db.storage.getBucket("resumes"); assert.equal(bucket.error, null); assert.equal(bucket.data!.public, false);
     console.log(JSON.stringify({ passed: true, ownerIsolation: true, snapshotReplacement: true, manualFactsPreserved: true, privateSourceStorage: true, userConfirmationActions: 0, realOwnerWorkspaceWrites: 0, employerSubmissions: 0 }));
   } finally {
+    const cleanupErrors: string[] = [];
     for (const owner of users) {
+      try {
       // Wait for successful workers to release their account leases before deleting fixtures.
       for (let attempt = 0; attempt < 15; attempt++) {
         const leases = await db.from("account_operation_leases").select("lease_id").eq("owner_id", owner.id);
@@ -110,8 +123,16 @@ async function main() {
       const listed = await db.storage.from("resumes").list(owner.id); assert.equal(listed.error, null);
       const objects = (listed.data ?? []).map(file => `${owner.id}/${file.name}`);
       if (objects.length) assert.equal((await db.storage.from("resumes").remove(objects)).error, null);
-      assert.equal((await db.auth.admin.deleteUser(owner.id)).error, null);
+      } catch (error) {
+        cleanupErrors.push(`${owner.id} storage: ${error instanceof Error ? error.message : "cleanup failed"}`);
+      }
+      try {
+        assert.equal((await db.auth.admin.deleteUser(owner.id)).error, null);
+      } catch (error) {
+        cleanupErrors.push(`${owner.id} account: ${error instanceof Error ? error.message : "cleanup failed"}`);
+      }
     }
+    if (cleanupErrors.length) throw new Error(`Disposable resume-intake cleanup failed: ${cleanupErrors.join("; ")}`);
     console.log("CLEANUP disposable resume-intake accounts and files removed");
   }
 }

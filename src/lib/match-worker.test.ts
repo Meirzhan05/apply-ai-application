@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import type { AppState } from "@/lib/types";
 import { assessUserMatches } from "../../trigger/matches";
 import { matchKey } from "@/lib/match-cache";
@@ -19,6 +20,7 @@ let state: AppState;
 beforeEach(() => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-test-key");
   state = initialDemoState();
+  state.profile = completeOnboardingFixture(state.profile);
   state.jobs = state.jobs.slice(0, 2);
   state.matchCache = {};
   mocks.load.mockImplementation(async () => structuredClone(state));
@@ -142,5 +144,31 @@ describe("matching worker account and profile lifecycle", () => {
     mocks.reserve.mockResolvedValue(false);
     expect(await run({ userId: state.profile.id })).toEqual({ assessed: 0 });
     expect(mocks.assess).not.toHaveBeenCalled();
+  });
+
+  it("rejects a pending replacement before the provider call even when updatedAt is unchanged", async () => {
+    const updatedAt = state.profile.updatedAt;
+    mocks.reserve.mockImplementation(async () => {
+      state.profile.resumeImport = { token: "replacement", startedAt: "2026-10-04T00:00:00.000Z" };
+      return true;
+    });
+    expect(await run({ userId: state.profile.id })).toEqual({ assessed: 0, stopped: "onboarding_incomplete" });
+    expect(mocks.reserve).toHaveBeenCalledOnce();
+    expect(state.profile.resumeImport?.token).toBe("replacement");
+    expect(state.profile.updatedAt).toBe(updatedAt);
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(state.matchCache).toEqual({});
+  });
+
+  it("rejects publication when a pending replacement begins during assessment", async () => {
+    mocks.assess.mockImplementation(async (_profile: unknown, _job: unknown, options?: { beforeModelCall?: () => void | Promise<void> }) => {
+      await options?.beforeModelCall?.();
+      mocks.provider();
+      state.profile.resumeImport = { token: "replacement", startedAt: "2026-10-04T00:00:00.000Z" };
+      return { version: 1, category: "uncertain", score: 0, evidence: [], gaps: [], uncertainty: ["Synthetic replacement"], model: "fixture", evaluatedAt: "2026-10-04T00:00:00.000Z" };
+    });
+    expect(await run({ userId: state.profile.id })).toEqual({ assessed: 0, stopped: "onboarding_incomplete" });
+    expect(mocks.provider).toHaveBeenCalledOnce();
+    expect(state.matchCache).toEqual({});
   });
 });

@@ -200,6 +200,7 @@ async function lever(slug: string, strict = false, region?: "eu"): Promise<Job[]
         company: slug.replace(/[-_]/g, " "),
         title: String(item.text ?? "Untitled role"),
         location: categories?.location ?? "Location not listed",
+        workArrangement: item.workplaceType === "remote" || item.workplaceType === "hybrid" || item.workplaceType === "on-site" ? item.workplaceType : undefined,
         remote:
           item.workplaceType === "remote"
             ? true

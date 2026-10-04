@@ -14,6 +14,7 @@ import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
 import { hasSourcePreservingResume, ResumeComparison, ResumeSourceFactsNotice } from "@/components/resume-comparison";
+import { ImmigrationQuestionnaireFields } from "@/components/immigration-questionnaire-fields";
 import { mergeCurrentSourceFacts } from "@/lib/profile-source-facts";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
@@ -42,6 +43,7 @@ import { canReturnToMaterials, canReturnToFinalReview } from "@/lib/material-rev
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
+import { unitedStatesDestination } from "@/lib/location-fit";
 import { canReopenManualAttempt, employerSubmissionBlock, employerFormCorrections, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
@@ -72,7 +74,8 @@ import type {
 } from "@/lib/types";
 
 type ViewState = Omit<AppState, "applications"> & {
-  applications: Array<Application & { materialsStale?: boolean }>;
+  demoMode?: boolean;
+  applications: Array<Application & { materialsStale?: boolean; destinationIssue?: string | null }>;
   matches: { jobId: string; assessment: MatchAssessment }[];
   onboarding: { complete: boolean; missing: string[]; confirmedFactCount: number };
   automation: {
@@ -163,6 +166,10 @@ export default function Dashboard() {
   const [answerEdits, setAnswerEdits] = useState<{ applicationId: string; answers: ScreeningAnswer[] } | null>(null);
   const [blockerAnswers, setBlockerAnswers] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    if (data && !data.demoMode && !data.onboarding.complete) router.replace("/onboarding");
+  }, [data, router]);
+
   useEffect(() => { if (confirmDiscardImport) keepImportEditing.current?.focus(); }, [confirmDiscardImport]);
 
   const refresh = useMemo(() => createWorkspaceRefresh<ViewState>(setData, setConnection), []);
@@ -215,8 +222,8 @@ export default function Dashboard() {
     if (!data) return null;
     // Fact edits save through ResumeFacts; an older settings draft must not replace a new extraction.
     if (action === "profile" && "id" in payload) {
-      const { facts: _facts, resumeExtraction: _extraction, ...settings } = payload;
-      void _facts; void _extraction;
+      const { facts: _facts, resumeExtraction: _extraction, email: _accountEmail, ...settings } = payload;
+      void _facts; void _extraction; void _accountEmail;
       const expectedDetails: Record<string, string> = {};
       for (const key of profileDetailKeys) {
         if (settings[key] === profileDraftBaseline.current?.[key]) delete settings[key];
@@ -517,7 +524,7 @@ export default function Dashboard() {
     finally { setBusy(""); }
   };
 
-  if (!data)
+  if (!data || (!data.demoMode && !data.onboarding.complete))
     return (
       <div className="loading">
         <div className="brand">
@@ -1037,7 +1044,7 @@ export default function Dashboard() {
               {!data.profile.demo && !emptyPersonalView && data.personalSearch?.status !== "complete" && personalStatus}
               {!emptyPersonalView && (!data.onboarding.complete ? <details className="profile-context setup-context">
                 <summary aria-label={`Finish profile setup: ${data.onboarding.missing.length} items remaining. Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}`}><span>{data.onboarding.missing.includes("workAuthorization") ? "Work authorization needs confirmation." : `Next: ${onboardingMissingLabel(data.onboarding.missing[0] ?? "profile answers")}.`}</span><small>Setup · {data.onboarding.missing.length}<ChevronDown size={15} /></small></summary>
-                <div><p>Complete these profile items to improve your matches and enable automation:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => { pendingSetupFocus.current = data.onboarding.missing[0] === "confirmedResumeFact" ? "confirmed-resume-facts" : `setup-${data.onboarding.missing[0]}`; navigateSection("profile"); }}>Review profile <ArrowRight size={15} /></button></div>
+                <div><p>Complete the required onboarding information:</p><ul>{data.onboarding.missing.map(item => <li key={item}>{onboardingMissingLabel(item)}</li>)}</ul><button className="text-button" onClick={() => router.push("/onboarding")}>Complete onboarding <ArrowRight size={15} /></button></div>
               </details> : hasSharedUnknown && <div className="profile-context" role="note">
                 <span>Work authorization needs confirmation.</span>
                 <button className="text-button" onClick={() => navigateSection("profile")}>Review profile</button>
@@ -1134,6 +1141,7 @@ export default function Dashboard() {
                         app.jobId === job.id && app.status !== "cancelled",
                     );
                     const importedPreflight = job.source === "imported" && job.importCheck?.status !== "verified";
+                    const canVerifyDestination = importedPreflight && data.automation.enabled && unitedStatesDestination(job.location) === "unresolved";
                     const rowChecks = [...new Set([...(match?.gaps ?? []), ...(match?.uncertainty ?? [])])].filter(check => check !== sharedUnknown);
                     const context = `${job.title} at ${job.company}`;
                     const evidence = matchEvidence(data.profile, job, match);
@@ -1286,7 +1294,7 @@ export default function Dashboard() {
                               aria-label={`${data.automation.enabled ? (importedPreflight ? "Verify and apply automatically for" : "Apply automatically for") : "Prepare application for"} ${context}`}
                               aria-describedby="application-mode-note"
                               disabled={
-                                (Boolean(busy) || needsWorkspaceCheck) || match?.category === "excluded"
+                                Boolean(busy) || needsWorkspaceCheck || (match?.category === "excluded" && !canVerifyDestination)
                               }
                               onClick={async () => {
                                 const next = await act(data.automation.enabled ? (importedPreflight ? "preflightImportedPosting" : "startAutonomous") : "select", {
@@ -1418,6 +1426,7 @@ export default function Dashboard() {
             <p className="subheading">
               {hasAutomaticApplications ? "Track your applications, review blocked items, and see saved employer confirmations." : "Review your materials before the agent fills a form. Review the filled form before submission."}
             </p>
+            {!data.onboarding.complete && <button className="outline-action" onClick={() => router.push("/onboarding")}>Complete onboarding <ArrowRight size={16} /></button>}
             <div className="application-utilities"><ApplicationHelp />
             {applications.length > 0 && <details className="collection-tools" id="application-collection-tools"><summary>Find applications</summary><div className="application-tools">
               <label htmlFor="application-search">Search applications<input ref={applicationSearchInput} id="application-search" type="search" value={applicationSearch} maxLength={200} placeholder="Employer or role" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onChange={event => { const query = event.target.value; setSelected(activeApp && matchesApplicationView(activeApp, query) ? activeApp.id : null); setApplicationOutcome(null); setApplicationSearch(query); }} /></label>
@@ -1528,6 +1537,7 @@ export default function Dashboard() {
                         {activeApp.autonomousAuthorization || activeApp.importedOutcome ? autonomousOutcome(activeApp) : statusLabel(activeApp.status)}
                       </span>
                     </div>
+                    {activeApp.destinationIssue && <p className="job-review-note" role="status">{activeApp.destinationIssue}</p>}
                     {appJob.source === "imported" && appJob.importCheck?.status !== "verified" && (!activeApp.importedOutcome || activeApp.importedOutcome.kind === "reachable") && !activeApp.autonomousAuthorization && (
                       <div className="step-card" aria-label="Imported employer compatibility">
                         <h3>Check the employer posting first</h3>
@@ -1599,10 +1609,10 @@ export default function Dashboard() {
                         }
                       }}>Undo source fact changes</button>
                     </section>}
-                    {!activeAppIsAutomatic && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
-                      <h3>Your profile changed</h3>
-                      <p>These materials were prepared before your latest profile update. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application.</p>
-                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id })}>Rebuild materials from updated facts</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
+                    {!activeAppIsAutomatic && (!activeApp.destinationIssue || (unitedStatesDestination(appJob.location) === "verified_us" && !activeApp.importedCompatibility)) && ["draft_review", "authorized_to_fill", "final_review", "approved_to_submit", "needs_user_action"].includes(activeApp.status) && activeApp.materialsStale && <section className="materials-update" role="status" id={`materials-update-${activeApp.id}`}>
+                      <h3>{activeApp.destinationIssue ? "The job destination changed" : "Your profile changed"}</h3>
+                      <p>{activeApp.destinationIssue ? "Rebuild your materials for the updated posting, then review them before approving." : "These materials were prepared before your latest profile update. Rebuild them, then review the new resume and essays before approving. Your personal answers stay with this application."}</p>
+                      {activeApp.status === "draft_review" ? <button className="dark-button" disabled={Boolean(busy) || Boolean(activeApp.queuedRun) || answersDirty || editingEssay !== null} onClick={() => act("draft", { applicationId: activeApp.id, ...(activeApp.destinationIssue ? { draftMode: "resume" } : {}) })}>{activeApp.destinationIssue ? "Rebuild materials for updated job" : "Rebuild materials from updated facts"}</button> : <button className="dark-button" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Return to materials review</button>}
                       {notice && <p>{notice}</p>}
                     </section>}
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
@@ -1935,6 +1945,22 @@ export default function Dashboard() {
                       />
                     </label>
                   ))}
+                  <label>
+                    Links (optional)
+                    <textarea rows={3} value={(profileDraft.links ?? []).join("\n")} onChange={(event) => setProfileDraft({ ...profileDraft, links: event.target.value.split("\n") })} />
+                  </label>
+                </div>
+                <h3>Current Location</h3>
+                <div className="form-grid">
+                  {(["city", "region", "country"] as const).map((key) => (
+                    <label key={key}>
+                      {{ city: "Current city", region: "Current state or region", country: "Current country" }[key]}
+                      <input maxLength={120} value={profileDraft.currentLocation?.[key] ?? ""} onChange={(event) => setProfileDraft({
+                        ...profileDraft,
+                        currentLocation: { city: "", region: "", country: "", ...profileDraft.currentLocation, [key]: event.target.value },
+                      })} />
+                    </label>
+                  ))}
                 </div>
                 <h3>Links</h3>
                 <p className="muted">These links are reused when an application asks for them.</p>
@@ -1988,54 +2014,48 @@ export default function Dashboard() {
                     <small>Student or visa status does not answer employment authorization or sponsorship. Enter those answers separately below.</small>
                   </label>
                 </div>
-                <label className="checkline">
-                  <input
-                    type="checkbox"
-                    checked={profileDraft.remoteOnly}
-                    onChange={(event) =>
-                      setProfileDraft({
-                        ...profileDraft,
-                        remoteOnly: event.target.checked,
-                      })
-                    }
-                  />{" "}
-                  Show only remote roles
+                <label className="checkline"><input type="checkbox" checked={profileDraft.preferredLocations.includes("United States")} onChange={(event) => setProfileDraft({
+                  ...profileDraft,
+                  preferredLocations: event.target.checked ? [...profileDraft.preferredLocations.filter((location) => location !== "United States"), "United States"] : profileDraft.preferredLocations.filter((location) => location !== "United States"),
+                })} /> Anywhere in the United States</label>
+                <h3>Acceptable work arrangements</h3>
+                <div role="group" aria-label="Acceptable work arrangements">
+                  {(["remote", "hybrid", "on-site"] as const).map((arrangement) => (
+                    <label className="checkline" key={arrangement}>
+                      <input type="checkbox" checked={(profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote"] : [])).includes(arrangement)} onChange={(event) => {
+                        const current = profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote" as const] : []);
+                        const workArrangements = event.target.checked ? [...current, arrangement] : current.filter((value) => value !== arrangement);
+                        setProfileDraft({ ...profileDraft, workArrangements, remoteOnly: workArrangements.length === 1 && workArrangements[0] === "remote" });
+                      }} />
+                      {{ remote: "Remote", hybrid: "Hybrid", "on-site": "On-site" }[arrangement]}
+                    </label>
+                  ))}
+                </div>
+                <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for hybrid and on-site roles</label>
+                <label>
+                  Willing to relocate (optional)
+                  <select aria-label="Willing to relocate (optional)" value={profileDraft.willingToRelocate === undefined ? "" : profileDraft.willingToRelocate ? "yes" : "no"} onChange={(event) => setProfileDraft({ ...profileDraft, willingToRelocate: event.target.value === "" ? undefined : event.target.value === "yes" })}>
+                    <option value="">Unanswered</option><option value="yes">Yes</option><option value="no">No</option>
+                  </select>
                 </label>
                 <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
                 <p className="muted">Your personal search starts automatically once you save these preferences and your resume facts are ready. Leave titles and locations blank to let your agent use your experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
-                {(["requiresSponsorship", "workAuthorization", "gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
+                {(["gender", "ethnicity", "disability", "veteran"] as const).map((key) => (
                   <label key={key}>
-                    {{ requiresSponsorship: "Will you require sponsorship?", workAuthorization: "Work authorization answer", gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
+                    {{ gender: "Gender answer", ethnicity: "Ethnicity answer", disability: "Disability answer", veteran: "Veteran status answer" }[key]}
                     <input maxLength={200} value={profileDraft.sensitiveAnswers[key] ?? ""} onChange={(event) => setProfileDraft({ ...profileDraft, sensitiveAnswers: { ...profileDraft.sensitiveAnswers, [key]: event.target.value } })} placeholder="Leave blank for manual entry" />
                   </label>
                 ))}
                 <h3>Required onboarding answers</h3>
                 <p className="muted">These answers are stored as explicit declarations. Leaving one blank keeps it missing; “No” is saved as a real answer.</p>
+                <ImmigrationQuestionnaireFields
+                  questionnaire={profileDraft.onboarding?.questionnaire ?? {}}
+                  onChange={questionnaire => setProfileDraft({ ...profileDraft, onboarding: { ...profileDraft.onboarding, questionnaire } })}
+                />
                 <label>
-                  Are you authorized to work in the United States?
-                  <select
-                    id="setup-workAuthorization"
-                    value={profileDraft.onboarding?.questionnaire.workAuthorization ?? ""}
-                    onChange={(event) => setProfileDraft({
-                      ...profileDraft,
-                      onboarding: {
-                        questionnaire: {
-                          ...profileDraft.onboarding?.questionnaire,
-                          workAuthorization: event.target.value ? event.target.value as "yes" | "no" | "unknown" : undefined,
-                        },
-                      },
-                    })}
-                  >
-                    <option value="">Choose an answer</option>
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                    <option value="unknown">I’m not sure yet</option>
-                  </select>
-                </label>
-                <label>
-                  Will you require sponsorship for employment?
+                  Will you need employer sponsorship now or in the future?
                   <select
                     id="setup-requiresSponsorship"
                     value={profileDraft.onboarding?.questionnaire.requiresSponsorship ?? ""}
@@ -2056,7 +2076,7 @@ export default function Dashboard() {
                   </select>
                 </label>
                 <label>
-                  When are you available to start?
+                  When are you available to start? (optional)
                   <input
                     maxLength={200}
                     value={profileDraft.onboarding?.questionnaire.availability ?? ""}
@@ -2093,7 +2113,7 @@ export default function Dashboard() {
                   onClick={() =>
                     act(
                       "profile",
-                      profileDraft as unknown as Record<string, unknown>,
+                      { ...profileDraft, willingToRelocate: profileDraft.willingToRelocate ?? null } as unknown as Record<string, unknown>,
                     )
                   }
                 >
@@ -2284,7 +2304,7 @@ const labels: Record<string, string> = {
   graduationYear: "Graduation year",
   headline: "Short headline",
   preferredTitles: "Preferred job titles",
-  preferredLocations: "Preferred locations",
+  preferredLocations: "Preferred US job locations",
   skills: "Skills",
 };
 function relative(input: string) {

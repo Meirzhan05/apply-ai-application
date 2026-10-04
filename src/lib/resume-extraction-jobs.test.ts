@@ -16,6 +16,13 @@ vi.mock("@/lib/match-queue", () => ({ queueMatchAssessment: fixture.matches }));
 vi.mock("@trigger.dev/sdk", () => ({ tasks: { trigger: fixture.dispatch } }));
 import { ensureResumeExtraction, queuedResumeExtraction, retryResumeExtraction, runResumeExtraction } from "@/lib/resume-extraction-jobs";
 
+function onboardingImport(reused = false) {
+  const profile = fixture.state!.profile;
+  profile.resumeExtraction!.pending!.onboardingImport = { token: "import", reused,
+    baseline: { name: profile.name, contactEmail: profile.contactEmail, phone: profile.phone, links: structuredClone(profile.links),
+      linkedinUrl: profile.linkedinUrl, githubUrl: profile.githubUrl, portfolioUrl: profile.portfolioUrl } };
+}
+
 beforeEach(async () => {
   vi.clearAllMocks(); fixture.budget = true; fixture.details.mockResolvedValue([]);
   fixture.state = initialDemoState(); fixture.state.profile.name = "Riley Example";
@@ -65,23 +72,29 @@ it("retains the complete previous snapshot on model failure and retries with a f
   expect(await runResumeExtraction({ userId: "owner", requestId: retryId })).toMatchObject({ ready: true });
 });
 
-it("keeps verified basic details when experience times out and does not extract them again on automatic retry", async () => {
+it("publishes verified basic details only after experience extraction succeeds", async () => {
   const profile = fixture.state!.profile;
   const source = profile.resumeExtraction!.pending!.document!;
   const anchor = source.anchors.find(item => item.text.includes("riley@example.com"))!;
-  fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text }]);
+  profile.currentLocation = undefined;
+  onboardingImport();
+  fixture.details.mockResolvedValue([
+    { key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text },
+    { key: "location", value: "Boston, MA", anchorId: anchor.id, quote: anchor.text },
+  ]);
   const previousFacts = structuredClone(profile.facts);
   const version = profile.automationVersion;
   fixture.extract.mockRejectedValueOnce(new Error("Request timed out."));
   const request = { userId: "owner", requestId: profile.resumeExtraction!.id };
   await expect(runResumeExtraction(request)).rejects.toThrow("Request timed out.");
-  expect(profile.contactEmail).toBe("riley@example.com");
+  expect(profile.contactEmail).toBeUndefined();
+  expect(profile.currentLocation).toBeUndefined();
   expect(profile.facts).toEqual(previousFacts);
   expect(profile.resumeFileName).toBe("old.pdf");
-  expect(profile.automationVersion).toBeGreaterThan(version);
-  fixture.details.mockRejectedValue(new Error("Basic details should already be saved."));
+  expect(profile.automationVersion).toBe(version);
   expect(await runResumeExtraction(request)).toMatchObject({ ready: true });
   expect(profile.contactEmail).toBe("riley@example.com");
+  expect(profile.currentLocation).toEqual({ city: "Boston", region: "MA", country: "United States" });
 });
 
 it("does not allow an older upload to replace a newer pending upload", async () => {
@@ -150,14 +163,13 @@ it("publishes basic details with facts and preserves edits made while extraction
   expect(fixture.state!.profile.resumeDetailsVersion).toBe(1);
 });
 
-it("preserves explicit clears made after basic details are saved", async () => {
+it("preserves explicit clears made while basic details are being extracted", async () => {
   const profile = fixture.state!.profile;
   const anchor = profile.resumeExtraction!.pending!.document!.anchors.find(item => item.text.includes("riley@example.com"))!;
   fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text }]);
   fixture.extract.mockImplementationOnce(async () => {
-    expect(profile.contactEmail).toBe("riley@example.com");
     profile.contactEmail = "";
-    profile.detailSources!.contactEmail = { source: "user", value: "" };
+    profile.detailSources = { ...profile.detailSources, contactEmail: { source: "user", value: "" } };
     return [];
   });
   expect(await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id })).toMatchObject({ ready: true });
@@ -210,4 +222,100 @@ it("upgrades a previously extracted resume only once, using original bytes for e
   fixture.state!.profile.resumeExtraction!.status = "ready";
   fixture.state!.profile.resumeDetailsVersion = 1;
   expect(await ensureResumeExtraction("owner", fixture.state!.profile)).toBe(false);
+});
+
+it("imports grounded basics into editable contact details without replacing the authenticated account email", async () => {
+  const profile = fixture.state!.profile;
+  const source = profile.resumeExtraction!.pending!.document!;
+  const anchor = source.anchors.find(item => item.text.includes("riley@example.com"))!;
+  const accountEmail = profile.email;
+  profile.name = "Edited Previous Name";
+  profile.contactEmail = "edited@example.com";
+  onboardingImport();
+  fixture.details.mockResolvedValue([
+    { key: "name", value: "Riley Example", anchorId: anchor.id, quote: anchor.text },
+    { key: "contactEmail", value: "riley@example.com", anchorId: anchor.id, quote: anchor.text },
+  ]);
+  expect(await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id })).toMatchObject({ ready: true });
+  expect(profile.name).toBe("Riley Example");
+  expect(profile.contactEmail).toBe("riley@example.com");
+  expect(profile.email).toBe(accountEmail);
+  expect(profile.phone).toBe("");
+  expect(profile.links).toEqual([]);
+  expect(profile.detailSources!.contactEmail).toMatchObject({ source: "resume", sourceHash: source.sourceHash });
+});
+
+it.each([
+  ["Boston, MA", { city: "Boston", region: "MA", country: "United States" }],
+  ["Almaty, Almaty Region, Kazakhstan", { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }],
+  ["Toronto, ON, Canada", { city: "Toronto", region: "ON", country: "Canada" }],
+  ["Paris, France", { city: "Paris", region: "", country: "France" }],
+  ["New York, NY 10001, USA", { city: "New York", region: "NY", country: "United States" }],
+])("prefills structured current location only from grounded applicant detail: %s", async (value, expected) => {
+  const profile = fixture.state!.profile;
+  profile.currentLocation = undefined;
+  onboardingImport();
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "location", value, anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.currentLocation).toEqual(expected);
+  expect(profile.onboarding!.questionnaire.immigrationStatus).toBeUndefined();
+});
+
+it.each(["Boston", "Remote", "Boston, MA | Seattle, WA", "Preferred location: Boston, MA", "Tbilisi, Georgia", "Seattle, Georgia", "Seattle, NY", "State University, Boston, MA"])("leaves ambiguous or non-residential structured location blank: %s", async value => {
+  const profile = fixture.state!.profile;
+  profile.currentLocation = undefined;
+  onboardingImport();
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "location", value, anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.currentLocation).toBeUndefined();
+});
+
+it.each([{ city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }, { city: "Paris", region: "", country: "" }])("preserves previously entered or partial current location", async currentLocation => {
+  const profile = fixture.state!.profile;
+  profile.currentLocation = structuredClone(currentLocation);
+  onboardingImport();
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "location", value: "Boston, MA", anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.currentLocation).toEqual(currentLocation);
+});
+
+it("preserves contact edits made after upload was queued", async () => {
+  const profile = fixture.state!.profile;
+  onboardingImport();
+  profile.contactEmail = "during-extraction@example.com";
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "contactEmail", value: "riley@example.com", anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.contactEmail).toBe("during-extraction@example.com");
+});
+
+it("replaces an unchanged corrected link from a replacement resume", async () => {
+  const profile = fixture.state!.profile;
+  profile.githubUrl = "https://github.com/corrected";
+  profile.detailSources = { githubUrl: { source: "user", value: profile.githubUrl } };
+  onboardingImport();
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "githubUrl", value: "https://github.com/resume", anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.githubUrl).toBe("https://github.com/resume");
+  expect(profile.links).toEqual(["https://github.com/resume"]);
+});
+
+it("preserves a link edited after replacement extraction was queued", async () => {
+  const profile = fixture.state!.profile;
+  profile.githubUrl = "https://github.com/corrected";
+  profile.links = [profile.githubUrl];
+  profile.detailSources = { githubUrl: { source: "user", value: profile.githubUrl } };
+  onboardingImport();
+  profile.githubUrl = "https://github.com/during-extraction";
+  profile.links = [profile.githubUrl];
+  profile.detailSources.githubUrl = { source: "user", value: profile.githubUrl };
+  const source = profile.resumeExtraction!.pending!.document!;
+  fixture.details.mockResolvedValue([{ key: "githubUrl", value: "https://github.com/resume", anchorId: source.anchors[0].id, quote: source.anchors[0].text }]);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.githubUrl).toBe("https://github.com/during-extraction");
+  expect(profile.links).toEqual(["https://github.com/during-extraction"]);
 });

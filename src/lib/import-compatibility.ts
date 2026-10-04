@@ -53,6 +53,8 @@ export function importedAutonomyJob(application: Application, job: Job): Job {
   if (!importedCompatibilityRequired(application, job)) return job;
   const proof = application.importedCompatibility;
   const context = proof?.observedContext;
+  if (proof && (proof.jobLocation ?? application.jobSnapshot?.location) !== job.location)
+    return { ...job, location: "Destination changed since verification", remote: null };
   if (!proof || proof.status !== "reachable" || !context?.text.trim()) {
     return { ...job, location: "Location not confirmed", remote: null, description: "", requirements: [] };
   }
@@ -82,6 +84,7 @@ export function createImportedCompatibilityRecord(input: {
     ownerId: input.application.userId,
     applicationId: input.application.id,
     jobId: input.application.jobId,
+    jobLocation: input.job.location,
     canonicalPostingUrl: canonicalJobUrl(input.job.url),
     postingUrl: input.job.url,
     observedUrl: observedUrl.href,
@@ -127,6 +130,8 @@ export function assertImportedCompatibility(application: Application, profile: P
       !proof.observedContext?.text.trim())
     throw new Error("Verify the imported employer posting and form before enabling automatic application.");
   const formOrigin = new URL(proof.formUrl).origin;
+  if ((proof.jobLocation ?? application.jobSnapshot?.location) !== job.location)
+    throw new Error("The job destination changed. Verify the imported posting again before preparing or filling an application.");
   const actionOrigin = new URL(proof.submitControl.action, proof.formUrl).origin;
   if (formOrigin !== proof.observedOrigin || actionOrigin !== proof.observedOrigin)
     throw new Error("The imported application form leaves the verified employer site. Review it manually.");

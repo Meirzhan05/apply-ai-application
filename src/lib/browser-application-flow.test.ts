@@ -20,10 +20,11 @@ vi.mock("@/lib/browser-runner", () => ({
 vi.mock("@/lib/email", () => ({ sendActionNeeded: vi.fn() }));
 
 import { initialDemoState } from "@/lib/demo-data";
-import { draftPacket } from "@/lib/drafting";
+import { draftPacket, packetProfileHash } from "@/lib/drafting";
 import { approveFill, approveSubmit, selectApplication, setPacket, transition } from "@/lib/workflow";
 import { runFill } from "@/lib/application-runs";
 import { runSubmission } from "@/lib/application-submission";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
@@ -41,6 +42,8 @@ it.each([
 ] as const)("prepares and submits %s applications through the reviewed browser once", async (provider, url) => {
   const state = initialDemoState();
   const packet = await draftPacket(state.profile, state.jobs[0]);
+  state.profile = completeOnboardingFixture(state.profile);
+  packet.profileHash = packetProfileHash(state.profile);
   packet.answers = [];
   const job = { ...state.jobs[0], id: `${provider}:example:12345`, source: provider,
     sourceId: "12345", url, applyUrl: url };

@@ -6,13 +6,14 @@ vi.mock("@/lib/repository", () => ({ isDemo: () => true, currentUserId: async ()
 vi.mock("@/lib/browser-runner", () => ({ cancelBrowser: async () => undefined, refreshBrowserSnapshot: vi.fn(), repairEducationFields: vi.fn() }));
 vi.mock("@/lib/resume-artifacts", () => ({ bytesHash: (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex"), saveArtifact: async (owner: string, inputHash: string, bytes: Buffer, extension: string) => { fixture.savedOutside.push(!fixture.inMutation); if (fixture.race) { fixture.state!.profile.name = "Changed during archival"; fixture.race = false; } const sha256 = createHash("sha256").update(bytes).digest("hex"); return { storageKey: `${owner}/${inputHash}/${sha256}.${extension}`, sha256, size: bytes.length }; }, readArtifact: vi.fn() }));
 import { initialDemoState } from "@/lib/demo-data";
+import { completeOnboardingFixture } from "@/lib/testing/onboarding";
 import { selectApplication, setPacket } from "@/lib/workflow";
 import { packetProfileHash } from "@/lib/drafting";
 import { essayContentHash, essayEvidenceHash } from "@/lib/answer-policy";
 import { POST } from "@/app/api/actions/route";
 const action = (name: string, payload: Record<string, unknown>) => POST(new Request("https://apply.example/api/actions", { method: "POST", headers: { Origin: "https://apply.example", "Content-Type": "application/json" }, body: JSON.stringify({ action: name, payload }) }));
 beforeEach(() => {
-  fixture.state = initialDemoState(); fixture.state.applications = []; fixture.savedOutside = []; fixture.inMutation = false; fixture.race = false;
+  fixture.state = initialDemoState(); fixture.state.profile = completeOnboardingFixture(fixture.state.profile); fixture.state.applications = []; fixture.savedOutside = []; fixture.inMutation = false; fixture.race = false;
   const state = fixture.state; const fact = state.profile.facts.find((item) => item.verified)!;
   const answer: ScreeningAnswer = { question: "Why are you excited to join us?", answer: fact.text, factIds: [fact.id], requiresUserInput: true, author: "ai", aiDraft: { version: 1, model: "fixture", sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }], evidenceHash: essayEvidenceHash(state.profile, [fact.id]), contentHash: "" } };
   answer.aiDraft!.contentHash = essayContentHash(answer);

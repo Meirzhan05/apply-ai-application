@@ -1,4 +1,5 @@
 import type { Application, Profile, ProfileDetailKey, SavedProfileAnswer } from "@/lib/types";
+import { profileLinkAnswers } from "@/lib/profile-links";
 
 export const profileDetailKeys = ["name", "contactEmail", "phone", "school", "graduationYear", "headline", "location", "linkedinUrl", "githubUrl", "portfolioUrl"] as const;
 export const profileDetailLabels: Record<ProfileDetailKey, string> = {
@@ -31,7 +32,11 @@ export function validProfileDetail(key: ProfileDetailKey, value: string): boolea
 export function profileDetailValue(profile: Profile, key: ProfileDetailKey): string {
   // An explicit clear is intentional and must not resurrect a previously learned answer.
   if (profile.detailSources?.[key]?.source === "user") return profile[key] ?? "";
-  return profile[key] || profile.savedAnswers?.find(answer => answer.key === key)?.value || (key === "contactEmail" ? profile.email : "");
+  const saved = profile[key] || profile.savedAnswers?.find(answer => answer.key === key)?.value;
+  if (saved) return saved;
+  const legacyLink = key === "linkedinUrl" ? "linkedin" : key === "githubUrl" ? "github" : key === "portfolioUrl" ? "portfolio" : undefined;
+  if (legacyLink) return profileLinkAnswers(profile)[legacyLink] ?? "";
+  return key === "contactEmail" ? profile.email : "";
 }
 
 /** Conservative personal question vocabulary. Job, employer, consent and declarations stay application-scoped. */
