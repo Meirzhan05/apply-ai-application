@@ -6,6 +6,10 @@ import { createPdfSourceFixture } from "../src/lib/fixtures/pdf-source";
 import { parsePdfSource } from "../src/lib/pdf-source";
 import { renderPdfSourceBytes } from "../src/lib/pdf-renderer";
 import { bytesHash } from "../src/lib/resume-artifacts";
+import { initialDemoState } from "../src/lib/demo-data";
+import { assertSourceInformationComplete } from "../src/lib/resume-source-draft";
+import { unconfirmedPdfFactSuggestions, sourceWithCurrentEvidenceClaims } from "../src/lib/source-plan-evidence";
+import { canonicalPdfSourceFactText, pdfNonClaimArtifactAnchorIds } from "../src/lib/resume-source-semantics";
 import type { ResumeSourcePlan } from "../src/lib/types";
 
 // Manual deployment smoke test: generated source only, no profiles, provider
@@ -46,6 +50,52 @@ export const verifyPdfRuntime = task({
         outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi, wordingChanged: true });
       primary ??= { original, rendered };
     }
+    const groundingSource = await parsePdfSource(await createPdfSourceFixture({ fragmentedSkillCategories: true }));
+    if (groundingSource.support.status !== "candidate") throw new Error(`fragmented-source-grounding: ${groundingSource.support.reason ?? "The synthetic PDF fixture is unsupported."}`);
+    const skillsHeading = groundingSource.anchors.find((anchor) => anchor.text === "Technical Skills");
+    const skillLabels = ["Languages", "Frameworks", "Tools", "Libraries"].map((text) => groundingSource.anchors.find((anchor) => anchor.text === text &&
+      (anchor.readingOrder ?? 0) > (skillsHeading?.readingOrder ?? Number.POSITIVE_INFINITY)));
+    const labelIds = pdfNonClaimArtifactAnchorIds(groundingSource.anchors);
+    const projectTools = groundingSource.anchors.find((anchor) => anchor.text === "Tools" && anchor.sectionHeading === "Projects" && anchor.candidateClaim);
+    const contextFactAnchor = groundingSource.anchors.find((anchor) => anchor.kind === "bullet" && anchor.text === "Built a search index for 1,200 users.");
+    const projectName = contextFactAnchor?.entryHeading.split(/[·|]/u).map((part) => part.trim()).find((part) => part === "Orbit Labs");
+    if (!skillsHeading || skillLabels.some((anchor) => !anchor || !labelIds.has(anchor.id)) || !projectTools || labelIds.has(projectTools.id) ||
+        !contextFactAnchor || !projectName || !groundingSource.anchors.some((anchor) => !/[\p{L}\p{N}]/u.test(anchor.text) && labelIds.has(anchor.id)))
+      throw new Error("fragmented-source-grounding: labels, separators, and project facts were not distinguished safely.");
+    const contextTarget = { ...contextFactAnchor, id: "synthetic-context-component", text: projectName, kind: "entry" as const, candidateClaim: true, editable: false };
+    const pendingProject = { ...projectTools, id: "synthetic-pending-project-tools", text: "Tools for data processing", entryId: "synthetic-project-entry",
+      entryHeading: "OpenTransit · Tools", candidateClaim: true };
+    const sourceWithSyntheticClaims = { ...groundingSource, anchors: [...groundingSource.anchors, contextTarget, pendingProject] };
+    const profile = structuredClone(initialDemoState().profile);
+    profile.facts = groundingSource.anchors.filter((anchor) => anchor.candidateClaim).map((anchor, index) => ({
+      id: `grounding-smoke-fact-${index}`, text: canonicalPdfSourceFactText(anchor), verified: true, source: "resume" as const, sourceAnchorId: anchor.id,
+    }));
+    const contextualClaims = sourceWithCurrentEvidenceClaims(sourceWithSyntheticClaims, profile.name).anchors;
+    const pendingSuggestions = unconfirmedPdfFactSuggestions(profile, sourceWithSyntheticClaims);
+    if (!contextualClaims.find((anchor) => anchor.id === contextTarget.id)?.candidateClaim || pendingSuggestions.length !== 1 ||
+        pendingSuggestions[0].sourceAnchorId !== pendingProject.id)
+      throw new Error("fragmented-source-grounding: only the genuinely unconfirmed project claim should need review.");
+    let groundingFindings = 0;
+    try { assertSourceInformationComplete(sourceWithSyntheticClaims, profile); }
+    catch (error) {
+      const diagnostics = (error as { diagnostics?: { findings?: Array<{ claimId: string }> } }).diagnostics;
+      groundingFindings = diagnostics?.findings?.length ?? -1;
+      if (groundingFindings !== 1 || diagnostics?.findings?.[0]?.claimId !== pendingProject.id) throw error;
+    }
+    if (groundingFindings !== 1) throw new Error("fragmented-source-grounding: missing facts were not blocked before model work.");
+    profile.facts.push({ id: "grounding-smoke-pending", text: pendingSuggestions[0].text, verified: false, source: "resume", sourceAnchorId: pendingProject.id });
+    let stillPending = 0;
+    try { assertSourceInformationComplete(sourceWithSyntheticClaims, profile); }
+    catch (error) {
+      const diagnostics = (error as { diagnostics?: { findings?: Array<{ claimId: string }> } }).diagnostics;
+      stillPending = diagnostics?.findings?.length ?? -1;
+      if (stillPending !== 1 || diagnostics?.findings?.[0]?.claimId !== pendingProject.id) throw error;
+    }
+    if (stillPending !== 1) throw new Error("fragmented-source-grounding: an unconfirmed review fact bypassed the confirmation gate.");
+    profile.facts[profile.facts.length - 1].verified = true;
+    assertSourceInformationComplete(sourceWithSyntheticClaims, profile);
+    const groundingSmoke = { labelsExcluded: skillLabels.length, separatorAnchorsExcluded: true, contextualFactReused: true, pendingFactsBeforeConfirmation: groundingFindings,
+      completionAfterExplicitConfirmation: true };
     if (!primary) throw new Error("No PDF runtime smoke case ran.");
     const { original, rendered } = primary;
     const runtimeRoot = process.env.PDFBOX_RUNTIME_ROOT;
@@ -62,6 +112,6 @@ export const verifyPdfRuntime = task({
     return { renderer: rendered.renderer, pdfboxVersion: rendered.rendererVersion, javaVersion: rendered.javaVersion, architecture: rendered.runtimeArchitecture,
       pdfboxJarSha512: jarSha512, sourceBytes: original.length, outputBytes: rendered.pdf.length, pages: 1, pageWidthPt: rendered.pageWidthPt,
       pageHeightPt: rendered.pageHeightPt, outsideEditPixelsAt144Dpi: rendered.visualOutsideEditDifferenceAt144Dpi,
-      outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi, smokeCases };
+      outsideEditPixelsAt300Dpi: rendered.visualOutsideEditDifferenceAt300Dpi, smokeCases, groundingSmoke };
   },
 });

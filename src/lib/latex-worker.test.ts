@@ -67,4 +67,17 @@ describe("LaTeX drafting worker recovery", () => {
     expect(results.some((result) => "skipped" in result)).toBe(true); expect(mocks.draft).toHaveBeenCalledOnce();
     expect(mocks.draft.mock.calls[0][3].resumeFormat).toBe("latex");
   });
+  it.each([false, true])("reports preserved materials only when a previous packet exists (%s)", async (hasPacket) => {
+    const state = mocks.state!;
+    const app = selectApplication(state, state.jobs[0].id, state.profile.id);
+    app.status = "drafting"; app.runToken = "feedback-run";
+    if (hasPacket) app.packet = { schemaVersion: 1, version: 1, model: "fixture", summary: "original", createdAt: new Date().toISOString(), resumeLines: [], answers: [] };
+    const previous = structuredClone(app.packet);
+    mocks.draft.mockRejectedValueOnce(new Error("Invalid source edit. The previous packet is preserved."));
+    await expect(runDraft({ userId: state.profile.id, applicationId: app.id, runToken: "feedback-run" })).rejects.toThrow("Invalid source edit");
+    expect(app.packet).toEqual(previous);
+    expect(app.error?.includes("existing materials remain available")).toBe(hasPacket);
+    expect(app.error).not.toContain("previous packet is preserved");
+  });
+
 });

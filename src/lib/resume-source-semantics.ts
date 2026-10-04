@@ -18,6 +18,49 @@ function normalizedHeading(text: string) {
   return text.normalize("NFKC").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().replace(/:$/, "").toLowerCase();
 }
 
+const skillCategoryHeadings = new Set(["languages", "frameworks", "tools", "libraries"]);
+
+function samePdfRow(left: ResumeSourceAnchor, right: ResumeSourceAnchor): boolean {
+  if (left.pageNumber !== right.pageNumber || !left.regionId || left.regionId !== right.regionId ||
+      !Number.isFinite(left.readingOrder) || !Number.isFinite(right.readingOrder)) return false;
+  const a = "boundsPt" in left ? left.boundsPt : undefined;
+  const b = "boundsPt" in right ? right.boundsPt : undefined;
+  return Boolean(a && b && Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) <= 2.5);
+}
+
+/** Return PDF-only separator/category anchors that are layout, not applicant claims. */
+export function pdfNonClaimArtifactAnchorIds(anchors: ResumeSourceAnchor[]): Set<string> {
+  const ignored = new Set(anchors.filter((anchor) => !/[\p{L}\p{N}]/u.test(anchor.text)).map((anchor) => anchor.id));
+  const lanes = new Map<string, ResumeSourceAnchor[]>();
+  for (const anchor of anchors) {
+    if (anchor.pageNumber === undefined || !anchor.regionId || !Number.isFinite(anchor.readingOrder)) continue;
+    const lane = `${anchor.pageNumber}:${anchor.regionId}`;
+    lanes.set(lane, [...(lanes.get(lane) ?? []), anchor]);
+  }
+  for (const lane of lanes.values()) {
+    lane.sort((left, right) => (left.readingOrder ?? 0) - (right.readingOrder ?? 0));
+    let inSkills = false;
+    for (let index = 0; index < lane.length; index++) {
+      const anchor = lane[index];
+      const heading = normalizedHeading(anchor.text);
+      const value = lane[index + 1];
+      const inlineSkillCategory = skillCategoryHeadings.has(heading) && Boolean(value && samePdfRow(anchor, value) && /^\s*:/.test(value.text));
+      if (anchor.kind === "section") {
+        if (heading === "technical skills" || heading === "skills") inSkills = true;
+        else if (!(inSkills && inlineSkillCategory)) inSkills = false;
+      }
+      if (inSkills && inlineSkillCategory) ignored.add(anchor.id);
+    }
+  }
+  return ignored;
+}
+
+/** The exact text shown for a PDF source-fact suggestion. */
+export function canonicalPdfSourceFactText(anchor: ResumeSourceAnchor): string {
+  return [anchor.sectionHeading, anchor.entryHeading, anchor.text].filter(Boolean).join(" · ")
+    .replace(/[\u0000\u200b\u00ad]/g, "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
 export function isResumeSectionHeading(text: string): boolean {
   return sectionHeadings.has(normalizedHeading(text));
 }
@@ -42,11 +85,13 @@ export function isSubstantiveSourceText(text: string, options: { isSection?: boo
 }
 
 /** Re-evaluate legacy stored flags as well as current parser output. */
-export function evidenceRequiredAnchorIds(source: ResumeSourceDocument, trustedName?: string): Set<string> {
+export function evidenceRequiredAnchorIds(source: ResumeSourceDocument, trustedName?: string, policyVersion: 2 | 3 = 3): Set<string> {
+  const nonClaimArtifacts = policyVersion === 3 && source.format === "pdf" ? pdfNonClaimArtifactAnchorIds(source.anchors) : new Set<string>();
   const firstBodyAnchor = source.format === "docx"
     ? source.anchors.filter((anchor) => "partName" in anchor && anchor.partName === "word/document.xml").sort((left, right) => left.paragraphIndex - right.paragraphIndex)[0]
     : source.anchors.filter((anchor) => "pageNumber" in anchor && anchor.pageNumber === 1 && typeof anchor.readingOrder === "number" && !anchor.repeatedRole).sort((left, right) => (left.readingOrder ?? 0) - (right.readingOrder ?? 0))[0];
-  return new Set(source.anchors.filter((anchor) => requiresSourceEvidence(anchor, anchor.id === firstBodyAnchor?.id, trustedName)).map((anchor) => anchor.id));
+  return new Set(source.anchors.filter((anchor) => !nonClaimArtifacts.has(anchor.id) &&
+    requiresSourceEvidence(anchor, anchor.id === firstBodyAnchor?.id, trustedName)).map((anchor) => anchor.id));
 }
 
 export function requiresSourceEvidence(anchor: ResumeSourceAnchor, firstVisibleBodyAnchor = false, trustedName?: string): boolean {

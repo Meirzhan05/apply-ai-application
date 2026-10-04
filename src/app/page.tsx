@@ -13,7 +13,8 @@ import { PacketReadiness } from "@/components/packet-readiness";
 import { ResumeReview } from "@/app/resume-review";
 import { OriginalResumeInspection } from "@/components/original-resume-inspection";
 import { AccountDeletionPanel } from "@/components/account-deletion";
-import { hasSourcePreservingResume, ResumeComparison } from "@/components/resume-comparison";
+import { hasSourcePreservingResume, ResumeComparison, ResumeSourceFactsNotice } from "@/components/resume-comparison";
+import { mergeCurrentSourceFacts } from "@/lib/profile-source-facts";
 import { LiveBrowser } from "@/app/live-browser";
 import { BrowserQuestionsDialog } from "@/app/browser-questions-dialog";
 import { WorkspaceDialog } from "@/app/workspace-dialog";
@@ -41,7 +42,7 @@ import { canReturnToMaterials, canReturnToFinalReview } from "@/lib/material-rev
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
-import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
+import { canReopenManualAttempt, employerSubmissionBlock, employerFormCorrections, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
   Bookmark,
@@ -348,8 +349,11 @@ export default function Dashboard() {
   const appJob = jobs.find((job) => job.id === activeApp?.jobId);
   const hasCurrentBrowser = browserSessionAvailable(activeApp);
   const activeAppIsAutomatic = Boolean(activeApp?.autonomousAuthorization || activeApp?.importedOutcome);
+  const activeSourceFactReview = activeApp?.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0;
+  const duplicateSourceFactError = Boolean(activeSourceFactReview && activeApp?.error && error === activeApp.error);
   const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
+  const employerCorrections = activeApp ? employerFormCorrections(activeApp) : undefined;
   const sharedUnknown = "Work authorization has not been confirmed.";
   const hasSharedUnknown = data?.matches.some(entry => entry.assessment.uncertainty.includes(sharedUnknown));
   const dismissedRole = jobs.find(job => job.id === dismissJobId);
@@ -556,6 +560,16 @@ export default function Dashboard() {
       setFactCorrection({ applicationId: activeApp.id, facts: structuredClone(data.profile.facts.filter(fact => factIds.includes(fact.id))), claim });
     });
   };
+  const reviewSourceFacts = async () => {
+    try {
+      const latest = await reload();
+      setProfileDraft((current) => current ? mergeCurrentSourceFacts(current, latest.profile) : structuredClone(latest.profile));
+      pendingSetupFocus.current = "confirmed-resume-facts";
+      navigateSection("profile");
+    } catch {
+      setError("Could not refresh the current source facts. Check your connection and try again.");
+    }
+  };
 
 
   const applicationMaterials = !activeAppIsAutomatic && activeApp?.packet && appJob &&
@@ -588,7 +602,9 @@ export default function Dashboard() {
                               diagnostics={activeApp.resumeDraftDiagnostics}
                               latestError={activeApp.resumeDraftDiagnostics ? activeApp.error : undefined}
                               jobFingerprint={JSON.stringify(appJob)}
-                              onReviewProfile={() => correctClaim(activeApp.packet!.resumeLines.flatMap((line) => line.factIds), "Application resume")}
+                              onReviewProfile={activeApp.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0
+                                ? reviewSourceFacts
+                                : () => correctClaim(activeApp.packet!.resumeLines.flatMap((line) => line.factIds), "Application resume")}
                               onCorrectClaim={activeApp.status === "draft_review" ? correctClaim : undefined}
                               onRebuildResume={activeApp.status === "draft_review" ? () => act("draft", { applicationId: activeApp.id, draftMode: "resume" }) : undefined}
                               rebuildDisabled={Boolean(busy) || Boolean(activeApp.queuedRun)}
@@ -956,7 +972,7 @@ export default function Dashboard() {
           {connection === "auth-required" ? <a className="text-button" href="/login">Sign in</a> : <button className="text-button" disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Retry updates"}</button>}
         </div>}
         {busy && <p className="workspace-progress" role="status">{busy === "saving-view" ? `${batchProgress?.stopping ? "Stopping after the current save" : "Saving this view"}: ${batchProgress?.done ?? 0} of ${batchProgress?.total ?? 0} roles…` : busy === "feedback" ? "Updating your job collection…" : busy === "import" ? "Checking the posting and adding its details…" : busy === "reload" ? "Refreshing your workspace…" : "Updating your workspace…"}{batchProgress && <button className="text-button" disabled={batchProgress.stopping} onClick={() => { batchCancel.current = true; setBatchProgress(current => current ? { ...current, stopping: true } : null); }}>{batchProgress.stopping ? "Stopping…" : "Stop further saves"}</button>}</p>}
-        {activeError && (requiresSignIn || !hasLocalReviewError) && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
+        {activeError && (requiresSignIn || (!hasLocalReviewError && !duplicateSourceFactError)) && !importOpen && !dismissJobId && !(section === "matches" && busyJob && filtered.some(job => job.id === busyJob)) && (
           <div className="inline-error" role="alert">
             <CircleHelp size={18} />
             <div>{batchRecovery && <strong>This batch: {batchRecovery.confirmed} of {batchRecovery.total} saves confirmed. </strong>}{displayError}{!actionCheck && <p>Refresh the workspace to check the latest status.</p>}<div className="workspace-recovery-actions">{requiresSignIn && <a className="dark-button" href="/login">Sign in</a>}<button className={needsWorkspaceCheck && !requiresSignIn ? "dark-button" : "text-button"} disabled={Boolean(busy)} onClick={retryWorkspace}>{busy === "reload" ? "Refreshing…" : "Refresh workspace"}</button></div></div>
@@ -1525,6 +1541,7 @@ export default function Dashboard() {
                       {retainedApplication?.id === activeApp.id && <><p>{["cancelled", "submitted"].includes(activeApp.status) ? (activeApp.packet ? "Review saved materials or choose the next application." : "Review this role in Matches or choose the next application.") : "Keep working on this application, or choose the next one."} Your collection filter stays active.</p>{nextMatchingApplication && <button type="button" className="outline-action" disabled={Boolean(busy) || answersDirty || editingEssay !== null} onClick={() => switchApplication(nextMatchingApplication.id)}>{attentionOnly ? "Next application needing review" : "Next matching application"}</button>}</>}
                     </div>}
                     {!activeAppIsAutomatic && <ApplicationProgress key={activeApp.id} status={activeApp.status} />}
+                    {!activeApp.packet && activeApp.resumeDraftDiagnostics && <ResumeSourceFactsNotice diagnostics={activeApp.resumeDraftDiagnostics} onReviewProfile={reviewSourceFacts} />}
                     {activeApp.status === "cancelled" && <section className="step-card" aria-labelledby={`cancelled-${activeApp.id}`}>
                       <h3 id={`cancelled-${activeApp.id}`}>This attempt is cancelled</h3>
                       <p>Cancellation stopped this attempt before submission. {activeApp.packet ? "Your saved resume and answers remain available below." : "The role remains available in Matches."} Starting again creates a new attempt that needs a new review.</p>
@@ -1589,11 +1606,11 @@ export default function Dashboard() {
                     {activeApp.status === "draft_review" && <><PacketReadiness application={activeApp} stale={activeApp.materialsStale} pendingAnswers={answerDraft} dirty={answersDirty} busy={busy} notice={notice} editingEssay={editingEssay !== null} compact />{applicationMaterials}</>}
                     {!activeAppIsAutomatic && activeApp.status === "authorized_to_fill" && !activeApp.queuedRun && (
                       <div className="step-card">
-                        <h3>Ready to fill the employer form</h3>
+                        <h3>Ready to prepare the employer form</h3>
                         <p>
-                          This opens a separate browser session and enters only the
-                          materials you approved. You will review the filled form
-                          before submission.
+                          The agent enters only the materials you approved, using
+                          direct employer access when available or a browser when
+                          needed. You will review the application before submission.
                         </p>
                         <button
                           className="dark-button"
@@ -1602,7 +1619,7 @@ export default function Dashboard() {
                             act("startBrowser", { applicationId: activeApp.id })
                           }
                         >
-                          Start browser run
+                          Prepare application
                         </button>
                         {!activeApp.materialsStale && <button className="outline-action" disabled={Boolean(busy) || !canReturnToMaterials(activeApp)} onClick={() => act("restartBrowser", { applicationId: activeApp.id })}>Review materials again</button>}
                         <p className="muted">Reviewing again withdraws form-fill permission. Your saved materials remain available.</p>
@@ -1708,9 +1725,9 @@ export default function Dashboard() {
                             <h3>Final form review</h3>
                           </div>
                           <p className="muted">
-                            Review the actual fields and attachments on{" "}
-                            {new URL(activeApp.form.url).hostname}. Approval is
-                            tied to this exact state.
+                            {activeApp.form.apiSubmission ? "Review the answers and files prepared for direct submission to " : "Review the actual fields and attachments on "}
+                            {new URL(activeApp.form.url).hostname}. Approval is tied to this exact state.
+                            {activeApp.form.apiSubmission && " This application can be sent without opening a browser."}
                           </p>
                           {activeApp.form.submitControl?.action && (
                             <p className="muted" style={{ overflowWrap: "anywhere" }}>
@@ -1747,9 +1764,11 @@ export default function Dashboard() {
                               </div>
                             ))}
                           </div>
-                          <p>
+                          <p style={{ overflowWrap: "anywhere" }}>
                             <strong>Attachments:</strong>{" "}
-                            {activeApp.form.attachments.join(", ") || "None"}
+                            {(activeApp.form.apiSubmission
+                              ? activeApp.form.fields.filter((field) => field.kind === "file" && field.value).map((field) => field.value).join(", ")
+                              : activeApp.form.attachments.join(", ")) || "None"}
                           </p>
                           {activeApp.status === "final_review" && (
                             <>
@@ -1767,7 +1786,7 @@ export default function Dashboard() {
                                   })
                                 }
                               >
-                                Refresh form state
+                                {activeApp.form.apiSubmission ? "Refresh application details" : "Refresh form state"}
                               </button>
                               <button
                                 className="dark-button"
@@ -1807,9 +1826,9 @@ export default function Dashboard() {
                       <div className="warning-note">
                         <CircleHelp size={20} />
                         <div>
-                          <strong>{employerBlock ? "Employer blocked submission" : "Submission result uncertain"}</strong>
+                          <strong>{employerCorrections ? "Employer form needs corrections" : employerBlock ? "Employer blocked submission" : "Submission result uncertain"}</strong>
                           <p>
-                            {employerBlock || activeApp.confirmation ||
+                            {employerCorrections?.join(" ") || employerBlock || activeApp.confirmation ||
                               activeApp.error ||
                               "Check the employer site or email before taking further action."}{" "}
                             The agent will not retry automatically.
@@ -1854,7 +1873,8 @@ export default function Dashboard() {
                         {applicationMaterials}
                       </details>
                     )}
-                    {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) && !activeAppIsAutomatic && (
+                    {activeApp.error && activeApp.status !== "uncertain" && !(activeApp.status === "needs_user_action" && !hasCurrentBrowser) &&
+                      !(activeApp.resumeDraftDiagnostics?.outcome === "needs_information" && activeApp.resumeDraftDiagnostics.writerAttempts === 0) && !activeAppIsAutomatic && (
                       <p className="inline-error">{activeApp.error}</p>
                     )}
                     {canCancelApplication(activeApp) ? (

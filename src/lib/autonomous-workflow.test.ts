@@ -104,7 +104,7 @@ beforeEach(async () => {
     const sourceRequest = format === "anchored_resume_edit_plan" || format === "anchored_resume_grounding_audit" ? JSON.parse(input.input[1].content) : undefined;
     const output_parsed = format === "structured_resume" ? source.document
       : format === "resume_grounding_audit" ? resumeGroundingOutput(request.claims, [], "The confirmed facts support this claim.")
-        : format === "anchored_resume_edit_plan" ? { claims: sourceRequest.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; text: string }) => ({ anchorId: anchor.id, text: anchor.text, factIds: [sourceRequest.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)?.id].filter(Boolean) })) }
+        : format === "anchored_resume_edit_plan" ? { edits: sourceRequest.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean; kind: string }) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor: { id: string; text: string }) => ({ anchorId: anchor.id, text: anchor.text, factIds: [sourceRequest.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)?.id].filter(Boolean) })) }
           : format === "anchored_resume_grounding_audit" ? { findings: sourceRequest.claims.map((claim: { claimId: string; factIds: string[] }) => ({ claimId: claim.claimId, outcome: "supported", reason: "Confirmed source facts support this wording.", evidenceFactIds: claim.factIds, requiredInformation: null })), sourceActivityPreservations: sourceRequest.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId, outcome: "preserved", preservedClaimId: check.sourceClaimId, reason: "The same activity remains under the same source entry.", requiredInformation: null })) }
             : { grounded: true, unsupportedClaims: [] };
     return { id: `response-${Math.random()}`, model: input.model, service_tier: "default", output_parsed, usage: { input_tokens: 20, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
@@ -175,7 +175,7 @@ it("carries a successful resume repair through artifact preview, download, and e
     if (input.text.format.name === "anchored_resume_edit_plan") {
       const repair = Boolean(body.currentDraft && body.findings?.length);
       return { id: `writer-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
-        claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; kind: string; text: string }) => ({
+        edits: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean; kind: string }) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor: { id: string; kind: string; text: string }) => ({
           anchorId: anchor.id,
           text: anchor.id === bullet.id ? (repair ? "Built search index for 1,200 users." : "Built a faster search index for 1,200 users.") : anchor.text,
           factIds: [body.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)!.id],
@@ -218,7 +218,7 @@ it("carries a successful resume repair through artifact preview, download, and e
   expect(preview.headers.get("content-disposition")).toContain("inline");
   expect(download.headers.get("content-disposition")).toContain("attachment");
 }, 30_000);
-it("keeps exhausted grounding findings as an actionable blocker and schedules no attachment", async () => {
+it("stops repeated unsupported AI wording with an actionable blocker and schedules no attachment", async () => {
   const { source } = await uploadAndConfirmPdfSource();
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
   let allowRetry = false;
@@ -226,7 +226,7 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
     const body = JSON.parse(input.input[1].content);
     if (input.text.format.name === "anchored_resume_edit_plan") {
       return { id: `writer-${fixture.parse.mock.calls.length}`, model: input.model, service_tier: "default", usage: { input_tokens: 20, output_tokens: 10 }, output_parsed: {
-        claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; text: string }) => ({
+        edits: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean; kind: string }) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor: { id: string; text: string }) => ({
           anchorId: anchor.id,
           text: anchor.id === bullet.id ? (allowRetry ? "Built faster index for 1,200 users." : "Built a faster search index for 1,200 users.") : anchor.text,
           factIds: [body.confirmedFacts.find((fact: { id: string; sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id && (!allowRetry || fact.id === "user-confirmed-speed"))?.id ?? body.confirmedFacts.find((fact: { sourceAnchorId?: string }) => fact.sourceAnchorId === anchor.id)!.id],
@@ -248,12 +248,12 @@ it("keeps exhausted grounding findings as an actionable blocker and schedules no
   });
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
   const draft = fixture.pending.shift()!;
-  await expect(runDraft(draft.payload)).rejects.toMatchObject({ diagnostics: { outcome: "needs_information", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2 } });
+  await expect(runDraft(draft.payload)).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 } });
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("needs_user_action");
   expect(app.packet).toBeUndefined();
-  expect(app.resumeDraftDiagnostics?.findings.find((finding) => finding.claimId === bullet.id)).toMatchObject({ outcome: "unsupported", affectedText: "Built a faster search index for 1,200 users." });
-  expect(app.blockers?.[0]).toMatchObject({ reason: "missing_answer", progress: "blocked" });
+  expect(app.resumeDraftDiagnostics?.attempts?.filter((attempt) => attempt.stage === "audit" && attempt.outcome === "failed")).toHaveLength(2);
+  expect(app.blockers?.[0]).toMatchObject({ reason: "disabled_material", progress: "blocked" });
   expect(app.blockers?.[0].message).toContain("Confirm the speed claim or remove it");
   expect(fixture.prepare).not.toHaveBeenCalled();
   expect(fixture.pending).toEqual([]);

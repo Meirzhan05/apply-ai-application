@@ -321,10 +321,25 @@ export interface ResumeEntry {
   bullets: ResumeBullet[];
 }
 export type ResumeClaimOutcome = "supported" | "unsupported" | "uncertain" | "contradiction";
+export interface ResumeRepairIssue {
+  stage: "structure" | "audit" | "layout";
+  code: string;
+  anchorId?: string;
+  message: string;
+}
+export interface ResumeDraftAttempt {
+  stage: "writer" | "structure" | "audit" | "layout";
+  writerAttempt: number;
+  checkerAttempt: number;
+  outcome: "passed" | "failed";
+  issues: ResumeRepairIssue[];
+}
 export interface ResumeDraftAttempts {
   writerAttempts: number;
   checkerAttempts: number;
   repairAttempts: number;
+  checkerRetries?: number;
+  attempts?: ResumeDraftAttempt[];
 }
 export interface ResumeGroundingFinding {
   claimId: string;
@@ -373,7 +388,7 @@ export interface ResumeSourceClaim {
 export interface ResumeSourcePlan {
   version: 1;
   /** New plans re-evaluate substantive source content instead of trusting older parser flags. */
-  evidencePolicyVersion?: 2;
+  evidencePolicyVersion?: 2 | 3;
   jobHashPolicyVersion?: 2;
   format: "docx" | "pdf";
   sourceHash: string;
@@ -588,6 +603,22 @@ export interface FormSnapshot {
   readyToSubmit?: boolean;
   blockers?: string[];
   submitControl?: { label: string; identifier: string; action?: string; method?: string; encoding?: string };
+  apiSubmission?: ApiSubmissionPlan;
+}
+
+/** Server-prepared request bound to the same reviewed form and file manifest. Never contains credentials. */
+export interface ApiSubmissionPlan {
+  version: 1;
+  provider: "greenhouse" | "lever" | "ashby";
+  board: string;
+  postingId: string;
+  region?: "eu";
+  endpoint: string;
+  definitionHash: string;
+  integrationHash: string;
+  packetHash: string;
+  values: Record<string, string | number | boolean>;
+  files: Record<string, "resume" | "cover-letter">;
 }
 
 export type ImportedCompatibilityStatus = "reachable" | "blocked" | "uncertain";
@@ -739,7 +770,7 @@ export interface Application {
   browserLiveUrl?: string;
   needsCoverLetter?: boolean;
   confirmation?: string;
-  submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string };
+  submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string; validationErrors?: string[] };
   error?: string;
   resumeDraftDiagnostics?: ResumeDraftDiagnostics;
   blockers?: ApplicationBlocker[];

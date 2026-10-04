@@ -44,6 +44,10 @@ export function resumeDraftDiagnosticMessage(diagnostics: ResumeDraftDiagnostics
     if (diagnostics.technicalFailure === "renderer") return "The resume file could not be prepared. Retry the draft; your last valid packet is preserved.";
     return "Resume drafting or grounding is temporarily unavailable. Retry; your last valid packet is preserved.";
   }
+  if (diagnostics.outcome === "needs_information" && diagnostics.writerAttempts === 0 && diagnostics.checkerAttempts === 0) {
+    const count = diagnostics.findings.length;
+    return `Review ${count} original résumé ${count === 1 ? "claim" : "claims"} in your profile before drafting. Nothing is used until you confirm it.`;
+  }
   const details = diagnostics.findings.filter((finding) => finding.outcome !== "supported").map((finding) => {
     const outcome = finding.outcome === "contradiction" ? "conflicts with confirmed evidence" : finding.outcome === "uncertain" ? "could not be verified" : "is unsupported by the confirmed facts";
     const request = (finding.requiredInformation ?? "add or correct the missing information in your profile, then retry").replace(/[.!?]+$/, "");

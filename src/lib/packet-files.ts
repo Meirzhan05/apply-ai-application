@@ -31,12 +31,12 @@ function docxPolicyFor(plan: ResumeSourcePlan): typeof docxLayoutPolicy | typeof
 function docxInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-docx", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion === 2 ? { evidencePolicyVersion: 2 } : {}), ...(plan.jobHashPolicyVersion === 2 ? { jobHashPolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion ? { evidencePolicyVersion: plan.evidencePolicyVersion } : {}), ...(plan.jobHashPolicyVersion === 2 ? { jobHashPolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function pdfInputHash(plan: ResumeSourcePlan) {
   return hashJson({ kind: "source-preserving-pdf", sourceHash: plan.sourceHash, representationVersion: plan.representationVersion,
     profileHash: plan.profileHash, factsHash: plan.factsHash, settingsHash: plan.settingsHash, jobHash: plan.jobHash,
-    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion === 2 ? { evidencePolicyVersion: 2 } : {}), ...(plan.jobHashPolicyVersion === 2 ? { jobHashPolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
+    layoutPolicy: policyFor(plan), ...(plan.layoutHash ? { layoutHash: plan.layoutHash } : {}), ...(plan.evidencePolicyVersion ? { evidencePolicyVersion: plan.evidencePolicyVersion } : {}), ...(plan.jobHashPolicyVersion === 2 ? { jobHashPolicyVersion: 2 } : {}), claims: plan.claims, edits: plan.edits, grounding: plan.grounding });
 }
 function sourceInputHash(plan: ResumeSourcePlan) { return plan.format === "pdf" ? pdfInputHash(plan) : docxInputHash(plan); }
 const filename = (kind: PacketFileKind) => kind === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";

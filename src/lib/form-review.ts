@@ -31,3 +31,13 @@ export function employerSubmissionBlock(app: Application): string | undefined {
     return "The employer reports that your application submission was flagged as possible spam.";
   return undefined;
 }
+
+export function employerFormCorrections(app: Application): string[] | undefined {
+  const receipt = app.submissionReceipt;
+  if (app.status !== "uncertain" || !receipt || !app.submissionAttemptedAt) return undefined;
+  const captured = Date.parse(receipt.capturedAt), attempted = Date.parse(app.submissionAttemptedAt);
+  if (!Number.isFinite(captured) || !Number.isFinite(attempted) || captured < attempted ||
+    /application (?:received|submitted)|thank you for applying|your application has been sent/i.test(receipt.text)) return undefined;
+  const errors = receipt.validationErrors?.filter(error => /^Missing entry for required field:\s*\S/.test(error));
+  return errors?.length ? errors : undefined;
+}

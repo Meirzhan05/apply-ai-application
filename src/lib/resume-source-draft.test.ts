@@ -50,15 +50,15 @@ async function createUnembeddedPdfSourceFixture(name: string) {
 
 function sourcePlanResponse(request: { input: Array<{ content: string }> }, editText = "Built an explainable recommender with 92% precision.") {
   const body = JSON.parse(request.input[1].content);
-  return { output_parsed: { claims: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; kind: string; text: string }, index: number) => ({
+  return { output_parsed: { edits: body.sourceDocument.anchors.filter((anchor: { candidateClaim: boolean }) => anchor.candidateClaim).map((anchor: { id: string; kind: string; text: string }, index: number) => ({
     anchorId: anchor.id, text: anchor.kind === "bullet" ? editText : anchor.text, factIds: [`source-fact-${index}`],
-  })) } };
+  })).filter((edit: { anchorId: string; text: string }) => body.sourceDocument.anchors.some((anchor: { id: string; kind: string; editable: boolean; text: string }) => anchor.id === edit.anchorId && anchor.kind === "bullet" && anchor.editable && anchor.text !== edit.text)) } };
 }
 function auditResponse(request: { input: Array<{ content: string }> }, unsupported = false) {
   const body = JSON.parse(request.input[1].content);
-  return { output_parsed: { findings: body.claims.map((claim: { claimId: string; affectedText: string; factIds: string[] }, index: number) => ({
-    claimId: claim.claimId, outcome: unsupported && index === 1 ? "unsupported" : "supported", reason: unsupported && index === 1 ? "The confirmed fact does not establish team leadership." : "The confirmed source supports this wording.",
-    evidenceFactIds: claim.factIds, requiredInformation: unsupported && index === 1 ? "Keep the original recommender result wording." : null,
+  return { output_parsed: { findings: body.claims.map((claim: { claimId: string; affectedText: string; factIds: string[] }) => ({
+    claimId: claim.claimId, outcome: unsupported && claim.claimId === body.sourceActivityPreservationChecks[0]?.sourceClaimId ? "unsupported" : "supported", reason: unsupported && claim.claimId === body.sourceActivityPreservationChecks[0]?.sourceClaimId ? "The confirmed fact does not establish team leadership." : "The confirmed source supports this wording.",
+    evidenceFactIds: claim.factIds, requiredInformation: unsupported && claim.claimId === body.sourceActivityPreservationChecks[0]?.sourceClaimId ? "Keep the original recommender result wording." : null,
   })), sourceActivityPreservations: (body.sourceActivityPreservationChecks ?? []).map((check: { sourceClaimId: string }) => ({ sourceClaimId: check.sourceClaimId,
     outcome: "preserved", preservedClaimId: check.sourceClaimId, reason: "The recommender work remains in the same source entry.", requiredInformation: null })) } };
 }
@@ -220,30 +220,28 @@ it("repairs a flagged bullet once, rechecks the complete anchored claim set, and
   expect(plan.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
 });
 
-it("blocks a repair that substitutes a different activity even when it cites the same confirmed source fact", async () => {
+it("repairs an AI substitution of the original activity before accepting the résumé", async () => {
   const { profile, job, source } = await fixture();
   const bulletId = source.anchors.find((anchor) => anchor.kind === "bullet")!.id;
   let auditCount = 0;
+  let writerCount = 0;
   mocks.parse.mockImplementation(async (request) => {
     if (request.text.format.name === "anchored_resume_edit_plan") {
-      const editText = request.input[0].content.includes("This is a repair") ? "Automated an unrelated sales pipeline." : "Led a team of 20 to build a recommender.";
-      return sourcePlanResponse(request as never, editText);
+      writerCount++;
+      return sourcePlanResponse(request as never, writerCount === 1 ? "Automated an unrelated sales pipeline." : "Built an explainable recommender with 92% precision.");
     }
     auditCount++;
-    const response = auditResponse(request as never, auditCount === 1);
-    if (auditCount === 2) return { output_parsed: { ...response.output_parsed, sourceActivityPreservations: [{ sourceClaimId: bulletId, outcome: "substituted", preservedClaimId: null,
-      reason: "The repaired wording describes a different work activity.", requiredInformation: "Keep the original recommender-development activity or confirm a replacement." }] } };
+    const response = auditResponse(request as never);
+    if (auditCount === 1) response.output_parsed.sourceActivityPreservations = [{ sourceClaimId: bulletId, outcome: "substituted", preservedClaimId: null,
+      reason: "The wording describes a different work activity.", requiredInformation: "Restore the original recommender-development activity." }];
     return response;
   });
-
-  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({ diagnostics: {
-    outcome: "needs_information", writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1,
-    findings: [expect.objectContaining({ claimId: bulletId, outcome: "uncertain", requiredInformation: expect.stringContaining("original recommender-development activity") })],
-  } });
-  expect(mocks.parse).toHaveBeenCalledTimes(4);
-  expect(JSON.parse(mocks.parse.mock.calls[2][0].input[1].content).sourceActivityPreservationChecks).toEqual([
-    expect.objectContaining({ sourceClaimId: bulletId, originalClaimText: "Built a recommender with 92% precision." }),
-  ]);
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000);
+  expect(plan.edits[0].text).toBe("Built an explainable recommender with 92% precision.");
+  expect(plan.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 2, repairAttempts: 1 });
+  expect(JSON.parse(mocks.parse.mock.calls[2][0].input[1].content).feedback).toEqual(expect.arrayContaining([
+    expect.objectContaining({ stage: "audit", anchorId: bulletId, message: expect.stringContaining("original recommender-development activity") }),
+  ]));
 });
 
 it("shortens a layout-rejected source bullet once, then reruns the full grounding audit", async () => {
@@ -257,7 +255,7 @@ it("shortens a layout-rejected source bullet once, then reruns the full groundin
       const body = JSON.parse(request.input[1].content);
       expect(body.layoutFeedback).toMatchObject({ anchorId: anchor.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId });
       expect(body.findings).toBeUndefined();
-      return { output_parsed: { claims: body.currentDraft.map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
+      return { output_parsed: { edits: body.currentDraft.filter((claim: { anchor: { kind: string; editable: boolean } }) => claim.anchor.kind === "bullet" && claim.anchor.editable).map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
         anchorId: claim.anchor.id, text: claim.anchor.id === anchor.id ? "Built search index for 1,200 users." : claim.text, factIds: claim.factIds,
       })) } };
     }).mockImplementationOnce(async (request) => auditResponse(request as never));
@@ -285,7 +283,7 @@ it("blocks impossible layout repairs after the shared two-repair budget with no 
       writerCall++;
       if (writerCall === 1) return sourcePlanResponse(request as never, tooLong);
       const body = JSON.parse(request.input[1].content);
-      return { output_parsed: { claims: body.currentDraft.map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
+      return { output_parsed: { edits: body.currentDraft.filter((claim: { anchor: { kind: string; editable: boolean } }) => claim.anchor.kind === "bullet" && claim.anchor.editable).map((claim: { anchor: { id: string }; text: string; factIds: string[] }) => ({
         anchorId: claim.anchor.id, text: claim.anchor.id === anchor.id ? (writerCall === 2 ? shorter : shortest) : claim.text, factIds: claim.factIds,
       })) } };
     }
@@ -297,4 +295,133 @@ it("blocks impossible layout repairs after the shared two-repair budget with no 
     return { anchorId: anchor.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId, reason: "Still does not fit the original line." };
   })).rejects.toMatchObject({ diagnostics: { outcome: "technical_failure", technicalFailure: "renderer", writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2, findings: [] } });
   expect(mocks.parse).toHaveBeenCalledTimes(6);
+});
+
+
+it("repairs an invalid edit reference with specific feedback before auditing the assembled résumé", async () => {
+  const { profile, job, source } = await fixture();
+  const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
+  const factId = profile.facts.find((fact) => fact.sourceAnchorId === bullet.id)!.id;
+  mocks.parse.mockImplementationOnce(async () => ({ output_parsed: { edits: [{ anchorId: "missing-bullet", text: "Built a recommender.", factIds: [factId] }] } }))
+    .mockImplementationOnce(async (request) => {
+      const body = JSON.parse(request.input[1].content);
+      expect(body.feedback).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "structure", code: "unknown_anchor", anchorId: "missing-bullet" })]));
+      expect(body.rejectedCandidate).toEqual({ edits: [{ anchorId: "missing-bullet", text: "Built a recommender.", factIds: [factId] }] });
+      return { output_parsed: { edits: [{ anchorId: bullet.id, text: "Built an explainable recommender with 92% precision.", factIds: [factId] }] } };
+    }).mockImplementationOnce(async (request) => auditResponse(request as never));
+
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000);
+  expect(plan.claims).toHaveLength(source.anchors.filter((anchor) => anchor.candidateClaim).length);
+  expect(plan.claims.filter((claim) => claim.anchorId !== bullet.id).map((claim) => claim.text)).toEqual(source.anchors.filter((anchor) => anchor.candidateClaim && anchor.id !== bullet.id).map((anchor) => anchor.text));
+  expect(plan.grounding).toMatchObject({ writerAttempts: 2, checkerAttempts: 1, repairAttempts: 1 });
+  expect(plan.grounding.attempts).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "structure", outcome: "failed" }), expect.objectContaining({ stage: "audit", outcome: "passed" })]));
+});
+
+it.each(["docx", "pdf"])("bounds structural repairs and records actionable %s failures", async (format) => {
+  const { profile, job, source } = format === "pdf" ? await pdfFixture() : await fixture();
+  let attempt = 0;
+  mocks.parse.mockImplementation(async () => ({ output_parsed: { edits: [{ anchorId: `invalid-${++attempt}`, text: "Built a recommender.", factIds: [profile.facts[0].id] }] } }));
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({
+    diagnostics: { outcome: "technical_failure", writerAttempts: 3, checkerAttempts: 0, repairAttempts: 2,
+      attempts: expect.arrayContaining([expect.objectContaining({ stage: "structure", outcome: "failed", issues: expect.arrayContaining([expect.objectContaining({ code: "unknown_anchor" })]) })]) },
+  });
+  expect(mocks.parse).toHaveBeenCalledTimes(3);
+});
+
+it("stops repeated identical rejected candidates before spending the remaining repair attempt", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockResolvedValue({ output_parsed: { edits: [{ anchorId: "unknown", text: "Built a recommender.", factIds: [profile.facts[0].id] }] } });
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({ diagnostics: { writerAttempts: 2, repairAttempts: 1, checkerAttempts: 0 } });
+  expect(mocks.parse).toHaveBeenCalledTimes(2);
+});
+
+it("retries a malformed checker result without rewriting a valid candidate", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never))
+    .mockResolvedValueOnce({ output_parsed: { findings: [] } })
+    .mockImplementationOnce(async (request) => {
+      expect(JSON.parse(request.input[1].content).checkerFeedback[0].code).toBe("malformed_audit");
+      return auditResponse(request as never);
+    });
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000);
+  expect(plan.grounding).toMatchObject({ writerAttempts: 1, checkerAttempts: 2, checkerRetries: 1, repairAttempts: 0 });
+});
+
+it("stops after the separately bounded checker retry without blaming profile facts", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockImplementationOnce(async (request) => sourcePlanResponse(request as never))
+    .mockResolvedValue({ output_parsed: { findings: [] } });
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({ diagnostics: {
+    outcome: "technical_failure", technicalFailure: "malformed_response", writerAttempts: 1, checkerAttempts: 2, repairAttempts: 0, findings: [],
+  } });
+  expect(mocks.parse).toHaveBeenCalledTimes(3);
+});
+
+it("shares the repair budget across structure, factual wording, and layout feedback", async () => {
+  const { profile, job, source, layout } = await pdfFixture();
+  const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
+  const mapped = layout.anchors.find((anchor) => anchor.anchorId === bullet.id)!;
+  const response = (request: Parameters<typeof sourcePlanResponse>[0], text: string) => {
+    const value = sourcePlanResponse(request, text);
+    value.output_parsed.edits = value.output_parsed.edits.filter((edit: { anchorId: string }) => edit.anchorId === bullet.id);
+    return value;
+  };
+  mocks.parse.mockResolvedValueOnce({ output_parsed: { edits: [{ anchorId: "invalid", text: "Built search.", factIds: [profile.facts[0].id] }] } })
+    .mockImplementationOnce(async (request) => response(request as never, "Led 20 engineers to build search."))
+    .mockImplementationOnce(async (request) => auditResponse(request as never, true))
+    .mockImplementationOnce(async (request) => response(request as never, "Built search index for 1,200 users."))
+    .mockImplementationOnce(async (request) => auditResponse(request as never));
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, layout, async () => ({
+    anchorId: bullet.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId, reason: "Too long for the original line.",
+  }))).rejects.toMatchObject({ diagnostics: { writerAttempts: 3, checkerAttempts: 2, repairAttempts: 2, technicalFailure: "renderer" } });
+  expect(mocks.parse).toHaveBeenCalledTimes(5);
+});
+
+it("asks for user confirmation when unchanged original wording fails factual review", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockResolvedValueOnce({ output_parsed: { edits: [] } })
+    .mockImplementationOnce(async (request) => auditResponse(request as never, true));
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000)).rejects.toMatchObject({ diagnostics: {
+    outcome: "needs_information", writerAttempts: 1, checkerAttempts: 1, repairAttempts: 0,
+  } });
+  expect(mocks.parse).toHaveBeenCalledTimes(2);
+});
+
+it("honors cancellation before a structural repair can call the writer again", async () => {
+  const { profile, job, source } = await fixture();
+  mocks.parse.mockResolvedValue({ output_parsed: { edits: [{ anchorId: "unknown", text: "Built a recommender.", factIds: [profile.facts[0].id] }] } });
+  const guard = async () => { if (mocks.parse.mock.calls.length) throw new Error("The application was cancelled."); };
+  await expect(draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, guard)).rejects.toThrow("The application was cancelled.");
+  expect(mocks.parse).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("checks previously accepted meaning when a layout repair restores original wording (%s)", async (restoreOriginal) => {
+  const { profile, job, source, layout } = await pdfFixture();
+  const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
+  const mapped = layout.anchors.find((anchor) => anchor.anchorId === bullet.id)!;
+  const accepted = "Built search index for 1,200 users and improved reliability.";
+  const seenAccepted: Array<string | undefined> = [];
+  let writers = 0;
+  let layoutCalls = 0;
+  mocks.parse.mockImplementation(async (request) => {
+    if (request.text.format.name === "anchored_resume_edit_plan") {
+      const response = sourcePlanResponse(request as never, ++writers === 1 ? accepted : writers === 2 ? "Built search index for 1,200 users." : "Built reliable search for 1,200 users.");
+      response.output_parsed.edits = restoreOriginal && writers === 2 ? [] : response.output_parsed.edits.filter((edit: { anchorId: string }) => edit.anchorId === bullet.id);
+      return response;
+    }
+    const body = JSON.parse(request.input[1].content);
+    if (writers > 1) seenAccepted.push(body.sourceActivityPreservationChecks.find((check: { sourceClaimId: string }) => check.sourceClaimId === bullet.id)?.acceptedLayoutText);
+    const response = auditResponse(request as never);
+    if (writers === 2) response.output_parsed.sourceActivityPreservations = body.sourceActivityPreservationChecks.map((check: { sourceClaimId: string }) => ({
+      sourceClaimId: check.sourceClaimId, outcome: check.sourceClaimId === bullet.id ? "substituted" : "preserved", preservedClaimId: check.sourceClaimId === bullet.id ? null : check.sourceClaimId,
+      reason: "The shortened bullet lost the previously accepted reliability result.", requiredInformation: check.sourceClaimId === bullet.id ? "Retain the reliability result in shorter wording." : null,
+    }));
+    return response;
+  });
+  const plan = await draftResumeSourcePlan(profile, job, source, Date.now() + 60_000, undefined, layout, async () => layoutCalls++ === 0 ? ({
+    anchorId: bullet.id, pageNumber: mapped.pageNumber, regionId: mapped.regionId, reason: "Shorten the accepted wording.",
+  }) : undefined);
+  expect(plan.edits[0].text).toBe("Built reliable search for 1,200 users.");
+  expect(seenAccepted).toEqual([accepted, accepted]);
+  expect(plan.grounding).toMatchObject({ writerAttempts: 3, checkerAttempts: 3, repairAttempts: 2 });
 });

@@ -12,6 +12,7 @@ import { hashJson, newId } from "@/lib/crypto";
 import { updateJobFeedback } from "@/lib/job-feedback";
 import { answerBrowserQuestions, reviseBrowserEssay, writeBrowserQuestionEssays } from "@/lib/browser-question-runs";
 import { queueApplicationRun, dispatchUserQueue } from "@/lib/application-queue";
+import { prepareApiApplication } from "@/lib/ats-application";
 import { sendActionNeeded } from "@/lib/email";
 import { withPacketFiles } from "@/lib/packet-files";
 import { applyHumanAnswerEdits, confirmReviewedEssay, reviseEssay } from "@/lib/answer-policy";
@@ -491,7 +492,19 @@ async function perform(
     if (app.status !== "needs_user_action" && app.status !== "final_review")
       throw new Error("This browser run is not awaiting review.");
     const job = findJob(state, app);
-    const form = app.status === "needs_user_action" && !app.submissionStartedAt && !app.submissionAttemptedAt &&
+    const api = app.form?.apiSubmission ? await prepareApiApplication(app, job, state.profile) : undefined;
+    if (api?.kind === "browser") {
+      return mutateState(userId, (current) => {
+        const target = findApp(current, appId, userId);
+        if (target.status !== app.status || target.form?.hash !== app.form?.hash || target.submissionStartedAt || target.submissionAttemptedAt)
+          throw new Error("The application changed while refreshing.");
+        transition(target, [app.status], "authorized_to_fill");
+        target.form = undefined;
+        target.approvals = target.approvals.filter((approval) => approval.kind !== "submit");
+        target.error = "The employer form changed. Prepare the application again and review it before submission.";
+      }, ownerContext);
+    }
+    const form = api?.kind === "api" ? api.form : app.status === "needs_user_action" && !app.submissionStartedAt && !app.submissionAttemptedAt &&
       (!app.manualSubmissionReport || app.manualSubmissionReport.resolution?.outcome === "not_accepted") && hasFillApproval(app, userId, job.applyUrl)
       ? await repairEducationFields(app, job, state.profile)
       : await refreshBrowserSnapshot(app);

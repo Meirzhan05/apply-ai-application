@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { latexFixture } from "./latex-fixture";
-import { draftResumeDocument, resumeContentHash, resumeEvidenceHash, resumeDateRank, sealResume, validateResumeDocument } from "@/lib/resume-document";
+import { draftResumeDocument, resumeContentHash, resumeEvidenceHash, resumeDateRank, resumeDraftDiagnosticMessage, sealResume, validateResumeDocument } from "@/lib/resume-document";
 import { initialDemoState } from "@/lib/demo-data";
 import { escapeLatex, resumeLatex } from "@/lib/resume-latex";
 import { readModelUsage } from "@/lib/model-usage";
@@ -11,6 +11,15 @@ vi.mock("openai", () => ({ default: class { responses = { parse: mocks.parse }; 
 beforeEach(() => { mocks.parse.mockReset(); vi.stubEnv("OPENAI_API_KEY", "synthetic"); });
 afterEach(() => vi.unstubAllEnvs());
 describe("structured resume grounding", () => {
+  it("keeps preflight missing-fact errors concise while preserving detailed diagnostics", () => {
+    const message = resumeDraftDiagnosticMessage({ version: 1, outcome: "needs_information", writerAttempts: 0, checkerAttempts: 0, repairAttempts: 0,
+      findings: ["one", "two", "three"].map((claimId) => ({ claimId, affectedText: claimId, outcome: "unsupported", reason: "Unconfirmed source claim.", evidenceFactIds: [], requiredInformation: "Confirm the source claim in profile facts." })),
+      requiredInformation: ["Confirm the source claim in profile facts."] });
+
+    expect(message).toBe("Review 3 original résumé claims in your profile before drafting. Nothing is used until you confirm it.");
+    expect(message).not.toContain("Unconfirmed source claim.");
+  });
+
   it("keeps education/skills separate and sources every entry field", () => {
     const { profile, document } = latexFixture();
     expect(() => validateResumeDocument(profile, document)).not.toThrow();

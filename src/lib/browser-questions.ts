@@ -1,7 +1,7 @@
 import { answerOwner } from "@/lib/answer-responsibility";
 import type { BrowserQuestion, FormSnapshot } from "@/lib/types";
 
-const writableKinds = new Set(["text", "email", "tel", "url", "number", "date", "textarea", "select", "radio", "checkbox"]);
+const writableKinds = new Set(["text", "email", "tel", "url", "number", "date", "textarea", "select", "radio", "checkbox", "yesno"]);
 
 function unreadableLabel(label: string): boolean {
   return !label.trim() || /^cards\[|^Field \d+$/i.test(label) ||

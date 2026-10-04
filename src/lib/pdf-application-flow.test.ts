@@ -54,6 +54,8 @@ import { bytesHash } from "@/lib/resume-artifacts";
 import { ensurePdfTestRuntime } from "@/lib/pdf-test-runtime";
 import { cancelBrowser } from "@/lib/browser-runner";
 import { createControlledEmployerBrowser } from "@/lib/test-support/controlled-employer-browser";
+import { assertSourceInformationComplete } from "@/lib/resume-source-draft";
+import { unconfirmedPdfFactSuggestions } from "@/lib/source-plan-evidence";
 
 let employer: ReturnType<typeof createControlledEmployerBrowser>;
 
@@ -69,7 +71,7 @@ function responseFor(request: { input: Array<{ content: string }>; text: { forma
   const name = request.text.format.name;
   if (name === "anchored_resume_edit_plan") {
     const body = JSON.parse(request.input[1].content) as { sourceDocument: { anchors: Array<{ id: string; kind: string; text: string; candidateClaim: boolean }> }; confirmedFacts: Array<{ id: string; sourceAnchorId?: string }> };
-    return { claims: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim).map((anchor) => ({
+    return { edits: body.sourceDocument.anchors.filter((anchor) => anchor.candidateClaim && anchor.kind === "bullet").map((anchor) => ({
       anchorId: anchor.id,
       text: anchor.kind === "bullet" && anchor.text === "Built a search index for 1,200 users." ? "Built search index for 1,200 users." : anchor.text,
       factIds: [body.confirmedFacts.find((fact) => fact.sourceAnchorId === anchor.id)!.id],
@@ -254,6 +256,54 @@ it("re-inspects a cached parser-v2 PDF before drafting and keeps confirmed sourc
   expect(application.runWorkerClaimedAt).toBeUndefined();
   expect(application.packet).toEqual(priorPacket);
   expect(fixture.parse).toHaveBeenCalledTimes(priorModelCalls);
+}, 180_000);
+
+it.each([2, 3] as const)("recovers a missing confirmation from an existing parser-v%1 PDF cache without changing confirmed facts", async (version) => {
+  const sourceBytes = await createPdfSourceFixture();
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(sourceBytes)], "source.pdf", { type: "application/pdf" }));
+  const upload = await uploadResume(new Request("https://apply.example/api/resume", { method: "POST", headers: { Origin: "https://apply.example" }, body: form }));
+  expect(upload.status, await upload.clone().text()).toBe(202);
+  const source = fixture.state!.profile.resumeSourceDocument!;
+  const missingAnchor = source.anchors.find((anchor) => anchor.kind === "bullet" && anchor.candidateClaim)!;
+  const confirmedFacts = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId).map((fact) => ({ ...fact, verified: true }));
+  const missingFact = confirmedFacts.find((fact) => fact.sourceAnchorId === missingAnchor.id)!;
+  const keptFacts = confirmedFacts.filter((fact) => fact.id !== missingFact.id);
+  const confirmed = await publicAction("onboarding", { facts: keptFacts });
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  const originalFacts = structuredClone(fixture.state!.profile.facts);
+
+  if (version === 2) {
+    const legacy = structuredClone(source);
+    if (legacy.format !== "pdf") throw new Error("Expected PDF fixture source.");
+    legacy.version = 2;
+    legacy.parser = "pdfjs-text-2";
+    legacy.support = { status: "blocked", reason: "Cached legacy source needs reinspection." };
+    for (const anchor of legacy.anchors) { delete anchor.showOperatorIndex; delete anchor.operatorText; }
+    fixture.state!.profile.resumeSourceDocument = legacy;
+  }
+
+  fixture.demo = false;
+  const selected = await publicAction("select", { jobId: fixture.state!.jobs[0].id });
+  expect(selected.status, await selected.clone().text()).toBe(200);
+  const application = fixture.state!.applications[0];
+  const requested = await publicAction("draft", { applicationId: application.id });
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
+  await expect(runDraft(handoff.payload)).rejects.toThrow(/Review 1 original résumé claim in your profile/i);
+
+  const recovered = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId === missingAnchor.id);
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]).toMatchObject({ text: missingFact.text, verified: false, source: "resume" });
+  expect(fixture.state!.profile.facts.filter((fact) => fact.id !== recovered[0].id)).toEqual(originalFacts);
+  expect(unconfirmedPdfFactSuggestions(fixture.state!.profile, fixture.state!.profile.resumeSourceDocument!)).toEqual([]);
+  expect(fixture.state!.profile.resumeSourceDocument?.version).toBe(3);
+  expect(fixture.state!.applications[0].resumeDraftDiagnostics).toMatchObject({ outcome: "needs_information", writerAttempts: 0, findings: [{ claimId: missingAnchor.id }] });
+  expect(fixture.parse).not.toHaveBeenCalled();
+
+  const reviewed = await publicAction("onboarding", { facts: fixture.state!.profile.facts.map((fact) => fact.id === recovered[0].id ? { ...fact, verified: true } : fact) });
+  expect(reviewed.status, await reviewed.clone().text()).toBe(200);
+  expect(() => assertSourceInformationComplete(fixture.state!.profile.resumeSourceDocument!, fixture.state!.profile)).not.toThrow();
 }, 180_000);
 
 it("blocks a pre-feature PDF at the worker instead of using a generic résumé", async () => {

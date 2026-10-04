@@ -75,6 +75,24 @@ it("suggests confirmation for unbulleted skills and recognizes shared Languages 
   expect(suggestPdfFacts(source).map((suggestion) => suggestion.sourceAnchorId)).toEqual(expect.arrayContaining([skills!.id, proficiency!.id]));
 });
 
+it("filters fragmented skill category labels and punctuation but keeps their values and project Tools", async () => {
+  const source = await parsePdfSource(await createPdfSourceFixture({ fragmentedSkillCategories: true }));
+  const headingOrder = source.anchors.find((anchor) => anchor.text === "Technical Skills")!.readingOrder!;
+  const labels = ["Languages", "Frameworks", "Tools", "Libraries"].map((text) => source.anchors.find((anchor) => anchor.text === text && (anchor.readingOrder ?? 0) > headingOrder));
+  const projectTools = source.anchors.find((anchor) => anchor.text === "Tools" && anchor.sectionHeading === "Projects");
+  const punctuation = source.anchors.find((anchor) => anchor.text === "|");
+
+  expect(source.support).toEqual({ status: "candidate" });
+  expect(labels).toHaveLength(4);
+  expect(labels.every((anchor) => anchor?.candidateClaim === false)).toBe(true);
+  expect(labels.every((label) => source.anchors.some((anchor) => anchor.regionId === label?.regionId && anchor.pageNumber === label?.pageNumber &&
+    anchor.text.startsWith(":") && Math.abs((anchor.boundsPt?.top ?? 0) - (label?.boundsPt?.top ?? 0)) <= 2.5 && anchor.candidateClaim))).toBe(true);
+  expect(projectTools).toMatchObject({ kind: "entry", candidateClaim: true });
+  expect(punctuation?.candidateClaim).toBe(false);
+  expect(suggestPdfFacts(source).some((suggestion) => suggestion.sourceAnchorId === labels[2]?.id)).toBe(false);
+  expect(suggestPdfFacts(source)).toContainEqual({ text: "Projects · Tools · Tools", sourceAnchorId: projectTools!.id });
+});
+
 it("pairs a separate typographic bullet marker with the nearest same-line text in its original column", async () => {
   const source = await parsePdfSource(await createPdfSourceFixture({ separateBulletMarker: "same-column" }));
   const bullet = source.anchors.find((anchor) => anchor.text === "Built a search index for 1,200 users.");

@@ -108,7 +108,7 @@ function responseFor(request: ModelRequest) {
       return { anchorId: anchor.id, text, factIds: [fact.id] };
     });
     flow.editClaims = claims;
-    return { claims };
+    return { edits: claims.filter((claim) => body.sourceDocument.anchors.some((anchor) => anchor.id === claim.anchorId && anchor.kind === "bullet" && anchor.text !== claim.text)) };
   }
   if (name === "anchored_resume_grounding_audit") {
     const body = JSON.parse(request.input[1].content) as {
