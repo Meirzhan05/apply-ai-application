@@ -120,6 +120,14 @@ export function reusableFactualAnswers(profile: Profile): Record<string, string>
   else if (now === "No" && future === "No") values.sponsorshipEither = "No";
   else if (questionnaire.sponsorshipNow === undefined && questionnaire.sponsorshipFuture === undefined && /^(Yes|No)$/i.test(values.requiresSponsorship ?? "")) values.sponsorshipEither = values.requiresSponsorship;
   if (questionnaire.availability?.trim() && !values.availability) values.availability = questionnaire.availability.trim();
+  if (typeof profile.willingToRelocate === "boolean") values.willingToRelocate = profile.willingToRelocate ? "Yes" : "No";
+  if (profile.currentLocation) {
+    const { city, region, country } = profile.currentLocation;
+    if (city.trim()) values.currentCity = city.trim();
+    if (region.trim()) values.currentRegion = region.trim();
+    if (country.trim()) values.currentCountry = country.trim();
+    if (city.trim() && region.trim() && country.trim()) values.currentLocation = [city, region, country].map((value) => value.trim()).join(", ");
+  }
   return values;
 }
 

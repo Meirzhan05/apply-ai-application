@@ -10,9 +10,11 @@ describe("Jev data minimization", () => {
     profile.phone = "212-555-0199";
     profile.facts = [{ id: "fact", text: `${profile.name} built Python projects. Contact ${profile.email}, ${profile.phone}, https://linkedin.com/in/example`, verified: true, source: "user" }];
     profile.sensitiveAnswers = { disability: "private" };
+    profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+    profile.willingToRelocate = false;
     const result = redactedProfile(profile);
     const serialized = JSON.stringify(result);
-    for (const value of [profile.name, profile.email, profile.phone, "linkedin.com", "private"]) expect(serialized).not.toContain(value);
+    for (const value of [profile.name, profile.email, profile.phone, "linkedin.com", "private", "Almaty", "Kazakhstan", "willingToRelocate"]) expect(serialized).not.toContain(value);
     expect(result.facts[0].text).toContain("Python projects");
     expect(result.sensitiveAnswers).toEqual({});
   });

@@ -46,6 +46,7 @@ import {
   ClipboardList,
   FileText,
   LoaderCircle,
+  RotateCcw,
   Menu,
   Search,
   Settings2,
@@ -102,6 +103,8 @@ export default function Dashboard() {
   const [sort, setSort] = useState<"relevant" | "newest">("relevant");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  const [resumeImportError, setResumeImportError] = useState("");
+  const resumeRetryFile = useRef<File | null>(null);
   const [confirmedUnacceptedId, setConfirmedUnacceptedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -191,6 +194,26 @@ export default function Dashboard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed.");
       return null;
+    } finally {
+      setBusy("");
+    }
+  };
+  const importResume = async (file?: File) => {
+    resumeRetryFile.current = file ?? null;
+    setBusy("upload");
+    setResumeImportError("");
+    const body = new FormData();
+    if (file) body.set("file", file);
+    else body.set("reuse", "true");
+    try {
+      const response = await fetch("/api/resume", { method: "POST", body });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Resume import failed. Try again or choose another file.");
+      const next = await reload();
+      setProfileDraft(structuredClone(next.profile));
+      resumeRetryFile.current = null;
+    } catch (err) {
+      setResumeImportError(err instanceof Error ? err.message : "Resume import failed. Try again or choose another file.");
     } finally {
       setBusy("");
     }
@@ -1718,7 +1741,7 @@ export default function Dashboard() {
                       {labels[key]}
                       <input
                         value={profileDraft[key]}
-                        disabled={key === "email" && !data.profile.demo}
+                        type={key === "email" ? "email" : key === "phone" ? "tel" : "text"}
                         onChange={(event) =>
                           setProfileDraft({
                             ...profileDraft,
@@ -1726,6 +1749,22 @@ export default function Dashboard() {
                           })
                         }
                       />
+                    </label>
+                  ))}
+                  <label>
+                    Links (optional)
+                    <textarea rows={3} value={(profileDraft.links ?? []).join("\n")} onChange={(event) => setProfileDraft({ ...profileDraft, links: event.target.value.split("\n") })} />
+                  </label>
+                </div>
+                <h3>Current Location</h3>
+                <div className="form-grid">
+                  {(["city", "region", "country"] as const).map((key) => (
+                    <label key={key}>
+                      {{ city: "Current city", region: "Current state or region", country: "Current country" }[key]}
+                      <input maxLength={120} value={profileDraft.currentLocation?.[key] ?? ""} onChange={(event) => setProfileDraft({
+                        ...profileDraft,
+                        currentLocation: { city: "", region: "", country: "", ...profileDraft.currentLocation, [key]: event.target.value },
+                      })} />
                     </label>
                   ))}
                 </div>
@@ -1772,20 +1811,30 @@ export default function Dashboard() {
                     <small>Student or visa status does not answer employment authorization or sponsorship. Enter those answers separately below.</small>
                   </label>
                 </div>
-                <label className="checkline">
-                  <input
-                    type="checkbox"
-                    checked={profileDraft.remoteOnly}
-                    onChange={(event) =>
-                      setProfileDraft({
-                        ...profileDraft,
-                        remoteOnly: event.target.checked,
-                      })
-                    }
-                  />{" "}
-                  Show only remote roles
+                <label className="checkline"><input type="checkbox" checked={profileDraft.preferredLocations.includes("United States")} onChange={(event) => setProfileDraft({
+                  ...profileDraft,
+                  preferredLocations: event.target.checked ? [...profileDraft.preferredLocations.filter((location) => location !== "United States"), "United States"] : profileDraft.preferredLocations.filter((location) => location !== "United States"),
+                })} /> Anywhere in the United States</label>
+                <h3>Acceptable work arrangements</h3>
+                <div role="group" aria-label="Acceptable work arrangements">
+                  {(["remote", "hybrid", "on-site"] as const).map((arrangement) => (
+                    <label className="checkline" key={arrangement}>
+                      <input type="checkbox" checked={(profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote"] : [])).includes(arrangement)} onChange={(event) => {
+                        const current = profileDraft.workArrangements ?? (profileDraft.remoteOnly ? ["remote" as const] : []);
+                        const workArrangements = event.target.checked ? [...current, arrangement] : current.filter((value) => value !== arrangement);
+                        setProfileDraft({ ...profileDraft, workArrangements, remoteOnly: workArrangements.length === 1 && workArrangements[0] === "remote" });
+                      }} />
+                      {{ remote: "Remote", hybrid: "Hybrid", "on-site": "On-site" }[arrangement]}
+                    </label>
+                  ))}
+                </div>
+                <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for hybrid and on-site roles</label>
+                <label>
+                  Willing to relocate (optional)
+                  <select aria-label="Willing to relocate (optional)" value={profileDraft.willingToRelocate === undefined ? "" : profileDraft.willingToRelocate ? "yes" : "no"} onChange={(event) => setProfileDraft({ ...profileDraft, willingToRelocate: event.target.value === "" ? undefined : event.target.value === "yes" })}>
+                    <option value="">Unanswered</option><option value="yes">Yes</option><option value="no">No</option>
+                  </select>
                 </label>
-                <label className="checkline"><input type="checkbox" checked={profileDraft.strictLocations ?? false} onChange={(event) => setProfileDraft({ ...profileDraft, strictLocations: event.target.checked })} /> Require listed locations for on-site roles</label>
                 <p className="muted">Your personal search starts automatically once you save these preferences and confirm your experience. Leave titles and locations blank to let your agent use your confirmed experience.</p>
                 <h3>Optional saved screening answers</h3>
                 <p className="muted">Only answers you enter here may be reused. Leave a field blank to answer it yourself on each application. Every entered value appears in the final form review.</p>
@@ -1823,7 +1872,7 @@ export default function Dashboard() {
                   </select>
                 </label>
                 <label>
-                  When are you available to start?
+                  When are you available to start? (optional)
                   <input
                     maxLength={200}
                     value={profileDraft.onboarding?.questionnaire.availability ?? ""}
@@ -1860,7 +1909,7 @@ export default function Dashboard() {
                   onClick={() =>
                     act(
                       "profile",
-                      profileDraft as unknown as Record<string, unknown>,
+                      { ...profileDraft, willingToRelocate: profileDraft.willingToRelocate ?? null } as unknown as Record<string, unknown>,
                     )
                   }
                 >
@@ -1900,32 +1949,18 @@ export default function Dashboard() {
                   <input
                     type="file"
                     accept=".pdf,.docx"
+                    disabled={Boolean(busy)}
                     onChange={async (event) => {
                       const file = event.target.files?.[0];
+                      event.currentTarget.value = "";
                       if (!file) return;
-                      setBusy("upload");
-                      setError("");
-                      const body = new FormData();
-                      body.set("file", file);
-                      try {
-                        const response = await fetch("/api/resume", {
-                          method: "POST",
-                          body,
-                        });
-                        const result = await response.json();
-                        if (!response.ok) throw new Error(result.error);
-                        const next = await reload();
-                        setProfileDraft(structuredClone(next.profile));
-                      } catch (err) {
-                        setError(
-                          err instanceof Error ? err.message : "Upload failed.",
-                        );
-                      } finally {
-                        setBusy("");
-                      }
+                      await importResume(file);
                     }}
                   />
                 </label>
+                {busy === "upload" && <p role="status"><LoaderCircle size={16} className="spin" /> Importing resume...</p>}
+                {resumeImportError && <div role="alert"><p>{resumeImportError}</p><button className="outline-action" disabled={Boolean(busy)} onClick={() => importResume(resumeRetryFile.current ?? undefined)}><RotateCcw size={16} /> Retry import</button></div>}
+                {profileDraft.resumeSource && <button className="text-button" disabled={Boolean(busy)} onClick={() => importResume()}><FileText size={16} /> Use saved resume</button>}
                 {profileDraft.resumeSourceDocument && <ResumeSourceSupportNotice source={profileDraft.resumeSourceDocument} />}
                 {profileDraft.resumeText && (
                   <details className="resume-text">
@@ -2002,7 +2037,7 @@ export default function Dashboard() {
                   onClick={() =>
                     act(
                       "profile",
-                      profileDraft as unknown as Record<string, unknown>,
+                      { ...profileDraft, willingToRelocate: profileDraft.willingToRelocate ?? null } as unknown as Record<string, unknown>,
                     )
                   }
                 >
@@ -2177,7 +2212,7 @@ const labels: Record<string, string> = {
   graduationYear: "Graduation year",
   headline: "Short headline",
   preferredTitles: "Preferred job titles",
-  preferredLocations: "Preferred locations",
+  preferredLocations: "Preferred US job locations",
   skills: "Skills",
 };
 function relative(input: string) {

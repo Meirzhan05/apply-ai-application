@@ -105,6 +105,23 @@ it("maps exact approved choice labels to the provider's native option value", as
   expect(form.fields.find((field) => field.identifier === "question_55")?.value).toBe("No");
 });
 
+it("prepares actual overseas residence and explicitly saved optional answers rather than job destinations", async () => {
+  configure("greenhouse");
+  state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+  state.profile.preferredLocations = ["United States"];
+  state.profile.willingToRelocate = false;
+  state.profile.onboarding = { questionnaire: { availability: "June 2027" } };
+  const residenceQuestions = ["Current city", "Current state or region", "Country of residence", "Are you willing to relocate?", "When are you available to start?"];
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [
+    ...greenhousePosting().questions,
+    ...residenceQuestions.map((label, index) => ({ label, required: true, fields: [{ name: `question_${index}`, type: "input_text" }] })),
+  ] })));
+  const form = await review();
+  expect(form.fields.filter((field) => residenceQuestions.includes(field.label)).map((field) => field.value))
+    .toEqual(["Almaty", "Almaty Region", "Kazakhstan", "No", "June 2027"]);
+  expect(JSON.stringify(form.apiSubmission?.values)).not.toContain("United States");
+});
+
 it("reuses declared immigration and distinct sponsorship periods in the employer form", async () => {
   configure("greenhouse");
   saveOnboarding(state.profile, { questionnaire: { immigrationStatus: "visa-holder", visaType: "F-1 OPT", workAuthorization: "yes", sponsorshipNow: "no", sponsorshipFuture: "yes" } });
@@ -143,6 +160,15 @@ it("uses the browser for required consent rather than inventing consent", async 
   configure("greenhouse"); vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(),
     data_compliance: [{ requires_processing_consent: true }] })));
   expect((await prepareApiApplication(app, job, state.profile)).kind).toBe("browser");
+});
+
+it("reuses saved contact links only for their matching employer questions", async () => {
+  configure("greenhouse");
+  state.profile.links = ["https://www.linkedin.com/in/candidate", "https://github.com/candidate", "https://candidate.example.com/portfolio", "https://unrelated.example.com/project"];
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...greenhousePosting(), questions: [...greenhousePosting().questions,
+    ...["LinkedIn URL", "GitHub profile", "Portfolio URL", "Website"].map((label, index) => ({ label, required: false, fields: [{ name: `question_${index}`, type: "input_text" }] }))] })));
+  const form = await review();
+  expect(form.fields.slice(-4).map((field) => field.value)).toEqual(["https://www.linkedin.com/in/candidate", "https://github.com/candidate", "https://candidate.example.com/portfolio", ""]);
 });
 
 it("uses the browser for conditional Ashby fields", async () => {

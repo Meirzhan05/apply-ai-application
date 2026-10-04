@@ -16,8 +16,8 @@ describe("matching boundaries", () => {
     "excludes unverified US destinations for candidates at home and abroad: %s", (location) => {
       const state = initialDemoState();
       state.profile.workAuthorization = "Authorized to work in the US";
-      for (const address of ["Boston, MA, United States", "Almaty, Kazakhstan"]) {
-        state.profile.facts = [{ id: "current-location", text: `My current location is ${address}.`, verified: true, source: "user" }];
+      for (const currentLocation of [{ city: "Boston", region: "MA", country: "United States" }, { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" }]) {
+        state.profile.currentLocation = currentLocation;
         const job = { ...state.jobs[1], location, remote: true };
         expect(assessMatchLocally(state.profile, job).category).toBe("excluded");
         expect(explicitConflict(state.profile, job)).toMatch(/US.*destination|destination.*US/);
@@ -27,7 +27,7 @@ describe("matching boundaries", () => {
   it.each(["Remote (US)", "Remote · United States", "San Francisco, CA", "California", "Boston", "New York, NY · Hybrid", "United States", "U.S.A."])(
     "keeps verified US destinations eligible for overseas candidates: %s", (location) => {
       const state = initialDemoState();
-      state.profile.facts.push({ id: "current-location", text: "My current location is Almaty, Kazakhstan.", verified: true, source: "user" });
+      state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
       state.profile.workAuthorization = "Authorized to work in the US";
       expect(explicitConflict(state.profile, { ...state.jobs[1], location })).toBeNull();
     },
@@ -48,6 +48,20 @@ describe("matching boundaries", () => {
     expect(published.applications[0].materialsStale).toBe(true);
     expect(published.applications[0].packet?.summary).toBe("Saved packet");
     expect(state.applications[0].status).toBe("draft_review");
+  });
+  it("matches multiple acceptable arrangements independently of overseas residence and accepts nationwide US destinations", () => {
+    const state = initialDemoState();
+    state.profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+    state.profile.preferredLocations = ["United States"];
+    state.profile.strictLocations = true;
+    state.profile.workArrangements = ["remote", "hybrid"];
+    state.profile.remoteOnly = false;
+    const base = { ...state.jobs[0], location: "Boston, MA", remote: false };
+    expect(assessMatchLocally(state.profile, { ...base, workArrangement: "hybrid" }).category).not.toBe("excluded");
+    expect(assessMatchLocally(state.profile, { ...base, remote: true, workArrangement: "remote" }).category).not.toBe("excluded");
+    expect(assessMatchLocally(state.profile, { ...base, workArrangement: "on-site" })).toMatchObject({ category: "excluded" });
+    expect(assessMatchLocally(state.profile, base).uncertainty).toContain("The posting does not confirm whether this role meets your work arrangement preferences.");
+    expect(matchKey(state.profile, { ...base, workArrangement: "hybrid" })).not.toBe(matchKey(state.profile, { ...base, workArrangement: "on-site" }));
   });
   it("rejects explicit hard-rule conflicts and leaves missing details uncertain", () => {
     const state = initialDemoState();

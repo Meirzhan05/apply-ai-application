@@ -25,6 +25,9 @@ export function explicitConflict(profile: Profile, job: Job): string | null {
     return "The application deadline has passed.";
   const destinationConflict = jobDestinationConflict(job);
   if (destinationConflict) return destinationConflict;
+  const arrangement = job.workArrangement ?? (job.remote === true ? "remote" : undefined);
+  if (profile.workArrangements?.length && arrangement && !profile.workArrangements.includes(arrangement))
+    return "This role is outside your work arrangement preferences.";
   if (profile.remoteOnly && job.remote === false)
     return "This role is not remote.";
   if (profile.strictLocations && profile.preferredLocations.length && job.remote === false && locationFit(job.location, profile.preferredLocations) === "conflict")
@@ -57,6 +60,8 @@ export function requiredRuleUncertainty(profile: Profile, job: Job): string[] {
     sponsorshipPolicy([job.description, ...job.requirements].join(" ")) === "unknown")
     uncertainty.push("The posting does not confirm whether employment sponsorship is available for this role.");
   const remoteUnknown = typeof job.remote !== "boolean";
+  if (profile.workArrangements?.length && !job.workArrangement && job.remote !== true)
+    uncertainty.push("The posting does not confirm whether this role meets your work arrangement preferences.");
   if (profile.remoteOnly && remoteUnknown) uncertainty.push("The posting does not confirm whether this role meets your remote-only rule.");
   if (profile.strictLocations && profile.preferredLocations.length && job.remote !== true) {
     const fit = locationFit(job.location, profile.preferredLocations);
@@ -181,6 +186,7 @@ export async function assessMatch(
           content: JSON.stringify({
             preferredTitles: profile.preferredTitles,
             preferredLocations: profile.preferredLocations,
+            workArrangements: profile.workArrangements,
             skills: profile.skills,
             facts,
             job: {

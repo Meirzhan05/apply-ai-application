@@ -9,8 +9,10 @@ import { parsePdfSource, suggestPdfFacts } from "@/lib/pdf-source";
 import { bumpAutomationVersion } from "@/lib/onboarding";
 import { AccountDeletionInProgressError, withAccountOperation } from "@/lib/account-lifecycle";
 
-import { saveDemoOriginalResume } from "@/lib/original-resume";
+import { originalResumeManifest, readOriginalResume, saveDemoOriginalResume } from "@/lib/original-resume";
 import type { ResumeSourceDocument } from "@/lib/types";
+import { resumeProfileBasics } from "@/lib/resume-profile-basics";
+import { sourceWithCurrentEvidenceClaims } from "@/lib/source-plan-evidence";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -23,24 +25,38 @@ export async function POST(request: Request) {
   try {
     const userId = await currentUserId();
     return await withAccountOperation(userId, "upload", async () => {
-    const trustedName = (await loadState(userId)).profile.name;
+    const savedProfile = (await loadState(userId)).profile;
+    const trustedName = savedProfile.name;
     const data = await request.formData();
-    const file = data.get("file");
-    if (!(file instanceof File) || file.size < 1 || file.size > 5 * 1024 * 1024)
+    const reuse = data.get("reuse") === "true";
+    const original = reuse ? originalResumeManifest(savedProfile) : undefined;
+    const suppliedFile = data.get("file");
+    const file = suppliedFile instanceof File ? suppliedFile : undefined;
+    const size = original?.size ?? file?.size ?? 0;
+    if ((!original && !file) || size < 1 || size > 5 * 1024 * 1024)
       throw new Error("Choose a PDF or DOCX up to 5 MB.");
-    const name = file.name.slice(0, 180);
-    const pdf = /\.pdf$/i.test(name) && file.type === "application/pdf";
+    const name = (original?.filename ?? file!.name).slice(0, 180);
+    const mimeType = original?.mimeType ?? file!.type;
+    const pdf = /\.pdf$/i.test(name) && mimeType === "application/pdf";
     const docx =
       /\.docx$/i.test(name) &&
-      (file.type ===
+      (mimeType ===
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-        file.type === "application/octet-stream");
+        mimeType === "application/octet-stream");
     if (!pdf && !docx)
       throw new Error("Only PDF and DOCX resumes are supported.");
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const importToken = newId();
+    await mutateState(userId, (state) => {
+      state.profile.resumeImport = { token: importToken, startedAt: new Date().toISOString() };
+    });
+    try {
+    const buffer = original ? await readOriginalResume(userId, original) : Buffer.from(await file!.arrayBuffer());
     let extracted = "";
-    let sourceDocument: ResumeSourceDocument | undefined;
-    if (pdf) {
+    let sourceDocument: ResumeSourceDocument;
+    if (reuse && savedProfile.resumeSourceDocument && savedProfile.resumeSourceDocument.sourceHash === original?.sha256 && savedProfile.resumeSourceDocument.text.trim()) {
+      sourceDocument = savedProfile.resumeSourceDocument;
+      extracted = sourceDocument.text;
+    } else if (pdf) {
       sourceDocument = await parsePdfSource(buffer, trustedName);
       extracted = sourceDocument.text;
     } else {
@@ -50,17 +66,14 @@ export async function POST(request: Request) {
     extracted = extracted.replace(/\0/g, "").trim();
     if (extracted.length > 20000)
       throw new Error("This resume contains more than 20,000 readable characters. Shorten the source or upload a supported version; no text was dropped.");
-    if (!extracted && !pdf)
+    if (!extracted)
       throw new Error(
-        "This resume has no readable text. Add facts manually in your profile.",
+        "This resume has no readable text. Retry with a readable PDF or replace it with a DOCX.",
       );
-    const suggestions: Array<{ text: string; sourceAnchorId?: string }> = sourceDocument?.format === "docx"
-      ? suggestDocxFacts(sourceDocument)
-      : sourceDocument?.format === "pdf" ? suggestPdfFacts(sourceDocument) : [];
     const sha256 = createHash("sha256").update(buffer).digest("hex");
-    let storageKey: string | undefined;
-    if (isDemo()) { storageKey = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`; await saveDemoOriginalResume(storageKey, buffer); }
-    if (!isDemo()) {
+    let storageKey: string | undefined = original?.storageKey;
+    if (!reuse && isDemo()) { storageKey = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`; await saveDemoOriginalResume(storageKey, buffer); }
+    if (!reuse && !isDemo()) {
       const client = adminSupabase();
       const key = `${userId}/${newId()}.${pdf ? "pdf" : "docx"}`;
       const { error } = await client.storage
@@ -75,9 +88,18 @@ export async function POST(request: Request) {
       storageKey = key;
     }
     await mutateState(userId, (state) => {
+      if (state.profile.resumeImport?.token !== importToken)
+        throw new Error("A newer resume import replaced this attempt. Review the latest import or retry.");
+      const basics = resumeProfileBasics(sourceDocument);
+      for (const key of ["name", "email", "phone"] as const)
+        if (!reuse || !state.profile[key].trim()) state.profile[key] = basics[key];
+      if (!reuse || !state.profile.links?.length) state.profile.links = basics.links;
+      const currentSourceDocument = reuse ? sourceDocument : sourceWithCurrentEvidenceClaims(sourceDocument, state.profile.name);
+      const suggestions: Array<{ text: string; sourceAnchorId?: string }> = currentSourceDocument.format === "docx"
+        ? suggestDocxFacts(currentSourceDocument) : suggestPdfFacts(currentSourceDocument);
       state.profile.resumeFileName = name;
       state.profile.resumeText = extracted;
-      state.profile.resumeSourceDocument = sourceDocument;
+      state.profile.resumeSourceDocument = currentSourceDocument;
       state.profile.resumeSource = {
         ...(storageKey ? { storageKey } : {}),
         sha256,
@@ -88,6 +110,7 @@ export async function POST(request: Request) {
       };
       bumpAutomationVersion(state.profile);
       state.profile.facts = state.profile.facts.map((fact) => {
+        if (reuse) return fact;
         if (fact.source !== "resume" || !fact.sourceAnchorId) return fact;
         const { sourceAnchorId: _oldAnchor, ...withoutOldAnchor } = fact;
         void _oldAnchor;
@@ -108,9 +131,11 @@ export async function POST(request: Request) {
           }
         } else if (suggestion.sourceAnchorId) {
           const existingFact = state.profile.facts.find((fact) => fact.text.toLowerCase() === suggestion.text.toLowerCase());
-          if (existingFact && !existingFact.sourceAnchorId) existingFact.sourceAnchorId = suggestion.sourceAnchorId;
+          if (existingFact?.source === "resume" && !existingFact.sourceAnchorId) existingFact.sourceAnchorId = suggestion.sourceAnchorId;
         }
       state.profile.updatedAt = new Date().toISOString();
+      delete state.profile.resumeImport;
+      state.matchCache = {};
       state.activity.unshift({
         id: newId(),
         at: new Date().toISOString(),
@@ -118,7 +143,13 @@ export async function POST(request: Request) {
         detail: "Review and confirm facts before using them in an application.",
       });
     });
-    return NextResponse.json({ ok: true, extracted, ...(sourceDocument ? { sourceStatus: sourceDocument.support } : {}) });
+    return NextResponse.json({ ok: true, extracted, reused: reuse, resumeHash: sha256, ...(sourceDocument ? { sourceStatus: sourceDocument.support } : {}) });
+    } catch (error) {
+      await mutateState(userId, (state) => {
+        if (state.profile.resumeImport?.token === importToken) delete state.profile.resumeImport;
+      });
+      throw error;
+    }
     }, "api/resume");
   } catch (error) {
     return NextResponse.json(

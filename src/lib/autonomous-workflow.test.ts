@@ -187,6 +187,8 @@ it("stops a manual résumé draft before checking when confirmed profile inputs 
 });
 it("carries a successful resume repair through artifact preview, download, and employer attachment", async () => {
   const { source } = await uploadAndConfirmPdfSource();
+  expect(fixture.state!.profile.name).toBe("Avery Chen");
+  const importedProfile = structuredClone(fixture.state!.profile);
   const bullet = source.anchors.find((anchor) => anchor.kind === "bullet")!;
   fixture.captureAttachment = true;
   fixture.parse.mockImplementation(async (input) => {
@@ -217,6 +219,7 @@ it("carries a successful resume repair through artifact preview, download, and e
 
   await action("startAutonomous", { jobId: fixture.state!.jobs[0].id });
   await progress();
+  expect(fixture.state!.profile).toEqual(importedProfile);
   const app = fixture.state!.applications[0];
   expect(app.status).toBe("submitted");
   expect(app.approvals).toEqual([]);

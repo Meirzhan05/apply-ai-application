@@ -36,6 +36,7 @@ function normalized(text: string) {
 }
 
 function place(raw: string): Place | undefined {
+  if (/^(?:united states(?: of america)?|usa|us)$/.test(normalized(raw))) return { state: "US" };
   const text = normalized(raw).replace(/[\s,]+(?:united states(?: of america)?|usa|us)$/, "").trim();
   if (!text) return;
   // "LA" can mean Los Angeles or Louisiana. A full state/city or a city
@@ -55,6 +56,8 @@ function place(raw: string): Place | undefined {
 }
 
 function compare(actual: Place, allowed: Place): LocationFit {
+  if (allowed.state === "US") return "compatible";
+  if (actual.state === "US") return "unknown";
   if (actual.state !== allowed.state) return "conflict";
   if (!allowed.city) return "compatible";
   if (!actual.city) return "unknown"; // A statewide posting doesn't confirm a required city.

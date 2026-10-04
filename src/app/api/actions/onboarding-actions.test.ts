@@ -3,6 +3,10 @@ import { initialDemoState } from "@/lib/demo-data";
 import type { AppState } from "@/lib/types";
 import { preparePilotMutation } from "@/lib/pilot";
 import { POST } from "@/app/api/actions/route";
+import { loadState } from "@/lib/repository";
+import { publicState } from "@/lib/public-state";
+import { draftPacket } from "@/lib/drafting";
+import { selectApplication, setPacket } from "@/lib/workflow";
 
 const mocks = vi.hoisted(() => ({
   memory: new Map<string, AppState>(),
@@ -42,6 +46,62 @@ describe("onboarding action boundary", () => {
       state.profile.id = userId;
       mocks.memory.set(userId, state);
     }
+  });
+
+  it("saves overseas residence independently of nationwide destinations and optional work answers for the owner", async () => {
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: {
+        currentLocation: { city: " Almaty ", region: " Almaty Region ", country: " Kazakhstan " },
+        preferredLocations: ["United States"], preferredTitles: [],
+        workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+        questionnaire: { availability: "June 2027" }, userId: "owner-b",
+      } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = (await loadState("owner-a")).profile;
+    expect(saved).toMatchObject({
+      currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      preferredLocations: ["United States"], preferredTitles: [],
+      workArrangements: ["remote", "hybrid"], willingToRelocate: false,
+      onboarding: { questionnaire: { availability: "June 2027" } },
+    });
+    expect(saved.searchPreferencesConfirmedAt).toBeTruthy();
+    expect((await loadState("owner-b")).profile).not.toHaveProperty("currentLocation");
+  });
+
+  it("keeps optional location answers clearable and invalidates prior matching and materials after a profile save", async () => {
+    const state = mocks.memory.get("owner-a")!;
+    const app = selectApplication(state, state.jobs[0].id, "owner-a");
+    setPacket(state, app, await draftPacket(state.profile, state.jobs[0]));
+    state.profile.willingToRelocate = true;
+    state.matchCache = { prior: publicState(state).matches[0].assessment };
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: {
+        willingToRelocate: null, workArrangements: [], questionnaire: { availability: "" },
+        currentLocation: { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" },
+      } }),
+    }));
+    expect(response.status).toBe(200);
+    const saved = await loadState("owner-a");
+    expect(saved.profile.willingToRelocate).toBeUndefined();
+    expect(saved.profile.onboarding?.questionnaire.availability).toBe("");
+    expect(saved.matchCache).toEqual({});
+    expect(publicState(saved).applications[0].materialsStale).toBe(true);
+  });
+
+  it.each([
+    { currentLocation: { city: "Almaty", region: "Almaty Region", country: 42 } },
+    { workArrangements: ["flexible"] }, { willingToRelocate: "no" },
+  ])("rejects malformed location answers atomically: %j", async (payload) => {
+    const before = await loadState("owner-a");
+    const response = await POST(new Request("http://localhost/api/actions", {
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ action: "profile", payload: { name: "Uncommitted edit", ...payload } }),
+    }));
+    expect(response.status).toBe(400);
+    expect(await loadState("owner-a")).toEqual(before);
   });
 
   it("saves, dismisses, and clears feedback only for the authenticated owner", async () => {
