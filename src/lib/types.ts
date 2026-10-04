@@ -704,7 +704,7 @@ export interface Application {
   browserLiveUrl?: string;
   needsCoverLetter?: boolean;
   confirmation?: string;
-  submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string };
+  submissionReceipt?: { version: 1; url: string; text: string; capturedAt: string; screenshotPath?: string; validationErrors?: string[] };
   error?: string;
   resumeDraftDiagnostics?: ResumeDraftDiagnostics;
   blockers?: ApplicationBlocker[];

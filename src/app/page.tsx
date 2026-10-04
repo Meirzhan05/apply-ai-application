@@ -33,7 +33,7 @@ import { canReturnToMaterials } from "@/lib/material-review-recovery";
 import { browserSessionAvailable } from "@/lib/browser-session-status";
 import { answerOwner, answerNeedsAction, answerReviewHash } from "@/lib/answer-responsibility";
 import { onboardingMissingLabel } from "@/lib/onboarding";
-import { canReopenManualAttempt, employerSubmissionBlock, formFieldValue } from "@/lib/form-review";
+import { canReopenManualAttempt, employerSubmissionBlock, employerFormCorrections, formFieldValue } from "@/lib/form-review";
 import {
   ArrowRight,
   Bookmark,
@@ -245,6 +245,7 @@ export default function Dashboard() {
   const duplicateSourceFactError = Boolean(activeSourceFactReview && activeApp?.error && error === activeApp.error);
   const hasAutomaticApplications = applications.some((app) => app.autonomousAuthorization || app.importedOutcome);
   const employerBlock = activeApp ? employerSubmissionBlock(activeApp) : undefined;
+  const employerCorrections = activeApp ? employerFormCorrections(activeApp) : undefined;
   const sharedUnknown = "Work authorization has not been confirmed.";
   const hasSharedUnknown = data?.matches.some(entry => entry.assessment.uncertainty.includes(sharedUnknown));
   const dismissedRole = jobs.find(job => job.id === dismissJobId);
@@ -1611,9 +1612,9 @@ export default function Dashboard() {
                       <div className="warning-note">
                         <CircleHelp size={20} />
                         <div>
-                          <strong>{employerBlock ? "Employer blocked submission" : "Submission result uncertain"}</strong>
+                          <strong>{employerCorrections ? "Employer form needs corrections" : employerBlock ? "Employer blocked submission" : "Submission result uncertain"}</strong>
                           <p>
-                            {employerBlock || activeApp.confirmation ||
+                            {employerCorrections?.join(" ") || employerBlock || activeApp.confirmation ||
                               activeApp.error ||
                               "Check the employer site or email before taking further action."}{" "}
                             The agent will not retry automatically.

@@ -83,6 +83,8 @@ const BrowserMapping = z.object({
   mappings: z.array(z.object({ index: z.number(), key: z.string(), confidence: z.number() })),
 });
 
+const controlSelector = "input, textarea, select, .ashby-application-form-input-yesno";
+
 export function canAutomate(urlString: string): boolean {
   const url = new URL(urlString);
   if (!["https:", "http:"].includes(url.protocol)) return false;
@@ -110,7 +112,7 @@ export function canAutomate(urlString: string): boolean {
 }
 
 async function inspectFields(page: Page): Promise<InspectedField[]> {
-  return page.locator("input, textarea, select").evaluateAll(async (elements) => {
+  return page.locator(controlSelector).evaluateAll(async (elements) => {
     const labelText = { read(element: Element | null): string {
       if (!element) return "";
       const clone = element.cloneNode(true) as Element;
@@ -120,6 +122,24 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
     return (
     (await Promise.all(elements
       .map(async (element, index) => {
+        if (element.matches(".ashby-application-form-input-yesno")) {
+          if (!element.getClientRects().length || getComputedStyle(element).visibility === "hidden") return null;
+          const entry = element.closest(".ashby-application-form-field-entry");
+          const heading = entry?.querySelector(".ashby-application-form-question-title") ?? null;
+          const buttons = Array.from(element.querySelectorAll<HTMLButtonElement>("button[data-option]"));
+          const options = buttons.map(button => labelText.read(button));
+          const selected = buttons.filter(button => button.getAttribute("aria-pressed") === "true");
+          const identifier = entry?.getAttribute("data-field-path") || element.querySelector<HTMLInputElement>("input")?.name || heading?.getAttribute("for") || "";
+          const required = Boolean(heading && (Array.from(heading.classList).some(name => /^_required_/.test(name)) || /[✱*]\s*$/.test(heading.textContent || ""))) || element.getAttribute("aria-required") === "true";
+          const title = labelText.read(heading);
+          const description = labelText.read(entry?.querySelector(".ashby-application-form-question-description") ?? null);
+          const label = description && description !== title ? `${title}: ${description}` : title;
+          const supported = Boolean(title && identifier) && buttons.length === 2 && options[0] === "Yes" && options[1] === "No" && buttons[0].dataset.option === "yes" && buttons[1].dataset.option === "no";
+          return { index, label: label.slice(0, 2000), optionLabel: "", kind: "yesno", required,
+            value: selected.length === 1 ? labelText.read(selected[0]) : "", options, checked: false,
+            valid: supported && selected.length <= 1 && (!required || selected.length === 1),
+            identifier, stableIdentifier: Boolean(identifier), editable: supported && buttons.every(button => !button.disabled), autocomplete: false, fileHashes: [] };
+        }
         const input = element as
           | HTMLInputElement
           | HTMLTextAreaElement
@@ -136,14 +156,19 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
           input.name ||
           `Field ${index + 1}`;
         const fieldset = input.closest("fieldset");
-        const group = input.closest('.application-question, fieldset, [role="radiogroup"], [role="group"]');
+        const groupSelector = '.application-question, .ashby-application-form-field-entry, fieldset, [role="radiogroup"], [role="group"]';
+        const group = input.closest(groupSelector);
         const heading = group ? Array.from(group.querySelectorAll("legend, .application-label, .ashby-application-form-question-title"))
-          .find(node => node.closest('.application-question, fieldset, [role="radiogroup"], [role="group"]') === group) ?? null : null;
+          .find(node => node.closest(groupSelector) === group) ?? null : null;
         const labelledBy = (input.getAttribute("aria-labelledby") || group?.getAttribute("aria-labelledby") || "")
           .split(/\s+/).filter(Boolean).map(ref => labelText.read(document.getElementById(ref))).filter(Boolean).join(" ");
         // Question headings and option labels are separate: hosted ATS forms
         // commonly use a div heading and wrapping labels for Yes/No choices.
-        const label = labelText.read(heading) || labelledBy || optionLabel;
+        const description = (input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)
+          .map(ref => labelText.read(document.getElementById(ref))).filter(Boolean).join(" ") ||
+          labelText.read(group?.querySelector(".ashby-application-form-question-description") ?? null);
+        const title = labelText.read(heading) || labelledBy || optionLabel;
+        const label = description && description !== title ? `${title}: ${description}` : title;
         const groupRequired = Boolean(heading && Array.from(heading.classList).some((name) => /^_required_/.test(name))) || fieldset?.getAttribute("aria-required") === "true";
         const required = input.required || input.getAttribute("aria-required") === "true" || groupRequired;
         const groupChecked = kind === "radio" && Boolean(fieldset
@@ -194,14 +219,14 @@ async function inspectFields(page: Page): Promise<InspectedField[]> {
 async function waitForForm(page: Page): Promise<void> {
   // DOMContentLoaded precedes hydration on hosted ATS pages. A hidden resume
   // parser or an Apply shortcut is not evidence that the application is ready.
-  await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLInputElement>("input, textarea, select")).some((input) =>
+  await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLInputElement>("input, textarea, select, .ashby-application-form-input-yesno")).some((input) =>
     !["hidden", "file", "submit", "button"].includes(input.type) && input.getClientRects().length > 0 && getComputedStyle(input).visibility !== "hidden"),
   undefined, { timeout: 12000 }).catch(() => undefined);
   let previous = "";
   let stableSince = Date.now();
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
-    const structure = await page.locator("input, textarea, select").evaluateAll((elements) => elements
+    const structure = await page.locator(controlSelector).evaluateAll((elements) => elements
       .filter((element) => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden")
       .map((element) => `${element.tagName}:${element.id}:${element.getAttribute("name")}:${element.getAttribute("type")}`).join("|"));
     if (structure !== previous) { previous = structure; stableSince = Date.now(); }
@@ -215,7 +240,7 @@ async function currentFieldLocator(page: Page, field: InspectedField) {
   // Recheck the observed question before writing to its current position.
   const current = (await inspectFields(page)).filter((candidate) => (!field.stableIdentifier || candidate.identifier === field.identifier) &&
     candidate.kind === field.kind && candidate.label === field.label && candidate.optionLabel === field.optionLabel);
-  return current.length === 1 ? page.locator("input, textarea, select").nth(current[0].index) : undefined;
+  return current.length === 1 ? page.locator(controlSelector).nth(current[0].index) : undefined;
 }
 
 const finalButtonName = /^(submit application|submit|apply now|send application|apply)$/i;
@@ -295,7 +320,7 @@ async function formBlockers(page: Page, fields: InspectedField[]): Promise<strin
   }
   const captchaUnresolved = await visibleCaptchaChallenge(page);
   if (captchaUnresolved) blockers.push("CAPTCHA requires your takeover.");
-  const custom = page.locator('[aria-required="true"]:not(input):not(textarea):not(select)');
+  const custom = page.locator('[aria-required="true"]:not(input):not(textarea):not(select):not(.ashby-application-form-input-yesno)');
   for (let i = 0; i < await custom.count(); i++) if (await custom.nth(i).isVisible()) { blockers.push("An unfamiliar required control needs review."); break; }
   const pageBlockers = await page.locator('[aria-busy="true"], [role="progressbar"], [role="status"], [role="alert"], .field-error, .error-message, [data-error]').evaluateAll((elements) => elements.filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden").flatMap((element) => {
     const text = (element.textContent || "").trim().replace(/\s+/g, " ").slice(0, 200);
@@ -455,7 +480,7 @@ async function aiMappings(
   values: Record<string, string>,
   application: Application,
 ): Promise<Map<number, string>> {
-  fields = fields.filter((field) => !deterministicKey(field, application) && answerOwner(field.label) !== "ai" && !sensitiveQuestion(field.label) && !["radio", "checkbox", "file", "password", "submit", "button"].includes(field.kind));
+  fields = fields.filter((field) => !deterministicKey(field, application) && answerOwner(field.label) !== "ai" && !sensitiveQuestion(field.label) && !["radio", "checkbox", "yesno", "file", "password", "submit", "button"].includes(field.kind));
   if (!fields.length || !process.env.OPENAI_API_KEY) return new Map();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 0 });
   try {
@@ -525,7 +550,7 @@ async function snapshot(
       kind: field.kind,
       required: field.required,
       checked: ["checkbox", "radio"].includes(field.kind) ? field.checked : undefined,
-      options: field.kind === "select" ? field.options : undefined,
+      options: ["select", "yesno"].includes(field.kind) ? field.options : undefined,
       identifier: field.identifier,
       valid: field.valid,
       editable: field.editable,
@@ -1010,7 +1035,10 @@ export async function prepareBrowser(
       }
       const locator = await currentFieldLocator(page, field);
       if (!locator) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
-      if (field.kind === "select") {
+      if (field.kind === "yesno") {
+        if (field.editable && field.options.includes(value)) await locator.getByRole("button", { name: value, exact: true }).click();
+        else if (field.required) needsAction = true;
+      } else if (field.kind === "select") {
         const option = matchingOption(field.label, value, field.options);
         if (option) await locator.selectOption({ label: option });
         else if (field.required) needsAction = true;
@@ -1097,7 +1125,10 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
       const locator = await currentFieldLocator(page, field);
       if (!locator) throw new Error("A form control changed. Refresh before answering again.");
       const value = approval.answer.answer;
-      if (field.kind === "radio") await locator.check({ timeout: 5000 });
+      if (field.kind === "yesno") {
+        if (!field.options.includes(value)) throw new Error("The employer changed the available options. Refresh the questions.");
+        await locator.getByRole("button", { name: value, exact: true }).click({ timeout: 5000 });
+      } else if (field.kind === "radio") await locator.check({ timeout: 5000 });
       else if (field.kind === "checkbox") await locator.setChecked(value === "Yes", { timeout: 5000 });
       else if (field.kind === "select") {
         if (!field.options.includes(value)) throw new Error("The employer changed the available options. Refresh the questions.");
@@ -1186,18 +1217,45 @@ async function submissionText(page: Page): Promise<string> {
   });
 }
 
+async function submissionValidationErrors(page: Page): Promise<string[]> {
+  return page.locator("body").evaluate(body => {
+    const visible = (element: Element) => {
+      if (!element.getClientRects().length) return false;
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.matches('[hidden], [aria-hidden="true"]') || style.display === "none" || style.visibility === "hidden") return false;
+      }
+      return true;
+    };
+    const headings = Array.from(body.querySelectorAll("div, p, h1, h2, h3, [role='alert']"))
+      .filter(element => element.textContent?.trim() === "Your form needs corrections" && visible(element));
+    for (const heading of headings) {
+      let region = heading.parentElement;
+      for (let depth = 0; region && depth < 3; depth++, region = region.parentElement) {
+        const errors = Array.from(region.querySelectorAll("li")).filter(visible)
+          .map(element => (element.textContent || "").trim().replace(/\s+/g, " "))
+          .filter(text => /^Missing entry for required field:\s*\S/.test(text)).map(text => text.slice(0, 500));
+        if (errors.length) return [...new Set(errors)].slice(0, 20);
+      }
+    }
+    return [];
+  });
+}
+
 async function observeSubmission(page: Page, application: Application, baseline: NonNullable<Application["submissionVerification"]>, waitMs: number): Promise<BrowserSubmissionResult> {
   const deadline = Date.now() + waitMs;
   let body = "";
   let challenge = false;
   let confirmed = false;
+  let validationErrors: string[] = [];
   do {
     if (new URL(page.url()).origin !== new URL(baseline.targetUrl).origin || !canAutomate(page.url()))
       throw new Error("The submission page left the approved employer site.");
     body = await submissionText(page);
     challenge = await visibleCaptchaChallenge(page);
     confirmed = !challenge && !baseline.beforeHadConfirmation && hashJson(body) !== baseline.beforeHash && confirmationPattern.test(body);
-    if (confirmed || (challenge && !application.browserCaptchaSolving) || Date.now() >= deadline) break;
+    validationErrors = confirmed ? [] : await submissionValidationErrors(page);
+    if (confirmed || validationErrors.length || (challenge && !application.browserCaptchaSolving) || Date.now() >= deadline) break;
     await page.waitForTimeout(500);
   } while (true);
   let screenshotPath: string | undefined;
@@ -1213,13 +1271,13 @@ async function observeSubmission(page: Page, application: Application, baseline:
   // Save the actual confirmation even if it appears at the end of a long page.
   const match = body.search(confirmationPattern);
   const receiptText = confirmed && match >= 3000 ? body.slice(Math.max(0, match - 300), match + 2700) : body.slice(0, 3000);
-  const awaiting = !confirmed && (challenge || application.status === "awaiting_verification");
+  const awaiting = !confirmed && !validationErrors.length && (challenge || application.status === "awaiting_verification");
   return {
     confirmed,
-    evidence: confirmed ? `Confirmation visible at ${page.url()}` : awaiting
+    evidence: confirmed ? `Confirmation visible at ${page.url()}` : validationErrors.length ? `The employer form needs corrections. ${validationErrors.join(" ")}` : awaiting
       ? challenge ? "The employer opened a CAPTCHA after the approved Submit click. Complete it in the same browser, then check the result." : "Waiting for the employer's confirmation of the existing attempt. No additional Submit click was made."
       : `Submission attempted; confirmation could not be verified at ${page.url()}`,
-    receipt: { version: 1, url: page.url(), text: receiptText, capturedAt: new Date().toISOString(), screenshotPath },
+    receipt: { version: 1, url: page.url(), text: receiptText, capturedAt: new Date().toISOString(), screenshotPath, ...(validationErrors.length ? { validationErrors } : {}) },
     verification: awaiting ? baseline : undefined,
   };
 }

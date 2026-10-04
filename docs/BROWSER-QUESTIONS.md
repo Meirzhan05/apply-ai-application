@@ -4,9 +4,13 @@ The application asks for missing employer answers in a native dialog, then conti
 
 ## Scope and takeover
 
-The dialog opens when an application needs user action, has a browser session, and its inspected form contains supported unanswered controls. Questions come from the employer’s actual controls: required blanks or populated fields with invalid values. Supported kinds are text, email, telephone, URL, number, date, textarea, select, radio, and checkbox. Optional blanks, attachments, credentials, noneditable fields, ambiguous identifiers, and unsupported controls are excluded. A batch contains at most 20 questions.
+The dialog opens when an application needs user action, has a browser session, and its inspected form contains supported unanswered controls. Questions come from the employer’s actual controls: required blanks or populated fields with invalid values. Supported kinds are text, email, telephone, URL, number, date, textarea, select, radio, checkbox, and Ashby Yes/No button groups. Optional blanks, attachments, credentials, noneditable fields, ambiguous identifiers, and unsupported controls are excluded. A batch contains at most 20 questions.
 
 Inspection reads the employer’s question heading separately from its option label. It uses the nearest scoped ATS question container or fieldset, with ARIA and native label fallbacks, and excludes dynamic location status text from the heading. Saved headings containing only Yes/No, internal `cards[...]` names, or location loading/error text cannot be answered. “Refresh questions” re-reads the same browser before showing an answerable dialog.
+
+Ashby question descriptions and native ARIA descriptions are included with the title, so “Tell us more” retains the actual essay prompt. A question about something the applicant built routes to AI essay drafting and exact-answer review. LinkedIn remains a separate human answer. Ashby Yes/No widgets use their stable field path and selected button state; an unanswered required widget blocks submission even when its backing checkbox is hidden. Neither option is inferred from a profile location.
+
+After an existing submission attempt, visible Ashby “Your form needs corrections” notices are captured with their missing-field messages. The dashboard presents those recorded errors explicitly. The attempt remains held and cannot be retried automatically.
 
 Applicant facts, preferences, sensitive answers, exact employer options, and consent belong to the applicant. Options are presented as supplied by the employer. A required consent checkbox requires an explicit check; it is not replaced with a Yes/No menu. Recognized motivation and experience essays belong to AI and appear as read-only drafts for review.
 
@@ -58,6 +62,10 @@ npm run typecheck
 npm run lint
 node --import tsx scripts/test-browser.ts
 node --import tsx scripts/test-browser-questions-ui.ts
+
+# Full story prompt, initially blank LinkedIn, required Yes/No, and correction notice.
+# All API requests are intercepted; safe against a deployed dashboard.
+TEST_DASHBOARD_URL=https://apply-ai-chi.vercel.app node --import tsx scripts/test-ashby-question-ui.ts
 TEST_BROWSER_CASE='label extraction' npm run test:browser
 node --import tsx scripts/test-form-labels-ui.ts
 node --env-file=.data/production.env --import tsx scripts/test-cloud-questions.ts
