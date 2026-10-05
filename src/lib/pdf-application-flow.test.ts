@@ -312,7 +312,7 @@ it.each([2, 3] as const)("recovers a missing confirmation from an existing parse
   const requested = await publicAction("draft", { applicationId: application.id });
   expect(requested.status, await requested.clone().text()).toBe(200);
   const handoff = fixture.tasks.find((item) => item.task === "draft-application-packet")!;
-  await expect(runDraft(handoff.payload)).rejects.toThrow(/Review 1 original résumé claim in your profile/i);
+  await expect(runDraft(handoff.payload)).rejects.toThrow(/1 original résumé detail is missing source evidence/i);
 
   const recovered = fixture.state!.profile.facts.filter((fact) => fact.sourceAnchorId === missingAnchor.id);
   expect(recovered).toHaveLength(1);

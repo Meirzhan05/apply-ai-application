@@ -118,9 +118,9 @@ describe("ResumeComparison", () => {
     };
     const markup = renderToStaticMarkup(createElement(ResumeComparison, { applicationId: "application-123", profile, packet, diagnostics, onReviewProfile: () => {} }));
 
-    expect(markup).toContain("2 source claims need your review");
-    expect(markup).toContain("Nothing is used until you confirm it in profile facts.");
-    expect(markup).toContain("Review source facts in profile");
+    expect(markup).toContain("2 source details are missing evidence links");
+    expect(markup).toContain("Re-extract your saved resume in Profile, then retry drafting.");
+    expect(markup).toContain("Repair source evidence in profile");
     expect(markup).toContain("2025");
     expect(markup).toContain("Northwind project");
     expect(markup).not.toContain("Information needed");
@@ -135,9 +135,9 @@ describe("ResumeComparison", () => {
     };
     const markup = renderToStaticMarkup(createElement(ResumeSourceFactsNotice, { diagnostics, onReviewProfile: () => {} }));
 
-    expect(markup).toContain("Review the source facts before drafting");
-    expect(markup).toContain("Nothing is used until you confirm it in profile facts.");
-    expect(markup).toContain("Review source facts in profile");
+    expect(markup).toContain("Reconnect your resume source details before drafting");
+    expect(markup).toContain("Re-extract your saved resume in Profile, then retry drafting.");
+    expect(markup).toContain("Repair source evidence in profile");
     expect(markup).toContain("2025");
   });
 

@@ -24,11 +24,11 @@ export function ResumeDraftHistory({ report }: { report: ResumeDraftAttempts }) 
 
 export function ResumeSourceFactsNotice({ diagnostics, onReviewProfile }: { diagnostics: ResumeDraftDiagnostics; onReviewProfile: () => void }) {
   if (diagnostics.outcome !== "needs_information" || diagnostics.writerAttempts !== 0 || diagnostics.checkerAttempts !== 0) return <ResumeDraftHistory report={diagnostics} />;
-  return <section className="resume-comparison-diagnostics" aria-label="Résumé source facts need review">
-    <h4>Review the source facts before drafting</h4>
-    <p>{diagnostics.findings.length} original résumé {diagnostics.findings.length === 1 ? "claim needs" : "claims need"} your review. Nothing is used until you confirm it in profile facts.</p>
+  return <section className="resume-comparison-diagnostics" aria-label="Résumé source details need extraction">
+    <h4>Reconnect your resume source details before drafting</h4>
+    <p>{diagnostics.findings.length} source {diagnostics.findings.length === 1 ? "detail is" : "details are"} missing evidence links. Re-extract your saved resume in Profile, then retry drafting.</p>
     <ul>{diagnostics.findings.map((finding) => <li key={finding.claimId}><p className="resume-change-text">{finding.affectedText}</p></li>)}</ul>
-    <button className="text-button" type="button" onClick={onReviewProfile}>Review source facts in profile</button>
+    <button className="text-button" type="button" onClick={onReviewProfile}>Repair source evidence in profile</button>
   </section>;
 }
 
@@ -236,8 +236,8 @@ export function ResumeComparisonView({
       <ResumeDraftHistory report={failingDiagnostics ?? plan.grounding} />
       {failingDiagnostics && (
         <section className="resume-comparison-diagnostics" aria-label="Latest résumé preparation result">
-          <h4>{failingDiagnostics.outcome === "needs_information" ? "Résumé needs more information" : "Résumé preparation could not be completed"}</h4>
-          {needsSourceFactReview && <p>{failingDiagnostics.findings.length} source {failingDiagnostics.findings.length === 1 ? "claim needs" : "claims need"} your review. Nothing is used until you confirm it in profile facts.</p>}
+          <h4>{needsSourceFactReview ? "Reconnect your resume source details before drafting" : failingDiagnostics.outcome === "needs_information" ? "Résumé needs more information" : "Résumé preparation could not be completed"}</h4>
+          {needsSourceFactReview && <p>{failingDiagnostics.findings.length} source {failingDiagnostics.findings.length === 1 ? "detail is" : "details are"} missing evidence links. Re-extract your saved resume in Profile, then retry drafting.</p>}
           {failingDiagnostics.outcome === "technical_failure" && <p>{latestError || "The latest résumé preparation failed before it produced a new validated file."}</p>}
           {failingDiagnostics.findings.length > 0 && <ul>
             {failingDiagnostics.findings.map((finding) => (
@@ -257,7 +257,7 @@ export function ResumeComparisonView({
           {!needsSourceFactReview && failingDiagnostics.requiredInformation.length > 0 && <ul aria-label="Information needed">
             {failingDiagnostics.requiredInformation.map((item) => <li key={item}>{item}</li>)}
           </ul>}
-          {failingDiagnostics.outcome === "needs_information" && onReviewProfile && <button className="text-button" type="button" onClick={onReviewProfile}>{needsSourceFactReview ? "Review source facts in profile" : "Review profile facts"}</button>}
+          {failingDiagnostics.outcome === "needs_information" && onReviewProfile && <button className="text-button" type="button" onClick={onReviewProfile}>{needsSourceFactReview ? "Repair source evidence in profile" : "Review profile facts"}</button>}
           {failingDiagnostics.outcome === "technical_failure" && onRebuildResume && <button className="text-button" type="button" disabled={rebuildDisabled} onClick={onRebuildResume}>Retry résumé build</button>}
         </section>
       )}

@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Pencil, X } from "lucide-react";
+import { FileText, Pencil, RefreshCw, X } from "lucide-react";
 import { ResumeSourceSupportNotice } from "@/components/resume-comparison";
 import { isUsableFact } from "@/lib/fact-evidence";
+import { confirmedFactIdsForAnchor, sourceEvidenceAnchors } from "@/lib/source-plan-evidence";
 import type { Profile, ResumeFactCategory, VerifiedFact } from "@/lib/types";
 
 const groups: Array<{ category: ResumeFactCategory; label: string }> = [
@@ -25,6 +26,9 @@ export function ResumeFacts({ profile, busy, onUploaded, onSave }: {
   const extraction = profile.resumeExtraction;
   const pending = Boolean(extraction && ["queued", "extracting", "checking"].includes(extraction.status));
   const disabled = busy || uploading;
+  const source = profile.resumeSourceDocument;
+  const missingEvidence = source ? sourceEvidenceAnchors(source, 3, profile.name)
+    .filter(anchor => !confirmedFactIdsForAnchor(profile, anchor, source).length).length : 0;
   const save = async (facts: VerifiedFact[], expected = profile.facts) => {
     const result = await onSave(facts, expected);
     if (result) { setEditing(null); setNewFact(""); }
@@ -37,6 +41,17 @@ export function ResumeFacts({ profile, busy, onUploaded, onSave }: {
       if (!response.ok) throw new Error(body.error);
       await onUploaded();
     } catch (err) { setError(err instanceof Error ? err.message : "Retry failed. Try again."); }
+    finally { setUploading(false); }
+  };
+  const reextract = async () => {
+    setUploading(true); setError("");
+    try {
+      const form = new FormData(); form.set("reuse", "true"); form.set("reextract", "true");
+      const response = await fetch("/api/resume", { method: "POST", body: form });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error);
+      await onUploaded();
+    } catch (err) { setError(err instanceof Error ? err.message : "Extraction failed. Try again."); }
     finally { setUploading(false); }
   };
   return <section className="profile-card resume-facts-panel" aria-labelledby="confirmed-resume-facts">
@@ -62,10 +77,15 @@ export function ResumeFacts({ profile, busy, onUploaded, onSave }: {
         }} />
     </label>
     {extraction && <div className="resume-extraction-status" role="status" aria-live="polite">
-      <p>{messages[extraction.status]}</p>
+      <p>{extraction.status === "ready" && missingEvidence ? "Your resume was read, but some source details still need evidence." : messages[extraction.status]}</p>
       {pending && profile.resumeFileName && <p className="muted">Your previous resume remains active until this one is ready.</p>}
       {extraction.error && <p className="muted">{extraction.error}</p>}
       {["failed", "budget_limited"].includes(extraction.status) && <button type="button" className="outline-action" disabled={disabled} onClick={retry}>Retry extraction</button>}
+    </div>}
+    {missingEvidence > 0 && !pending && !extraction?.pending && <div className="resume-extraction-status" role="status">
+      <p>{missingEvidence} source {missingEvidence === 1 ? "detail is" : "details are"} missing evidence from your saved resume. Re-extract it to reconnect these details before drafting.</p>
+      <p className="muted">This replaces resume-derived facts, including edits. Manually added facts and saved personal answers are kept.</p>
+      <button type="button" className="outline-action" disabled={disabled} onClick={reextract}><RefreshCw size={16} aria-hidden="true" /><span>Re-extract saved resume</span></button>
     </div>}
     {error && <p role="alert">{error}</p>}
     {profile.resumeSourceDocument && <ResumeSourceSupportNotice source={profile.resumeSourceDocument} />}
@@ -89,7 +109,7 @@ export function ResumeFacts({ profile, busy, onUploaded, onSave }: {
                 <button className="text-button" disabled={disabled} onClick={() => setEditing(null)}>Cancel</button>
               </div>
             </> : <p>{fact.text}</p>}
-            {!isUsableFact(fact) && <small className="muted">Waiting for automatic extraction.</small>}
+            {!isUsableFact(fact) && <small className="muted">{pending ? "Waiting for automatic extraction." : "Missing source evidence. Re-extract your saved resume to check this detail."}</small>}
             {fact.grounding && <details className="resume-fact-source"><summary>View source</summary>{fact.grounding.evidence.map(item => <blockquote key={item.anchorId}>{item.quote}</blockquote>)}</details>}
           </div>
           <div className="resume-fact-actions">

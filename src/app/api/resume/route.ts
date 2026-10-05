@@ -27,6 +27,7 @@ export async function POST(request: Request) {
     const trustedName = savedProfile.name;
     const data = await request.formData();
     const reuse = data.get("reuse") === "true";
+    const reextract = reuse && data.get("reextract") === "true";
     const original = reuse ? originalResumeManifest(savedProfile) : undefined;
     const suppliedFile = data.get("file");
     const file = suppliedFile instanceof File ? suppliedFile : undefined;
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
     const buffer = original ? await readOriginalResume(userId, original) : Buffer.from(await file!.arrayBuffer());
     let extracted = "";
     let sourceDocument: ResumeSourceDocument;
-    if (reuse && savedProfile.resumeSourceDocument && savedProfile.resumeSourceDocument.sourceHash === original?.sha256 && savedProfile.resumeSourceDocument.text.trim()) {
+    if (reuse && !reextract && savedProfile.resumeSourceDocument && savedProfile.resumeSourceDocument.sourceHash === original?.sha256 && savedProfile.resumeSourceDocument.text.trim()) {
       sourceDocument = savedProfile.resumeSourceDocument;
       extracted = sourceDocument.text;
     } else if (pdf) {
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
     const current = await mutateState(userId, state => {
       if ((state.profile.resumeExtraction?.uploadSequence ?? 0) > uploadSequence || state.profile.resumeImport?.token !== importToken) return false;
       // A reviewed, current extraction can be reused without discarding its corrections.
-      if (reuse && state.profile.resumeExtraction?.status === "ready" && state.profile.resumeDetailsVersion === 1 && state.profile.resumeSource?.sha256 === sha256) {
+      if (reuse && !reextract && state.profile.resumeExtraction?.status === "ready" && state.profile.resumeDetailsVersion === 1 && state.profile.resumeSource?.sha256 === sha256) {
         fillReusedOnboardingBasics(state.profile, sourceDocument);
         delete state.profile.resumeImport;
         return "ready";

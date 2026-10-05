@@ -31,7 +31,7 @@ describe("structured resume grounding", () => {
       findings: ["one", "two", "three"].map((claimId) => ({ claimId, affectedText: claimId, outcome: "unsupported", reason: "Unconfirmed source claim.", evidenceFactIds: [], requiredInformation: "Confirm the source claim in profile facts." })),
       requiredInformation: ["Confirm the source claim in profile facts."] });
 
-    expect(message).toBe("Review 3 original résumé claims in your profile before drafting. Nothing is used until you confirm it.");
+    expect(message).toBe("3 original résumé details are missing source evidence. Re-extract your saved resume in Profile, then retry drafting.");
     expect(message).not.toContain("Unconfirmed source claim.");
   });
 

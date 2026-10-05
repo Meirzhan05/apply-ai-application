@@ -2036,6 +2036,7 @@ kbd { font: inherit; font-size: 12px; border: 1px solid #a9c2b5; padding: 2px 5p
 /* Automatically extracted resume facts use the existing profile typography and controls. */
 .resume-extraction-status { margin: 16px 0; }
 .resume-extraction-status p { margin: 6px 0; }
+.resume-extraction-status .outline-action { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
 .resume-fact-group { margin: 24px 0; }
 .resume-fact-group h4 { margin-bottom: 8px; }
 .resume-fact-list { list-style: none; margin: 0; padding: 0; }

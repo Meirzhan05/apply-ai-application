@@ -27,8 +27,9 @@ const docxRequest = (bytes: Buffer) => {
   const form = new FormData(); form.append("file", new File([Uint8Array.from(bytes).buffer], "resume.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   return new Request("http://localhost/api/resume", { method: "POST", headers: { Origin: "http://localhost" }, body: form });
 };
-const reuseRequest = () => {
+const reuseRequest = (reextract = false) => {
   const form = new FormData(); form.set("reuse", "true");
+  if (reextract) form.set("reextract", "true");
   return new Request("http://localhost/api/resume", { method: "POST", headers: { Origin: "http://localhost" }, body: form });
 };
 beforeEach(async () => {
@@ -40,6 +41,31 @@ beforeEach(async () => {
   mocks.extracted = "WORK EXPERIENCE\nOrbit Labs\nML Intern June 2026 – August 2026\n• Built a recommender with explainable\nfeature-level predictions.";
 });
 describe("resume upload automatic extraction", () => {
+  it("explicitly re-extracts a ready saved resume without replacing the active profile before success", async () => {
+    const bytes = await createDocxSourceFixture();
+    await POST(docxRequest(bytes));
+    const profile = mocks.state!.profile;
+    const pending = profile.resumeExtraction!.pending!;
+    profile.resumeSource = pending.source; profile.resumeSourceDocument = pending.document;
+    profile.resumeFileName = "resume.docx"; profile.resumeDetailsVersion = 1;
+    profile.resumeExtraction!.status = "ready"; profile.resumeExtraction!.pending = undefined;
+    profile.facts = [{ id: "legacy", text: "Corrected work history", verified: true, source: "resume" }, { id: "manual", text: "A manually added project", verified: true, source: "user" }];
+    profile.resumeSourceDocument!.text = "Legacy cached parser text";
+    const before = structuredClone(profile);
+    mocks.download.mockResolvedValue({ data: new Blob([Uint8Array.from(bytes)]), error: null });
+
+    const response = await POST(reuseRequest(true));
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ status: "queued", reused: true });
+    expect(profile.resumeExtraction!.id).not.toBe(before.resumeExtraction!.id);
+    expect(profile.resumeExtraction!.pending!.onboardingImport?.reused).toBe(true);
+    expect(profile.resumeExtraction!.pending!.document!.text).not.toBe("Legacy cached parser text");
+    expect(profile.facts).toEqual(before.facts);
+    expect(profile.name).toBe(before.name); expect(profile.contactEmail).toBe(before.contactEmail);
+    expect(profile.resumeSource).toEqual(before.resumeSource);
+    expect(mocks.upload).toHaveBeenCalledTimes(1);
+  });
   it("keeps account email and active details unchanged while queuing onboarding basic import", async () => {
     const saved = structuredClone(mocks.state!.profile);
     expect((await POST(docxRequest(await createDocxSourceFixture()))).status).toBe(202);
