@@ -32,6 +32,7 @@ it("fills known basics and personal links and asks only for missing screening an
   expect(result.form.fields.find(field => field.label === "Email address")!.value).toBe("applications@example.com");
   expect(result.form.fields.find(field => field.label === "GitHub")!.value).toBe("https://github.com/riley-example");
   expect(result.form.fields.find(field => field.label === "LinkedIn profile")!.value).toBe(profile.linkedinUrl);
+  expect(result.form.fields.find(field => field.label === "Current location")!.value).toBe("Seattle, WA");
   expect(browserQuestions({ ...result.form, hash: "fixture" }).map(question => question.label)).toEqual(["Languages spoken", "Company website"]);
 });
 

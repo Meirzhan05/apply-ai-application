@@ -18,6 +18,10 @@ const stageNames = { resume: "Resume", profile: "Profile", answers: "Application
 function resumePending(profile: Profile): boolean {
   return Boolean(profile.resumeImport) || ["queued", "extracting", "checking"].includes(profile.resumeExtraction?.status ?? "");
 }
+function resumePolling(profile: Profile): boolean {
+  const extraction = profile.resumeExtraction;
+  return resumePending(profile) || Boolean(extraction?.status === "failed" && extraction.attempts === 1);
+}
 type ImportedFact = ViewState["onboarding"]["importedFacts"][number];
 type FactGroup = { key: string; heading: string; facts: ImportedFact[] };
 
@@ -151,8 +155,9 @@ export default function Onboarding() {
   }, [load, showError]);
 
   const waitingForResume = data ? resumePending(data.profile) : false;
+  const pollingResume = data ? resumePolling(data.profile) : false;
   useEffect(() => {
-    if (!waitingForResume || busy === "import") return;
+    if (!pollingResume || busy === "import") return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -161,14 +166,17 @@ export default function Onboarding() {
         if (!active) return;
         saved.current = state; setData(state);
         currentDraft.current = state.profile; setDraft(state.profile);
-        if (!resumePending(state.profile)) {
-          if (state.profile.resumeExtraction?.status === "ready") {
-            setError(""); setMissing([]);
-            currentStage.current = "profile"; setStage("profile");
-            editRevision.current += 1; setDirty(true); setSaveState("Unsaved changes");
-          } else setError(state.profile.resumeExtraction?.error || "Resume extraction did not finish. Retry extraction.");
+        if (state.profile.resumeExtraction?.status === "ready") {
+          setError(""); setMissing([]);
+          currentStage.current = "profile"; setStage("profile");
+          editRevision.current += 1; setDirty(true); setSaveState("Unsaved changes");
           return;
         }
+        if (!resumePolling(state.profile)) {
+          setError(state.profile.resumeExtraction?.error || "Resume extraction did not finish. Retry extraction.");
+          return;
+        }
+        if (resumePending(state.profile)) setError("");
       } catch (failure) {
         if (!active) return;
         showError(failure);
@@ -178,7 +186,7 @@ export default function Onboarding() {
     };
     timer = setTimeout(() => void poll(), 1000);
     return () => { active = false; clearTimeout(timer); };
-  }, [waitingForResume, busy, showError]);
+  }, [pollingResume, busy, showError]);
 
   useEffect(() => {
     if (!dirty || busy) return;

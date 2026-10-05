@@ -91,6 +91,29 @@ it.each([41, 201])("fills saved contact details on a form with %s controls", asy
   expect(employer.observations().submitClicks).toBe(0);
 });
 
+it("fills explicit residence fields from structured current location", async () => {
+  const labels = ["Current city", "Current region", "Current country", "Current location"];
+  const { app, employer } = fixture(labels.map((label, index) => `<label for="residence-${index}">${label}</label><input required id="residence-${index}" name="residence-${index}">`).join(""));
+  transport.launch.mockResolvedValue(employer.browser);
+  const state = initialDemoState();
+  const profile = state.profile;
+  profile.currentLocation = { city: "Almaty", region: "Almaty Region", country: "Kazakhstan" };
+  profile.location = "Legacy full location";
+  profile.preferredLocations = ["New York, NY", "San Francisco, CA"];
+  const job = { ...state.jobs[0], applyUrl: "https://jobs.example/apply", url: "https://jobs.example/apply" };
+  state.jobs = [job]; state.applications = [app]; app.userId = profile.id; app.jobId = job.id; app.status = "selected";
+  const fact = profile.facts.find(item => item.verified)!;
+  const packet = await withPacketFiles(profile, { schemaVersion: 1, version: 1, summary: "Structured residence fixture", model: "fixture", createdAt: new Date().toISOString(), resumeLines: [{ text: fact.text, factIds: [fact.id] }], answers: [] });
+  for (const file of packet.files ?? []) if (file.storageKey) files.push(`.data/application-files/${file.storageKey}`);
+  setPacket(state, app, packet); approveFill(app, profile.id, app.packetHash!, job.applyUrl);
+
+  const result = await prepareBrowser(app, job, profile);
+
+  expect(result.form.fields.map(field => field.value)).toEqual(["Almaty", "Almaty Region", "Kazakhstan", "Almaty, Almaty Region, Kazakhstan"]);
+  expect(browserQuestions({ ...result.form, hash: "observed" })).toEqual([]);
+  expect(employer.observations().submitClicks).toBe(0);
+});
+
 it("fills current and future sponsorship separately and leaves unknown declarations for the candidate", async () => {
   const questions = ["US Immigration Status", "Visa Type", "Are you authorized to work in the United States?", "Do you require sponsorship now?", "Will you require sponsorship in the future?", "Will you now or in the future require sponsorship?"];
   const { app, employer } = fixture(questions.map((label, index) => `<label for="declaration-${index}">${label}</label><input required id="declaration-${index}" name="declaration-${index}">`).join(""));

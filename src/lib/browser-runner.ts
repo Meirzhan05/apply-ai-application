@@ -366,6 +366,7 @@ function allowedValues(
   Object.entries(reusableFactualAnswers(profile)).forEach(([key, value]) => {
     values[`saved_${key}`] = value;
   });
+  if (!values.saved_currentLocation && personal.location) values.saved_currentLocation = personal.location;
   return values;
 }
 
@@ -381,6 +382,8 @@ function deterministicKey(
       answer.answer.trim() && (!answer.requiresUserInput || answer.userProvided),
   );
   if (answerIndex !== undefined && answerIndex >= 0) return `answer_${answerIndex}`;
+  const locationKey = savedLocationAnswerKey(label);
+  if (locationKey) return `saved_${locationKey}`;
   const personalKey = personalQuestionKey(field.label);
   if (personalKey) return ({ name: "full_name", contactEmail: "email", phone: "phone", school: "school", graduationYear: "graduation_date" } as Record<string, string>)[personalKey] ?? `personal_${personalKey}`;
   if (/first.*last.*name|full.?name|your name|candidate name/.test(label)) return "full_name";
@@ -391,8 +394,6 @@ function deterministicKey(
   if (/phone|mobile/.test(label) || field.kind === "tel") return "phone";
   const link = profileLinkQuestion(label);
   if (link) return link;
-  const locationKey = savedLocationAnswerKey(label);
-  if (locationKey) return `saved_${locationKey}`;
   if (/school|university|college/.test(label)) return "school";
   if (/availability|available.*start|start.*date|earliest.*start/.test(label)) return "availability";
   if (/graduation.*season|graduat.*term/.test(label)) return "graduation_date";
