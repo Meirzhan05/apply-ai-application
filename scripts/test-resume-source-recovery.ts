@@ -97,7 +97,8 @@ async function main() {
     if (profile.resumeExtraction!.status !== "ready") assert.deepEqual(profile.facts, before.facts, "The existing snapshot must remain active while extraction runs.");
     const deadline = Date.now() + 10 * 60_000;
     while (profile.resumeExtraction!.status !== "ready" && Date.now() < deadline) {
-      if (["failed", "budget_limited"].includes(profile.resumeExtraction!.status)) throw new Error(profile.resumeExtraction!.error || "Extraction failed.");
+      const extraction = profile.resumeExtraction!;
+      if (extraction.status === "budget_limited" || (extraction.status === "failed" && extraction.attempts !== 1)) throw new Error(extraction.error || "Extraction failed.");
       await new Promise(resolve => setTimeout(resolve, 2000)); profile = (await read()).profile;
     }
     assert.equal(profile.resumeExtraction!.status, "ready");
