@@ -9,7 +9,7 @@ import { readModelUsage, withModelUsageContext, meterModelResponse, recordModelU
 
 beforeEach(() => { vi.stubEnv("OPENAI_API_KEY", "fixture"); parse.mockReset(); });
 afterEach(() => vi.unstubAllEnvs());
-it("retains measured drafting and audit usage even when grounding fails", async () => {
+it("retains measured drafting, audit and repair usage even when grounding fails", async () => {
   const state = initialDemoState();
   const userId = randomUUID();
   state.profile.id = userId;
@@ -17,10 +17,12 @@ it("retains measured drafting and audit usage even when grounding fails", async 
   const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 }, output_tokens: 100, output_tokens_details: { reasoning_tokens: 60 } };
   parse.mockResolvedValueOnce({ id: "draft-response", model: "gpt-6-luna", service_tier: "default", usage, output_parsed: { sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }, { text: "I want to contribute.", kind: "perspective", factIds: [] }] } });
   parse.mockResolvedValueOnce({ id: "audit-response", model: "gpt-6-luna", service_tier: "default", usage, output_parsed: { grounded: false, unsupportedClaims: ["uncertain"] } });
+  parse.mockResolvedValueOnce({ id: "repair-response", model: "gpt-6-luna", service_tier: "default", usage, output_parsed: null });
   const answer = await withModelUsageContext({ userId, applicationId: "application", runId: "draft-run", jobId: state.jobs[0].id }, () => draftAiEssay(state.profile, state.jobs[0], "Why are you interested?"));
   expect(answer.aiDraft).toBeUndefined();
   const report = await readModelUsage(userId);
-  expect(report.records).toHaveLength(2);
+  expect(report.records).toHaveLength(3);
+  expect(report.records.filter((record) => record.operation === "essay-generation")).toHaveLength(2);
   expect(report.records.every((record) => record.applicationId === "application" && record.runId === "draft-run")).toBe(true);
   expect(report.records.find((record) => record.operation === "essay-generation")?.tokens).toEqual({ input: 1000, cachedInput: 200, cacheWrite: 0, output: 100, reasoningOutput: 60 });
   expect(parse.mock.calls[0][0].model).toBe("gpt-6-luna");

@@ -22,6 +22,80 @@ beforeEach(() => { vi.stubEnv("OPENAI_API_KEY", "synthetic-key"); parse.mockRese
 afterEach(() => vi.unstubAllEnvs());
 
 describe("AI essay generation", () => {
+  it("repairs a rejected draft using audit feedback and audits the replacement", async () => {
+    const state = initialDemoState();
+    const rejected = providerDraft();
+    rejected.output_parsed.sentences[0].text = "Replit is the largest software platform in the world.";
+    parse.mockResolvedValueOnce(rejected)
+      .mockResolvedValueOnce({ output_parsed: { grounded: false, unsupportedClaims: ["The posting does not support the largest-platform claim."] } })
+      .mockResolvedValueOnce(providerDraft())
+      .mockResolvedValueOnce({ output_parsed: { grounded: true, unsupportedClaims: [] } });
+    const result = await draftAiEssay(state.profile, state.jobs[0], "Why are you interested in Replit?");
+    expect(result.aiDraft).toBeDefined();
+    expect(result.answer).not.toContain("largest");
+    expect(parse).toHaveBeenCalledTimes(4);
+    const repair = JSON.parse(parse.mock.calls[2][0].input.find((message: { role: string }) => message.role === "user").content);
+    expect(repair.unsupportedClaims).toEqual(["The posting does not support the largest-platform claim."]);
+    expect(repair.previousSentences).toEqual(rejected.output_parsed.sentences);
+    expect(() => validateAiEssay(state.profile, result)).not.toThrow();
+  });
+
+  it("allows a checked motivation-only answer for applicant confirmation", async () => {
+    const state = initialDemoState();
+    parse.mockResolvedValueOnce({ output_parsed: { sentences: [
+      { text: "I am interested in helping people turn ideas into useful software.", kind: "perspective", factIds: [] },
+      { text: "I would like to contribute to tools that make that process easier.", kind: "perspective", factIds: [] },
+    ] } }).mockResolvedValueOnce({ output_parsed: { grounded: true, unsupportedClaims: [] } });
+    const result = await draftAiEssay(state.profile, { ...state.jobs[0], company: "Replit" }, "Why are you interested in Replit?");
+    expect(result.aiDraft).toBeDefined();
+    expect(result.answer).toContain("I am interested");
+    expect(result.requiresUserInput).toBe(true);
+    expect(result.confirmedAt).toBeUndefined();
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(() => validateAiEssay(state.profile, result)).not.toThrow();
+  });
+
+  it("fails closed after two rejected drafts", async () => {
+    const state = initialDemoState();
+    for (let index = 0; index < 2; index++) {
+      parse.mockResolvedValueOnce(providerDraft()).mockResolvedValueOnce({ output_parsed: { grounded: false, unsupportedClaims: ["Unsupported applicant history"] } });
+    }
+    const result = await draftAiEssay(state.profile, state.jobs[0], question);
+    expect(result.aiDraft).toBeUndefined();
+    expect(result.answer).toBe("");
+    expect(parse).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not repair a refused audit or run beyond the deadline", async () => {
+    const state = initialDemoState();
+    parse.mockResolvedValueOnce(providerDraft()).mockResolvedValueOnce({ output_parsed: null });
+    expect((await draftAiEssay(state.profile, state.jobs[0], question)).aiDraft).toBeUndefined();
+    expect(parse).toHaveBeenCalledTimes(2);
+    parse.mockReset();
+    const deadline = Date.now() + 10_000;
+    parse.mockResolvedValueOnce(providerDraft()).mockImplementationOnce(async () => {
+      vi.spyOn(Date, "now").mockReturnValue(deadline);
+      return { output_parsed: { grounded: false, unsupportedClaims: ["Unsupported claim"] } };
+    });
+    try {
+      expect((await draftAiEssay(state.profile, state.jobs[0], question, deadline)).aiDraft).toBeUndefined();
+      expect(parse).toHaveBeenCalledTimes(2);
+    } finally { vi.restoreAllMocks(); }
+  });
+
+  it("keeps automatic motivation rules and checks authorization again before a repair", async () => {
+    const state = initialDemoState();
+    const guard = vi.fn().mockResolvedValue(undefined);
+    parse.mockResolvedValueOnce(providerDraft()).mockResolvedValueOnce({ output_parsed: { grounded: false, unsupportedClaims: ["Invented motivation"] } });
+    guard.mockImplementation(async () => { if (parse.mock.calls.length === 2) throw new Error("Authorization changed"); });
+    const result = await draftAiEssay(state.profile, state.jobs[0], question, undefined, { automatic: true, beforeModelCall: guard });
+    expect(result.aiDraft).toBeUndefined();
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(guard).toHaveBeenCalledTimes(5);
+    expect(parse.mock.calls[0][0].input[0].content).toContain("Do not invent applicant motivations");
+    expect(parse.mock.calls[1][0].input[0].content).toContain("reject invented applicant preferences");
+  });
+
   it("drafts more than five essays in one application", async () => {
     const state = initialDemoState();
     state.profile = completeOnboardingFixture(state.profile);

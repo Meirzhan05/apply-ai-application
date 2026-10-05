@@ -27,6 +27,8 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
   assertQuestionSession(app, state.profile, formHash);
   const questions = browserQuestions(app.form).filter((question) => question.owner === "ai");
   if (!questions.length) return;
+  const stored = app.browserQuestionDrafts;
+  const previous = stored?.formHash === formHash && stored.sessionId === app.browserSessionId && stored.packetHash === app.packetHash ? stored.answers : {};
   const job = state.jobs.find((item) => item.id === app.jobId) ?? app.jobSnapshot;
   if (!job?.active) throw new Error("The job is closed or unavailable.");
   await mutateState(userId, (current) => {
@@ -39,7 +41,7 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
   try {
     if (!await reserveServiceBudget(userId, `browser-essays:${applicationId}:${token}`, Number(process.env.PROJECTED_DRAFT_USD || "0.20")))
       throw new Error("AI drafting is paused at the service spending limit. Your answers and browser are saved; try again later.");
-    const drafts = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: token }, () => draftEssayAnswers(state.profile, job, questions.map((question) => ({
+    const drafts = await withModelUsageContext({ userId, applicationId, jobId: job.id, runId: token }, () => draftEssayAnswers(state.profile, job, questions.map((question) => previous[question.id]?.question === question.label ? previous[question.id] : ({
       question: question.label, answer: "", factIds: [], author: "ai", requiresUserInput: true,
     }))));
     await mutateState(userId, (current) => {
@@ -51,7 +53,7 @@ export async function writeBrowserQuestionEssays(userId: string, applicationId: 
         packetProfileHash(current.profile) !== packetProfileHash(state.profile)) return;
       target.browserQuestionDrafts = { formHash, sessionId: app.browserSessionId!, packetHash: app.packetHash!,
         answers: Object.fromEntries(questions.map((question, index) => [question.id, drafts[index]])) };
-      if (drafts.some((draft) => !draft.aiDraft)) target.error = "An essay could not be grounded in your confirmed facts. Check your profile facts, then retry AI drafting.";
+      if (drafts.some((draft) => !answerReviewHash(draft))) target.error = "An answer could not be drafted and verified. Your other answers are saved. Retry AI drafting.";
     });
   } catch (error) {
     await mutateState(userId, (current) => {

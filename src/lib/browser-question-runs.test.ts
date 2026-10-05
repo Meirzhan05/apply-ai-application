@@ -4,7 +4,7 @@ import { approveFill, selectApplication, setFormSnapshot, setPacket } from "@/li
 import { browserQuestions } from "@/lib/browser-questions";
 import { withPacketFiles } from "@/lib/packet-files";
 import type { AppState, ScreeningAnswer } from "@/lib/types";
-import { essayContentHash, essayEvidenceHash } from "@/lib/answer-policy";
+import { essayContentHash, essayEvidenceHash, reviseEssay } from "@/lib/answer-policy";
 import { approveBrowserAnswers } from "@/lib/browser-question-approval";
 
 const mocks = vi.hoisted(() => ({ state: null as AppState | null, fill: vi.fn(), draft: vi.fn(), reserve: vi.fn() }));
@@ -33,6 +33,29 @@ it("writes all essays when the employer asks more than five", async () => {
   expect(mocks.draft.mock.calls[0][2]).toHaveLength(6);
   expect(Object.keys(app.browserQuestionDrafts!.answers)).toHaveLength(6);
   expect(app.browserQuestionRun).toBeUndefined();
+});
+
+it.each(["current", "revision", "formHash", "sessionId", "packetHash"])("reuses only drafts bound to the current form on retry: %s", async (binding) => {
+  const { state, app } = await fixture();
+  setFormSnapshot(app, { ...app.form!, fields: [
+    { identifier: "project", label: "Describe your submitted project.", kind: "textarea", required: true, value: "" },
+    { identifier: "why", label: "Why are you interested in Replit?", kind: "textarea", required: true, value: "" },
+  ] });
+  const questions = browserQuestions(app.form);
+  const fact = state.profile.facts[0];
+  let saved: ScreeningAnswer = { question: questions[0].label, answer: fact.text, author: "ai", factIds: [fact.id], requiresUserInput: true,
+    aiDraft: { version: 1, model: "fixture", contentHash: "", evidenceHash: essayEvidenceHash(state.profile, [fact.id]), sentences: [{ text: fact.text, kind: "fact", factIds: [fact.id] }] } };
+  saved.aiDraft!.contentHash = essayContentHash(saved);
+  if (binding === "revision") saved = reviseEssay(state.profile, saved, "My reviewed project wording.");
+  app.browserQuestionDrafts = { formHash: app.form!.hash, sessionId: app.browserSessionId!, packetHash: app.packetHash!, answers: { [questions[0].id]: saved } };
+  if (["formHash", "sessionId", "packetHash"].includes(binding)) app.browserQuestionDrafts[binding as "formHash" | "sessionId" | "packetHash"] = "stale";
+  mocks.draft.mockImplementation(async (_profile, _job, answers) => answers);
+  await writeBrowserQuestionEssays(state.profile.id, app.id, app.form!.hash);
+  const passed = mocks.draft.mock.calls[0][2];
+  expect(passed[0]).toEqual(["current", "revision"].includes(binding) ? saved : expect.objectContaining({ answer: "", requiresUserInput: true }));
+  expect(passed[1]).toMatchObject({ question: questions[1].label, answer: "" });
+  expect(app.browserQuestionRun).toBeUndefined();
+  expect(app.error).toBe("An answer could not be drafted and verified. Your other answers are saved. Retry AI drafting.");
 });
 
 it("continues in the same session, saves scoped answers, and requires a fresh final approval", async () => {
