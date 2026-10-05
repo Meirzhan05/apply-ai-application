@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { chromium, type Browser } from "playwright-core";
+import { chromium, type Browser, type Page, type Response as BrowserResponse } from "playwright-core";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { initialDemoState } from "../src/lib/demo-data";
 import { createPdfSourceFixture } from "../src/lib/fixtures/pdf-source";
@@ -67,12 +67,14 @@ async function main() {
     const cookie = callback.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
     const read = async () => {
       const response = await fetch(`${origin}/api/state`, { headers: { Cookie: cookie }, cache: "no-store" });
-      assert.equal(response.status, 200); return await response.json() as AppState;
+      assert.equal(response.status, 200); return await response.json() as AppState & { onboarding: ReturnType<typeof resumeOnboardingStatus> };
     };
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
     await mkdir(".data", { recursive: true });
+    const before = (await read()).profile;
+    let queued: { status: string; requestId: string } | undefined;
     for (const [label, viewport] of Object.entries({ desktop: { width: 1440, height: 1000 }, mobile: { width: 390, height: 844 } })) {
-      const page = await browser.newPage({ viewport });
+      const page: Page = await browser.newPage({ viewport });
       page.setDefaultTimeout(30000);
       try {
         await page.context().addCookies(cookie.split("; ").map(value => { const [name, ...rest] = value.split("="); return { name, value: rest.join("="), url: origin }; }));
@@ -86,23 +88,36 @@ async function main() {
         assert.ok(layout.content <= layout.width, `${label} must not overflow horizontally.`);
         await page.screenshot({ path: `.data/source-recovery-${label}.png` });
         console.log(JSON.stringify({ viewport: label, repairVisible: true, consequencesVisible: true, overflow: false }));
+        if (label === "mobile") {
+          const responsePending: Promise<BrowserResponse> = page.waitForResponse(response => response.url().endsWith("/api/resume") && response.request().method() === "POST");
+          await repair.click();
+          const response: BrowserResponse = await responsePending;
+          assert.equal(response.status(), 202, await response.text());
+          queued = await response.json();
+          await page.waitForTimeout(1500);
+          assert.equal(new URL(page.url()).pathname, "/", "Same-resume recovery must stay in the workspace, not redirect to onboarding.");
+          await page.getByRole("heading", { name: "Resume and experience", exact: true }).waitFor();
+          await page.screenshot({ path: ".data/source-recovery-mobile-refresh.png" });
+        }
       } finally { await page.close(); }
     }
-    const before = (await read()).profile;
-    const form = new FormData(); form.set("reuse", "true"); form.set("reextract", "true");
-    const response = await fetch(`${origin}/api/resume`, { method: "POST", headers: { Cookie: cookie, Origin: origin }, body: form });
-    assert.equal(response.status, 202, await response.clone().text());
-    const queued = await response.json(); assert.equal(queued.status, "queued"); assert.notEqual(queued.requestId, before.resumeExtraction!.id);
-    let profile = (await read()).profile;
+    assert.ok(queued); assert.equal(queued.status, "queued"); assert.notEqual(queued.requestId, before.resumeExtraction!.id);
+    let current = await read();
+    assert.equal(current.onboarding.complete, true, "Previously completed onboarding must remain complete while re-extraction runs.");
+    let profile = current.profile;
     if (profile.resumeExtraction!.status !== "ready") assert.deepEqual(profile.facts, before.facts, "The existing snapshot must remain active while extraction runs.");
     const deadline = Date.now() + 10 * 60_000;
     while (profile.resumeExtraction!.status !== "ready" && Date.now() < deadline) {
       const extraction = profile.resumeExtraction!;
       if (extraction.status === "budget_limited" || (extraction.status === "failed" && extraction.attempts !== 1)) throw new Error(extraction.error || "Extraction failed.");
-      await new Promise(resolve => setTimeout(resolve, 2000)); profile = (await read()).profile;
+      await new Promise(resolve => setTimeout(resolve, 2000)); current = await read();
+      assert.equal(current.onboarding.complete, true, "Recovery progress must not revoke completed setup.");
+      profile = current.profile;
     }
     assert.equal(profile.resumeExtraction!.status, "ready");
     assert.equal(profile.resumeExtraction!.id, queued.requestId);
+    assert.equal(profile.onboarding!.completedAt, before.onboarding!.completedAt, "Extraction must preserve the completed setup timestamp.");
+    assert.equal(resumeOnboardingStatus(profile).complete, true);
     assert.equal(missingEvidence(profile).length, 0, "All source context must become usable, not only the narrative bullets.");
     assert.ok(profile.facts.filter(fact => fact.source === "resume").every(fact => fact.grounding && isUsableFact(fact)));
     assert.deepEqual(profile.facts.find(fact => fact.id === "manual"), before.facts.find(fact => fact.id === "manual"));
@@ -113,7 +128,7 @@ async function main() {
     assert.equal(profile.resumeSource!.sha256, before.resumeSource!.sha256);
     assert.equal(profile.resumeSource!.storageKey, before.resumeSource!.storageKey);
     assert.equal((await read()).applications.length, 0);
-    console.log(JSON.stringify({ passed: true, readyResumeReextracted: true, missingEvidence: 0, manualFactsPreserved: true, personalAnswersPreserved: true, realOwnerWorkspaceWrites: 0, employerSubmissions: 0 }));
+    console.log(JSON.stringify({ passed: true, readyResumeReextracted: true, onboardingRedirects: 0, completedSetupPreserved: true, missingEvidence: 0, manualFactsPreserved: true, personalAnswersPreserved: true, realOwnerWorkspaceWrites: 0, employerSubmissions: 0 }));
   } finally {
     await browser?.close();
     if (ownerId) {

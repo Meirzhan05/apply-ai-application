@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     const importToken = newId();
     const uploadSequence = await mutateState(userId, state => {
       state.profile.resumeUploadSequence = (state.profile.resumeUploadSequence ?? 0) + 1;
-      state.profile.resumeImport = { token: importToken, startedAt: new Date().toISOString() };
+      state.profile.resumeImport = { token: importToken, startedAt: new Date().toISOString(), ...(original ? { reusedSourceHash: original.sha256 } : {}) };
       return state.profile.resumeUploadSequence;
     });
     try {

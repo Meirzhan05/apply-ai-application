@@ -29,6 +29,38 @@ describe("mandatory onboarding admission", () => {
     expect(profile.automationAuthorization).toBeUndefined();
   });
 
+  it.each(["queued", "extracting", "checking", "failed", "budget_limited"] as const)("keeps completed setup accessible while its same-source recovery is %s", status => {
+    const profile = completeProfile();
+    profile.resumeExtraction = { id: "recovery", status, filename: profile.resumeFileName!, attempts: 1, requestedAt: "2026-01-01", updatedAt: "2026-01-01",
+      pending: { source: profile.resumeSource!, document: profile.resumeSourceDocument!, onboardingImport: { token: "recovery", reused: true,
+        baseline: { name: profile.name, phone: profile.phone } } } };
+    expect(isResumeOnboardingComplete(profile)).toBe(true);
+    expect(resumeOnboardingStatus(profile).missing).not.toContain("resumeExtraction");
+    profile.resumeExtraction.pending!.source = { ...profile.resumeSource!, sha256: "different-resume" };
+    expect(isResumeOnboardingComplete(profile)).toBe(false);
+    profile.resumeExtraction.pending!.source = profile.resumeSource!;
+    profile.resumeImport = { token: "replacement-import", startedAt: "2026-01-01" };
+    expect(isResumeOnboardingComplete(profile)).toBe(false);
+  });
+
+  it("keeps reviewed setup accessible during the saved-source read, but not for an unrelated import", () => {
+    const profile = completeProfile();
+    profile.resumeImport = { token: "recovery", startedAt: "2026-01-01", reusedSourceHash: profile.resumeSource!.sha256 };
+    expect(isResumeOnboardingComplete(profile)).toBe(true);
+    profile.resumeImport.reusedSourceHash = "different-resume";
+    expect(isResumeOnboardingComplete(profile)).toBe(false);
+  });
+
+  it("does not let same-source recovery bypass missing required answers or initial completion", () => {
+    const profile = completeProfile();
+    profile.resumeImport = { token: "recovery", startedAt: "2026-01-01", reusedSourceHash: profile.resumeSource!.sha256 };
+    profile.phone = "";
+    expect(isResumeOnboardingComplete(profile)).toBe(false);
+    profile.phone = "+1 212 555 0100";
+    delete profile.onboarding!.completedAt;
+    expect(isResumeOnboardingComplete(profile)).toBe(false);
+  });
+
   it("keeps saved profile, resume and outcome recovery actions available", () => {
     expect(actionNeedsCompletedOnboarding("onboardingDraft")).toBe(false);
     expect(actionNeedsCompletedOnboarding("profile")).toBe(false);

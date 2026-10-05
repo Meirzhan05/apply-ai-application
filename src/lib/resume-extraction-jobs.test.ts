@@ -2,6 +2,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { initialDemoState } from "@/lib/demo-data";
 import { parseDocxSource } from "@/lib/docx-source";
 import { createDocxSourceFixture } from "@/lib/fixtures/docx-source";
+import { completeUploadedOnboardingFixture } from "@/lib/testing/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import type { AppState, VerifiedFact } from "@/lib/types";
 
 const fixture = vi.hoisted(() => ({ state: null as AppState | null, extract: vi.fn(), details: vi.fn(), budget: true, search: vi.fn(), matches: vi.fn(), dispatch: vi.fn() }));
@@ -56,6 +58,22 @@ it("activates source and facts together, preserving manual facts and starting do
   expect(fixture.matches).toHaveBeenCalledWith("owner");
   expect(await runResumeExtraction({ userId: "owner", requestId: id })).toEqual({ skipped: true });
   expect(fixture.extract).toHaveBeenCalledTimes(1);
+});
+
+it("preserves v2 completion when refreshing the same reviewed resume without legacy sponsorship answers", async () => {
+  let profile = fixture.state!.profile;
+  const pending = profile.resumeExtraction!.pending!;
+  profile.resumeSource = pending.source; profile.resumeSourceDocument = pending.document; profile.resumeText = pending.document!.text;
+  profile.contactEmail = profile.email;
+  profile = completeUploadedOnboardingFixture(profile); fixture.state!.profile = profile;
+  delete profile.onboarding!.questionnaire.requiresSponsorship;
+  onboardingImport(true);
+  const completion = structuredClone(profile.onboarding!);
+  expect(resumeOnboardingStatus(profile).complete).toBe(true);
+  await runResumeExtraction({ userId: "owner", requestId: profile.resumeExtraction!.id });
+  expect(profile.onboarding!.completedAt).toBe(completion.completedAt);
+  expect(resumeOnboardingStatus(profile).complete).toBe(true);
+  expect(profile.onboarding!.questionnaire).toEqual(completion.questionnaire);
 });
 
 it("retains the complete previous snapshot on model failure and retries with a fresh request", async () => {

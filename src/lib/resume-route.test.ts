@@ -52,7 +52,10 @@ describe("resume upload automatic extraction", () => {
     profile.facts = [{ id: "legacy", text: "Corrected work history", verified: true, source: "resume" }, { id: "manual", text: "A manually added project", verified: true, source: "user" }];
     profile.resumeSourceDocument!.text = "Legacy cached parser text";
     const before = structuredClone(profile);
-    mocks.download.mockResolvedValue({ data: new Blob([Uint8Array.from(bytes)]), error: null });
+    mocks.download.mockImplementation(async () => {
+      expect(profile.resumeImport?.reusedSourceHash).toBe(before.resumeSource!.sha256);
+      return { data: new Blob([Uint8Array.from(bytes)]), error: null };
+    });
 
     const response = await POST(reuseRequest(true));
 

@@ -13,6 +13,7 @@ import { parsePdfSource } from "@/lib/pdf-source";
 import { parseDocxSource } from "@/lib/docx-source";
 import { readOriginalResume } from "@/lib/original-resume";
 import { saveOnboarding } from "@/lib/onboarding";
+import { resumeOnboardingStatus } from "@/lib/onboarding-completion";
 import { queuePersonalSearch } from "@/lib/personal-search";
 import { queueMatchAssessment } from "@/lib/match-queue";
 import type { Profile, ResumeExtraction } from "@/lib/types";
@@ -183,6 +184,7 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
       const current = state.profile;
       if (current.resumeExtraction?.id !== requestId || !processing.has(current.resumeExtraction.status)) return false;
       if (current.name !== profileNameAtStart) throw new Error("Your profile name changed. Retry extraction using the current name.");
+      const completedAt = resumeOnboardingStatus(current).complete ? current.onboarding?.completedAt : undefined;
       const manual = current.facts.filter(fact => fact.source === "user");
       if (manual.length + facts.length > 80) throw new Error("The resume and manually added facts exceed 80 facts. Shorten the resume or remove unused manual facts, then retry.");
       if (details) {
@@ -195,6 +197,8 @@ export async function runResumeExtraction({ userId, requestId }: { userId: strin
       current.resumeFileName = job.filename; current.resumeSource = pending.source;
       current.resumeSourceDocument = source; current.resumeText = source.text;
       saveOnboarding(current, { facts: [...manual, ...facts] });
+      if (completedAt && pending.onboardingImport?.reused && current.onboarding!.completedResumeHash === source!.sourceHash)
+        current.onboarding!.completedAt = completedAt;
       const now = new Date().toISOString();
       current.resumeExtraction = { ...current.resumeExtraction, status: "ready", pending: undefined, error: undefined,
         ...(details ? { profileSourceHash: source!.sourceHash } : {}), updatedAt: now };

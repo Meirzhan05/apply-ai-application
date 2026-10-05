@@ -36,9 +36,16 @@ export function resumeOnboardingStatus(profile: Profile) {
   const missing: string[] = [];
   const source = profile.resumeSource;
   const document = profile.resumeSourceDocument;
+  const reviewedCurrentSource = profile.onboarding!.completedVersion === RESUME_ONBOARDING_VERSION && Boolean(profile.onboarding!.completedAt) &&
+    Boolean(source?.sha256) && profile.onboarding!.completedResumeHash === source?.sha256;
+  const pending = profile.resumeExtraction?.pending;
+  // The reviewed snapshot stays active during same-source recovery, including retries.
+  const refreshingReviewedSource = reviewedCurrentSource && (profile.resumeImport
+    ? profile.resumeImport.reusedSourceHash === source?.sha256
+    : pending?.onboardingImport?.reused === true && pending.source.sha256 === source?.sha256);
   if (!source?.sha256 || !source.size || !profile.resumeFileName || !document?.text.trim() || document.sourceHash !== source.sha256) missing.push("resume");
-  if (profile.resumeImport) missing.push("resumeImport");
-  if (profile.resumeExtraction && profile.resumeExtraction.status !== "ready") missing.push("resumeExtraction");
+  if (profile.resumeImport && !refreshingReviewedSource) missing.push("resumeImport");
+  if (profile.resumeExtraction && profile.resumeExtraction.status !== "ready" && !refreshingReviewedSource) missing.push("resumeExtraction");
   if (!profile.name.trim()) missing.push("name");
   if (!z.email().safeParse((profile.contactEmail ?? profile.email).trim()).success) missing.push("email");
   if (!profile.phone.trim()) missing.push("phone");
@@ -47,8 +54,7 @@ export function resumeOnboardingStatus(profile: Profile) {
   if (!profile.workArrangements?.length) missing.push("workArrangements");
   missing.push(...immigrationQuestionnaireMissingFields(profile.onboarding!.questionnaire));
   return {
-    complete: profile.onboarding!.completedVersion === RESUME_ONBOARDING_VERSION && Boolean(profile.onboarding!.completedAt) &&
-      missing.length === 0 && profile.onboarding!.completedResumeHash === source?.sha256,
+    complete: reviewedCurrentSource && missing.length === 0,
     missing, confirmedFactCount: profile.facts.filter(fact => fact.verified).length,
     reviewHash: reviewHash(profile), version: RESUME_ONBOARDING_VERSION,
     importedFacts: importedOnboardingFacts(profile),

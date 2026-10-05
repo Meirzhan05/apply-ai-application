@@ -282,7 +282,7 @@ export interface Profile {
   resumeSourceDocument?: ResumeSourceDocument;
   resumeExtraction?: ResumeExtraction;
   resumeUploadSequence?: number;
-  resumeImport?: { token: string; startedAt: string };
+  resumeImport?: { token: string; startedAt: string; reusedSourceHash?: string };
   onboarding?: OnboardingProfile;
   automationSettings?: AutomationSettings;
   automationAuthorization?: AutomationAuthorization;
