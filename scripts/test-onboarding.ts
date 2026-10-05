@@ -22,6 +22,11 @@ type Viewport = keyof typeof viewports;
 async function captureStage(page: Page, label: Viewport, stage: string) {
   const layout = await page.evaluate(() => ({ width: window.innerWidth, contentWidth: document.documentElement.scrollWidth }));
   assert.ok(layout.contentWidth <= layout.width, `${label}/${stage} must not overflow horizontally.`);
+  const status = await page.locator('header [role="status"] > span').evaluate(element => ({
+    height: element.getBoundingClientRect().height,
+    lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+  }));
+  assert.ok(status.height <= status.lineHeight + 1, `${label}/${stage} save status must stay on one line.`);
   await page.screenshot({ path: `/tmp/onboarding26-${label}-${stage}.png`, fullPage: true });
 }
 

@@ -99,6 +99,13 @@
   .review > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .upload { padding: 20px 16px; }
 }
+@media (max-width: 360px) {
+  .header { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 16px 0; }
+  .headerControls { display: contents; }
+  .headerControls button { grid-column: 2; grid-row: 1; }
+  .saveStatus { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; width: 144px; }
+  .saveStatus > span { white-space: nowrap; overflow-wrap: normal; }
+}
 @media (prefers-reduced-motion: reduce) {
   .spinning { animation: none; }
 }
