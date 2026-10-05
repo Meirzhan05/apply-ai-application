@@ -89,10 +89,46 @@ async function runJourney(browser: Browser, user: User, bytes: Uint8Array, label
     assert.match(String(blockedSelection.body.error), /required onboarding/i);
     await captureStage(page, label, "resume");
     if (user.storageKey) {
-      await page.waitForFunction(async () => (await (await fetch("/api/state", { cache: "no-store" })).json()).profile.resumeExtraction?.status === "ready", undefined, { timeout: 600000 });
+      const deadline = Date.now() + 600000;
+      let seededState: { resumeImport?: unknown; status?: string; attempts?: number; error?: string } = {};
+      while (Date.now() < deadline) {
+        seededState = await page.evaluate(async () => {
+          const state = await (await fetch("/api/state", { cache: "no-store" })).json();
+          return {
+            resumeImport: state.profile.resumeImport,
+            status: state.profile.resumeExtraction?.status,
+            attempts: state.profile.resumeExtraction?.attempts,
+            error: state.profile.resumeExtraction?.error,
+          };
+        });
+        if (!seededState.resumeImport && seededState.status === "ready") break;
+        await page.waitForTimeout(1000);
+      }
+      assert.equal(seededState.status, "ready", `Seeded resume extraction did not become ready: ${JSON.stringify(seededState)}`);
+      assert.equal(seededState.resumeImport, undefined, `Seeded resume import remained pending: ${JSON.stringify(seededState)}`);
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: "Resume", exact: true }).click();
-      await page.getByRole("button", { name: "Use saved resume" }).click();
+      const resumeStep = page.getByRole("button", { name: "Resume", exact: true });
+      await resumeStep.waitFor();
+      if (await resumeStep.getAttribute("aria-current") !== "step") await resumeStep.click();
+      try {
+        await page.getByRole("button", { name: "Use saved resume" }).click({ timeout: 30000 });
+      } catch (error) {
+        const diagnostic = await page.evaluate(async () => {
+          const state = await (await fetch("/api/state", { cache: "no-store" })).json();
+          return {
+            resumeImport: state.profile.resumeImport,
+            resumeExtraction: state.profile.resumeExtraction && {
+              id: state.profile.resumeExtraction.id,
+              status: state.profile.resumeExtraction.status,
+              attempts: state.profile.resumeExtraction.attempts,
+              error: state.profile.resumeExtraction.error,
+            },
+            onboardingMissing: state.onboarding.missing,
+          };
+        });
+        console.error(`Saved-resume control did not become usable (${label}): ${JSON.stringify(diagnostic)}\n${await page.locator("body").innerText()}`);
+        throw error;
+      }
     } else {
       const queued = page.waitForResponse(response => response.url().endsWith("/api/resume") && response.request().method() === "POST");
       const chooser = page.waitForEvent("filechooser");
