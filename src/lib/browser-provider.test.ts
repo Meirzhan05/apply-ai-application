@@ -20,7 +20,7 @@ describe("Browser Use Cloud session lifecycle", () => {
     const [url, request] = fetch.mock.calls[0];
     expect(url).toBe("https://api.browser-use.com/api/v4/browsers");
     expect(request.headers["X-Browser-Use-API-Key"]).toBe("secret-test-key");
-    expect(JSON.parse(request.body)).toEqual({ timeout: 30, proxyCountryCode: "us", solveCaptchas: true, enableRecording: false, allowResizing: false, browserScreenWidth: 1920, browserScreenHeight: 1080 });
+    expect(JSON.parse(request.body)).toEqual({ timeout: 30, proxyCountryCode: "us", solveCaptchas: true, enableRecording: false, allowResizing: false });
     expect(JSON.parse(request.body).profileId).toBeUndefined();
   });
   it("supports explicitly disabling solving for a newly created session", async () => {
@@ -38,23 +38,36 @@ describe("Browser Use Cloud session lifecycle", () => {
     await createRemoteBrowser("https://employer.example/apply");
     expect(JSON.parse(fetch.mock.calls[1][1].body).proxyCountryCode).toBeNull();
   });
-  it("rejects an invalid proxy country before allocating a session", async () => {
-    setup(); vi.stubEnv("BROWSER_USE_PROXY_COUNTRY", "usa");
+  it.each(["usa", "zz", "xx", "eu"])("rejects proxy country %j before recording an allocation", async (country) => {
+    setup(); vi.stubEnv("BROWSER_USE_PROXY_COUNTRY", country);
+    usage.context = { userId: "owner-a", applicationId: "application-a", runId: "run-a" };
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     await expect(createRemoteBrowser("https://employer.example/apply")).rejects.toThrow("Invalid Browser Use proxy country");
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled(); expect(usage.record).not.toHaveBeenCalled();
   });
-  it("creates Browserbase sessions with proxies and opt-in advanced stealth", async () => {
+  it("uses the default proxy country when the setting is blank", async () => {
+    setup(); vi.stubEnv("BROWSER_USE_PROXY_COUNTRY", "  ");
+    const fetch = vi.fn().mockImplementation(async () => Response.json(session)); vi.stubGlobal("fetch", fetch);
+    await createRemoteBrowser("https://employer.example/apply");
+    expect(JSON.parse(fetch.mock.calls[0][1].body).proxyCountryCode).toBe("us");
+  });
+  it("maps the uk alias to the gb proxy country", async () => {
+    setup(); vi.stubEnv("BROWSER_USE_PROXY_COUNTRY", "UK");
+    const fetch = vi.fn().mockImplementation(async () => Response.json(session)); vi.stubGlobal("fetch", fetch);
+    await createRemoteBrowser("https://employer.example/apply");
+    expect(JSON.parse(fetch.mock.calls[0][1].body).proxyCountryCode).toBe("gb");
+  });
+  it("creates Browserbase sessions with opt-in proxies and advanced stealth", async () => {
     vi.stubEnv("BROWSER_PROVIDER", "browserbase"); vi.stubEnv("BROWSERBASE_API_KEY", "legacy-key");
     vi.stubEnv("BROWSERBASE_PROXIES", ""); vi.stubEnv("BROWSERBASE_ADVANCED_STEALTH", "");
     legacy.create.mockResolvedValue({ id: "bb-session", connectUrl: "wss://connect.browserbase.com/bb-session", startedAt: "2026-10-01T00:00:00Z" });
     legacy.debug.mockResolvedValue({ debuggerFullscreenUrl: "https://www.browserbase.com/devtools/bb-session" });
     await createRemoteBrowser("https://employer.example/apply");
-    expect(legacy.create).toHaveBeenLastCalledWith(expect.objectContaining({ proxies: true,
-      browserSettings: { allowedDomains: ["employer.example"], solveCaptchas: false, advancedStealth: false } }));
-    vi.stubEnv("BROWSERBASE_PROXIES", "false"); vi.stubEnv("BROWSERBASE_ADVANCED_STEALTH", "true");
-    await createRemoteBrowser("https://employer.example/apply");
     expect(legacy.create).toHaveBeenLastCalledWith(expect.objectContaining({ proxies: false,
+      browserSettings: { allowedDomains: ["employer.example"], solveCaptchas: false, advancedStealth: false } }));
+    vi.stubEnv("BROWSERBASE_PROXIES", "true"); vi.stubEnv("BROWSERBASE_ADVANCED_STEALTH", "true");
+    await createRemoteBrowser("https://employer.example/apply");
+    expect(legacy.create).toHaveBeenLastCalledWith(expect.objectContaining({ proxies: true,
       browserSettings: expect.objectContaining({ advancedStealth: true }) }));
   });
   it("preserves explicit provider zeroes and leaves omitted usage fields unknown", async () => {

@@ -53,10 +53,16 @@ export function configuredBrowserProvider(): BrowserProvider {
 
 // Browser Use stealth and fingerprint randomization are always on; only the
 // residential proxy exit is configurable. "none" disables the provider proxy.
+// Accept only ISO 3166 country codes, mapping the common "uk" alias to "gb".
+const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+const nonCountryRegions = new Set(["eu", "ez", "un", "qo", "zz"]);
 export function browserUseProxyCountry(): string | null {
-  const selected = (process.env.BROWSER_USE_PROXY_COUNTRY || "us").trim().toLowerCase();
-  if (selected === "none") return null;
-  if (!/^[a-z]{2}$/.test(selected)) throw new Error("Invalid Browser Use proxy country configuration.");
+  const configured = process.env.BROWSER_USE_PROXY_COUNTRY?.trim().toLowerCase() || "us";
+  if (configured === "none") return null;
+  const selected = configured === "uk" ? "gb" : configured;
+  const name = /^[a-z]{2}$/.test(selected) ? regionNames.of(selected.toUpperCase()) : undefined;
+  if (!name || name === selected.toUpperCase() || nonCountryRegions.has(selected))
+    throw new Error("Invalid Browser Use proxy country configuration. Use a two-letter ISO country code or none.");
   return selected;
 }
 
@@ -109,21 +115,21 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
   const provider = configuredBrowserProvider();
   if (provider === "browser-use" && !process.env.BROWSER_USE_API_KEY) throw new Error("Browser Use Cloud is not configured. Add BROWSER_USE_API_KEY on the server.");
   if (provider === "browserbase" && !process.env.BROWSERBASE_API_KEY) throw new Error("Browserbase is not configured.");
+  // Validate configuration before the allocation marker: an unresolved marker
+  // locks account deletion.
+  const proxyCountryCode = provider === "browser-use" ? browserUseProxyCountry() : undefined;
   const bb = provider === "browserbase" ? new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY! }) : undefined;
   const browserbaseAllowedDomain = provider === "browserbase" ? new URL(targetUrl).hostname : undefined;
   const allocationOwner = browserUsageContext();
   if (allocationOwner) await recordBrowserUsageEvent({ ...allocationOwner, provider, sessionId: null, event: "allocation_started", report: null, failure: null, orphanedSessionId: null });
   if (provider === "browser-use") {
     const captchaSolving = process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false";
-    const proxyCountryCode = browserUseProxyCountry();
     let session: Awaited<ReturnType<typeof browserUseRequest>>;
     try {
-      // A common desktop screen size; resizing stays off because it weakens
-      // the provider's stealth fingerprint.
+      // Resizing stays off because it weakens the provider's stealth fingerprint.
       session = await browserUseRequest("POST", "", {
         timeout: 30, proxyCountryCode, solveCaptchas: captchaSolving,
         enableRecording: false, allowResizing: false,
-        browserScreenWidth: 1920, browserScreenHeight: 1080,
       }, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -155,11 +161,11 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
   if (!bb || !browserbaseAllowedDomain) throw new Error("Browserbase is not configured.");
   let session: Awaited<ReturnType<typeof bb.sessions.create>>;
   try {
-    // Residential proxies are on unless disabled. Advanced stealth requires a
-    // Browserbase Scale plan, so it is opt-in.
+    // Residential proxies are billed per GB and not in the run budget, and
+    // advanced stealth requires a Scale plan, so both are opt-in.
     session = await bb.sessions.create({
       projectId: process.env.BROWSERBASE_PROJECT_ID, keepAlive: true, api_timeout: 1800,
-      proxies: process.env.BROWSERBASE_PROXIES !== "false",
+      proxies: process.env.BROWSERBASE_PROXIES === "true",
       browserSettings: {
         allowedDomains: [browserbaseAllowedDomain], solveCaptchas: false,
         advancedStealth: process.env.BROWSERBASE_ADVANCED_STEALTH === "true",
