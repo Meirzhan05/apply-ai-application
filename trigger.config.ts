@@ -13,7 +13,7 @@ const docxEnv = {
   DOCX_RENDERER_VERSION: docxRuntimeLock.libreOfficeVersion,
   FONTCONFIG_FILE: `${docxRoot}/${docxRuntimeLock.fontconfigRelativePath}`,
 };
-const cachedDocxRuntimeArchivePath = ".data/docx-runtime-cache/LibreOffice_26.8.0_Linux_x86-64_deb.tar.gz";
+const cachedDocxRuntimeArchivePath = ".data/docx-runtime-cache/LibreOffice_26.8.0.3_Linux_x86-64_deb.tar.gz";
 const useCachedDocxRuntimeArchive = process.env.TRIGGER_DOCX_RUNTIME_USE_CACHED_ARCHIVE === "1";
 const docxRuntimeInstallCommand = `${useCachedDocxRuntimeArchive ? `DOCX_RUNTIME_ARCHIVE_PATH=${cachedDocxRuntimeArchivePath} ` : ""}node ./scripts/setup-docx-runtime.mjs ${docxRoot}`;
 const pdfRoot = "/app/pdf-runtime";

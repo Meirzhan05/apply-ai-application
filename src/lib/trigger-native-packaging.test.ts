@@ -98,7 +98,7 @@ describe("Trigger native package deployment", () => {
   });
 
   it("copies the explicit cached DOCX archive into the task build and passes it to the runtime installer", async () => {
-    const archivePath = "./.data/docx-runtime-cache/LibreOffice_26.8.0_Linux_x86-64_deb.tar.gz";
+    const archivePath = "./.data/docx-runtime-cache/LibreOffice_26.8.0.3_Linux_x86-64_deb.tar.gz";
     expect(path.basename(archivePath)).toBe(path.basename(new URL(docxRuntimeLock.archiveUrl).pathname));
     const archiveBytes = Buffer.from("synthetic cached runtime archive");
     const directory = await mkdtemp(path.join(os.tmpdir(), "apply-trigger-docx-cache-"));
