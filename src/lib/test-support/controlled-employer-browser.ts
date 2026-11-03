@@ -189,6 +189,17 @@ class ControlledLocator {
     element.dispatchEvent(new this.page.window.KeyboardEvent("keydown", { key, bubbles: true }));
     element.dispatchEvent(new this.page.window.KeyboardEvent("keyup", { key, bubbles: true }));
   }
+  async hover() { if (!this.elements().length) throw new Error("The controlled DOM locator matched no element."); }
+  async pressSequentially(text: string) {
+    const element = this.elements()[0];
+    if (!(element instanceof this.page.window.HTMLInputElement || element instanceof this.page.window.HTMLTextAreaElement)) throw new Error("The controlled DOM target is not editable text.");
+    for (const key of text) {
+      element.dispatchEvent(new this.page.window.KeyboardEvent("keydown", { key, bubbles: true }));
+      element.value += key;
+      element.dispatchEvent(new this.page.window.Event("input", { bubbles: true }));
+      element.dispatchEvent(new this.page.window.KeyboardEvent("keyup", { key, bubbles: true }));
+    }
+  }
   async click() {
     const element = this.elements()[0];
     if (!(element instanceof this.page.window.HTMLElement)) throw new Error("The controlled DOM target is not clickable.");

@@ -3,5 +3,5 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
-  test: { environment: "node", env: { DEMO_MODE: "true" } },
+  test: { environment: "node", env: { DEMO_MODE: "true", BROWSER_HUMAN_PACING: "false" } },
 });
