@@ -51,6 +51,15 @@ export function configuredBrowserProvider(): BrowserProvider {
   return selected;
 }
 
+// Browser Use stealth and fingerprint randomization are always on; only the
+// residential proxy exit is configurable. "none" disables the provider proxy.
+export function browserUseProxyCountry(): string | null {
+  const selected = (process.env.BROWSER_USE_PROXY_COUNTRY || "us").trim().toLowerCase();
+  if (selected === "none") return null;
+  if (!/^[a-z]{2}$/.test(selected)) throw new Error("Invalid Browser Use proxy country configuration.");
+  return selected;
+}
+
 // Old records predate provider selection and belong to Browserbase.
 export function applicationBrowserProvider(app: Pick<Application, "browserProvider">): BrowserProvider {
   return app.browserProvider || "browserbase";
@@ -106,11 +115,15 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
   if (allocationOwner) await recordBrowserUsageEvent({ ...allocationOwner, provider, sessionId: null, event: "allocation_started", report: null, failure: null, orphanedSessionId: null });
   if (provider === "browser-use") {
     const captchaSolving = process.env.BROWSER_USE_SOLVE_CAPTCHAS !== "false";
+    const proxyCountryCode = browserUseProxyCountry();
     let session: Awaited<ReturnType<typeof browserUseRequest>>;
     try {
+      // A common desktop screen size; resizing stays off because it weakens
+      // the provider's stealth fingerprint.
       session = await browserUseRequest("POST", "", {
-        timeout: 30, proxyCountryCode: "us", solveCaptchas: captchaSolving,
+        timeout: 30, proxyCountryCode, solveCaptchas: captchaSolving,
         enableRecording: false, allowResizing: false,
+        browserScreenWidth: 1920, browserScreenHeight: 1080,
       }, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -142,9 +155,15 @@ export async function createRemoteBrowser(targetUrl: string): Promise<RemoteBrow
   if (!bb || !browserbaseAllowedDomain) throw new Error("Browserbase is not configured.");
   let session: Awaited<ReturnType<typeof bb.sessions.create>>;
   try {
+    // Residential proxies are on unless disabled. Advanced stealth requires a
+    // Browserbase Scale plan, so it is opt-in.
     session = await bb.sessions.create({
       projectId: process.env.BROWSERBASE_PROJECT_ID, keepAlive: true, api_timeout: 1800,
-      browserSettings: { allowedDomains: [browserbaseAllowedDomain], solveCaptchas: false },
+      proxies: process.env.BROWSERBASE_PROXIES !== "false",
+      browserSettings: {
+        allowedDomains: [browserbaseAllowedDomain], solveCaptchas: false,
+        advancedStealth: process.env.BROWSERBASE_ADVANCED_STEALTH === "true",
+      },
     });
   } catch (error) {
     const status = providerStatus(error);

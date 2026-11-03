@@ -61,6 +61,44 @@ async function releaseStrictSession(sessionId: string, provider: RemoteBrowserSe
   if (!report || report.status !== "stopped") throw new Error("The browser provider did not confirm the session stopped.");
 }
 
+// The local fallback has no provider stealth. Remove the automation flag and
+// the HeadlessChrome user-agent token, and use a common desktop viewport.
+export async function launchLocalBrowser(): Promise<Runtime> {
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
+    args: ["--disable-blink-features=AutomationControlled"],
+  });
+  try {
+    const cdp = await browser.newBrowserCDPSession();
+    const { userAgent } = await cdp.send("Browser.getVersion");
+    await cdp.detach();
+    const context = await browser.newContext({
+      userAgent: userAgent.replace("HeadlessChrome", "Chrome"),
+      viewport: { width: 1366, height: 768 }, locale: "en-US",
+    });
+    return { browser, page: await context.newPage() };
+  } catch (error) {
+    await browser.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+// Short randomized pauses between form actions so fills are not machine-paced.
+// BROWSER_HUMAN_PACING=false disables them for tests.
+function humanPacing() { return process.env.BROWSER_HUMAN_PACING !== "false"; }
+async function humanPause(page: Page, min = 150, max = 600) {
+  if (humanPacing()) await page.waitForTimeout(min + Math.random() * (max - min));
+}
+
+// Types short plain-text values key by key with jittered delays. Long answers
+// are filled at once so essays do not exceed run time limits.
+export async function humanFill(locator: Locator, value: string, options?: { timeout?: number }) {
+  if (!humanPacing() || !value || value.length > 64) return locator.fill(value, options);
+  await locator.fill("", options);
+  await locator.pressSequentially(value, { delay: 40 + Math.random() * 70, ...options });
+}
+
 function annotatePreflightError(error: unknown, sessionId: string, provider: RemoteBrowserSession["provider"] | undefined, releaseConfirmed: boolean): void {
   if (error instanceof Error) Object.assign(error, { browserSessionId: sessionId, browserProvider: provider, browserReleaseConfirmed: releaseConfirmed });
 }
@@ -679,10 +717,8 @@ export async function preflightBrowser(
       throw error;
     }
   } else {
-    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
-    const page = await browser.newPage();
+    runtime = await launchLocalBrowser();
     sessionId = `local-preflight-${application.id}`;
-    runtime = { browser, page };
     localBrowsers.set(sessionId, runtime);
   }
   application.browserSessionId = sessionId;
@@ -875,13 +911,8 @@ export async function prepareBrowser(
       throw error;
     }
   } else {
-    const browser = await chromium.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
-    });
-    const page = await browser.newPage();
+    runtime = await launchLocalBrowser();
     sessionId = `local-${application.id}`;
-    runtime = { browser, page };
     localBrowsers.set(sessionId, runtime);
   }
 
@@ -1034,6 +1065,7 @@ export async function prepareBrowser(
       }
       const locator = await currentFieldLocator(page, field);
       if (!locator) { fillBlockers.push(`The form changed while filling: ${field.label}`); continue; }
+      await humanPause(page);
       if (field.kind === "yesno") {
         if (field.editable && field.options.includes(value)) await locator.getByRole("button", { name: value, exact: true }).click();
         else if (field.required) needsAction = true;
@@ -1044,7 +1076,7 @@ export async function prepareBrowser(
       } else if (field.autocomplete) {
         const filled = await fillAutocomplete(page, locator, value, key === "school");
         if (!filled && field.required) fillBlockers.push(`Select and confirm the option for: ${field.label}`);
-      } else await locator.fill(value);
+      } else await humanFill(locator, value);
       await action(`Checked: ${field.label}`);
       await ensureEssays(); values = allowedValues(profile, application);
     }
@@ -1124,6 +1156,7 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
       const locator = await currentFieldLocator(page, field);
       if (!locator) throw new Error("A form control changed. Refresh before answering again.");
       const value = approval.answer.answer;
+      await humanPause(page);
       if (field.kind === "yesno") {
         if (!field.options.includes(value)) throw new Error("The employer changed the available options. Refresh the questions.");
         await locator.getByRole("button", { name: value, exact: true }).click({ timeout: 5000 });
@@ -1134,7 +1167,7 @@ export async function fillApprovedBrowserAnswers(application: Application, job: 
         await locator.selectOption({ label: value }, { timeout: 5000 });
       } else if (field.autocomplete) {
         if (!await fillAutocomplete(page, locator, value, false)) throw new Error(`The agent could not select the option for: ${question.label}. Open the browser to finish this control.`);
-      } else await locator.fill(value, { timeout: 5000 });
+      } else await humanFill(locator, value, { timeout: 5000 });
     }
     return await snapshot(page, application);
   } finally { if (application.browserConnectUrl) await disconnectBrowser(application, browser); }
@@ -1173,12 +1206,13 @@ export async function repairEducationFields(application: Application, job: Job, 
       } else {
         const locator = await currentFieldLocator(page, field);
         if (!locator) continue;
+        await humanPause(page);
         if (field.autocomplete) {
           if (!await fillAutocomplete(page, locator, value, key === "school") && field.required) blockers.push(`Select and confirm the option for: ${field.label}`);
         } else if (field.kind === "select") {
           const option = matchingOption(field.label, value, field.options);
           if (option) await locator.selectOption({label:option});
-        } else if (["text", "textarea"].includes(field.kind)) await locator.fill(value);
+        } else if (["text", "textarea"].includes(field.kind)) await humanFill(locator, value);
       }
     }
     const form = await snapshot(page, application);
@@ -1296,6 +1330,11 @@ export async function submitBrowser(application: Application, options?: { profil
     if (formDigest(latest) !== application.form.hash || !latest.readyToSubmit) throw new Error("FORM_CHANGED");
     const button = (await finalSubmitButton(page)).first();
     if ((await button.count()) === 0) throw new Error("The final submit button needs user takeover.");
+    // Move to the button and pause before the single approved click.
+    if (humanPacing()) {
+      await button.hover({ timeout: 5000 }).catch(() => undefined);
+      await humanPause(page, 300, 900);
+    }
     const before = await submissionText(page);
     const baseline: NonNullable<Application["submissionVerification"]> = {
       version: 1, kind: "captcha", sessionId: application.browserSessionId!, targetUrl: application.form.url,

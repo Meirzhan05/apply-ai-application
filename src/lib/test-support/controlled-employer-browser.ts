@@ -293,7 +293,10 @@ class ControlledPage {
   browserHandle(): Browser {
     const page = this.pageApi as unknown as Page;
     const context = this.context();
-    return { contexts: () => [context], newPage: async () => page, close: async () => undefined } as unknown as Browser;
+    // The local launch reads the default user agent over CDP and opens a stealth context.
+    const cdp = { send: async () => ({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36" }), detach: async () => undefined };
+    return { contexts: () => [context], newPage: async () => page, newContext: async () => context,
+      newBrowserCDPSession: async () => cdp, close: async () => undefined } as unknown as Browser;
   }
 
   async attachedFiles(): Promise<FileObservation[]> {
